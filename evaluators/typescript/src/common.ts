@@ -9,6 +9,14 @@ export interface Evaluator<TTree> {
   triage: <T>(on_leaf: () => T, on_stem: (u: TTree) => T, on_fork: (u: TTree, v: TTree) => T) => (x: TTree) => T;
 }
 
+export function children<TTree>(e: Evaluator<TTree>, x: TTree): TTree[] {
+  return e.triage(
+    () => [],
+    (u) => [u],
+    (u, v) => [u, v],
+  )(x);
+}
+
 export const raise = (message: string) => { throw new Error(message); }
 
 export interface Marshaller<TTree> {

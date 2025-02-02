@@ -1,5 +1,10 @@
 import { Evaluator, raise } from "../common";
 
+// Format:
+// Leaf = 0
+// Stem u = 1u
+// Fork u v = 2uv
+
 export function to_ternary<TTree>(e: Evaluator<TTree>, x: TTree): string {
   const res: string[] = [];
   const triage = e.triage<void>(
@@ -9,6 +14,7 @@ export function to_ternary<TTree>(e: Evaluator<TTree>, x: TTree): string {
   triage(x);
   return res.join('');
 }
+
 export function of_ternary<TTree>(e: Evaluator<TTree>, s: string): TTree {
   const stack = s.split('').reverse();
   const f = (): TTree => {
