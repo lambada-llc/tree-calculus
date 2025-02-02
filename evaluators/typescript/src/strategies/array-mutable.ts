@@ -1,6 +1,6 @@
 import { Evaluator } from "../common";
 
-export type Tree = Tree[]; // = △ <array entries in reverse order>
+type Tree = Tree[]; // = △ <array entries in reverse order>
 
 const reduceOne = (todo: Tree[]): void => {
   const s = todo.pop()!;
