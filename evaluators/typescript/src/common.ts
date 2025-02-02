@@ -12,12 +12,16 @@ export interface Evaluator<TTree> {
 export const raise = (message: string) => { throw new Error(message); }
 
 export interface Marshaller<TTree> {
+  // false == △  and  true == △ △
   to_bool: (x: TTree) => boolean;
   of_bool: (x: boolean) => TTree;
-  to_nat: (x: TTree) => bigint;
-  of_nat: (x: bigint) => TTree;
+  // nil == △  and  hd :: tl == △ hd tl
   to_list: (x: TTree) => TTree[];
   of_list: (x: TTree[]) => TTree;
+  // nat = list of bools (LSB first)
+  to_nat: (x: TTree) => bigint;
+  of_nat: (x: bigint) => TTree;
+  // str = list of nats (Unicode code points)
   to_string: (x: TTree) => string;
   of_string: (x: string) => TTree;
 }
