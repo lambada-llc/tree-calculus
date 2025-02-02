@@ -1,6 +1,11 @@
-import { leaf, stem, fork, apply, of_bool, to_bool } from "./implementations/array-mutable";
+import { marshal } from "./common";
+import array_mutable from "./strategies/array-mutable";
 
-const not = fork(fork(stem(leaf), fork(leaf, leaf)), leaf);
+const e = array_mutable;
+const m = marshal(e);
 
-console.debug('not false =', to_bool(apply(not, of_bool(false))));
-console.debug('not true =', to_bool(apply(not, of_bool(true))));
+
+const not = e.fork(e.fork(e.stem(e.leaf), e.fork(e.leaf, e.leaf)), e.leaf);
+
+console.debug('not false =', m.to_bool(e.apply(not, m.of_bool(false))));
+console.debug('not true =', m.to_bool(e.apply(not, m.of_bool(true))));
