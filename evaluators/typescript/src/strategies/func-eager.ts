@@ -27,7 +27,7 @@ const evaluator: Evaluator<F> = {
   triage: (on_leaf, on_stem, on_fork) => x => {
     if (x.y) return on_fork(x.x!, x.y);
     if (x.x) return on_stem(x.x);
-    return on_leaf;
+    return on_leaf();
   }
 };
 

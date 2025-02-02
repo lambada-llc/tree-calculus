@@ -36,7 +36,7 @@ const evaluator: Evaluator<Tree> = {
   // destruct
   triage: (on_leaf, on_stem, on_fork) => x => {
     switch (x.length) {
-      case 0: return on_leaf;
+      case 0: return on_leaf();
       case 1: return on_stem(x[0]);
       case 2: return on_fork(x[1], x[0]);
       default: throw new Error('not a value/binary tree');
