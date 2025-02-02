@@ -3,20 +3,20 @@ import { Evaluator } from "../common";
 export type Tree = Tree[]; // = △ <array entries in reverse order>
 
 const reduceOne = (todo: Tree[]): void => {
-  const f = todo.pop();
-  if (f.length < 3) return;
-  todo.push(f);
-  const a = f.pop(), b = f.pop(), c = f.pop();
-  if (a.length === 0) f.push(...b); // leaf
-  else if (a.length === 1) { // stem
-    const newPotRedex = [c, ...b];
-    f.push(newPotRedex, c, ...a[0]);
+  const s = todo.pop()!;
+  if (s.length < 3) return;
+  todo.push(s);
+  const x = s.pop()!, y = s.pop()!, z = s.pop()!;
+  if (x.length === 0) s.push(...y); // leaf
+  else if (x.length === 1) { // stem
+    const newPotRedex = [z, ...y];
+    s.push(newPotRedex, z, ...x[0]);
     todo.push(newPotRedex);
   }
-  else if (a.length === 2) // fork
-    if (c.length === 0) f.push(...a[1]); // leaf
-    else if (c.length === 1) f.push(c[0], ...a[0]); // stem
-    else if (c.length === 2) f.push(c[0], c[1], ...b); // fork
+  else if (x.length === 2) // fork
+    if (z.length === 0) s.push(...x[1]); // leaf
+    else if (z.length === 1) s.push(z[0], ...x[0]); // stem
+    else if (z.length === 2) s.push(z[0], z[1], ...y); // fork
 };
 
 function reduce(expression: Tree): Tree { // assumes all but top level of expression is already fully reduced!
