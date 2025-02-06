@@ -1,3 +1,11 @@
+export function measure<T>(f: () => T): { result: T, elasped_ms: number } {
+  const before_ms = Date.now();
+  const result = f();
+  const after_ms = Date.now();
+  const elasped_ms = after_ms - before_ms;
+  return { result, elasped_ms };
+}
+
 export interface Evaluator<TTree> {
   // construct
   leaf: TTree;
