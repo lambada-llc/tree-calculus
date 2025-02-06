@@ -1,0 +1,1 @@
+* https://git.eversole.co/James/tricu
