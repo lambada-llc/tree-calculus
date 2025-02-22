@@ -63,6 +63,8 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
   {
     const triage = (u: Term_Lambda, v: Term_Lambda, w: Term_Lambda) => app(node, app(node, u, v), w);
     const s1 = (u: Term_Lambda) => app(node, app(node, u));
+    const s = star_ski_eta(abs('u', s1(variable('u'))));
+    const triage_op = star_ski_eta(abs('u', abs('v', abs('w', triage(variable('u'), variable('v'), variable('w'))))));
     const k = app(node, node);
     const k1 = (u: Term_Lambda) => app(k, u);
     const i = app(s1(k), node);
@@ -73,14 +75,18 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
     const wait = (a: Term_Lambda) => abs('b', abs('c', app(s1(a), k1(variable('c')), variable('b'))));
     const wait1 = (a: Term_Lambda) => s1(app(s1(k1(s1(a))), k));
     const fix = (functional: Term_Lambda) => app(wait(self_apply_k), abs('x', app(functional, app(wait1(self_apply_k), variable('x')))));
+    const decent_eliminators = { // i.e. all but bracket, which would OOM tests further down
+      star_ski,
+      star_ski_eta,
+      star_skibc_op_eta,
+    };
     {
       // small [wait] program (applied to dummy program △, so subtract 1 for the size of [wait] itself)
       console.group('wait');
       const wait_node = wait(node);
       console.debug('bracket_ski', size(bracket_ski(wait_node)) - 1n);
-      console.debug('star_ski', size(star_ski(wait_node)) - 1n);
-      console.debug('star_ski_eta', size(star_ski_eta(wait_node)) - 1n);
-      console.debug('star_skibc_eta', size(star_skibc_op_eta(wait_node)) - 1n);
+      for (const [elim_name, elim] of Object.entries(decent_eliminators))
+        console.debug(elim_name, size(elim(wait_node)) - 1n);
       console.groupEnd();
     }
     {
@@ -102,18 +108,73 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
       // size:: tree -> number
       const size_lambda = abs('x', app(_size, variable('x'), zero));
 
-      // quick sanity check
-      for (const elim_to_check of [star_ski, star_ski_eta, star_skibc_op_eta]) {
-        const size_to_test = term(elim_to_check(size_lambda));
+      for (const [elim_name, elim] of Object.entries(decent_eliminators)) {
+        // sanity check behavior
+        const size_to_test = term(elim(size_lambda));
         const chain_to_n = (x: TTree): bigint => e.triage(() => 0n, u => 1n + chain_to_n(u), (u, v) => raise('unexpexted'))(x);
         for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, size_to_test])
-          console.assert(m.to_nat(e.apply(size_tree, test_term)) === chain_to_n(e.apply(size_to_test, test_term)), 'invalid size program');
-      }
+          console.assert(
+            m.to_nat(e.apply(size_tree, test_term)) ===
+            chain_to_n(e.apply(size_to_test, test_term)),
+            'invalid size program');
 
-      // console.debug('bracket_ski', size(bracket_ski(size_lambda)));
-      console.debug('star_ski', size(star_ski(size_lambda)));
-      console.debug('star_ski_eta', size(star_ski_eta(size_lambda)));
-      console.debug('star_skibc_eta', size(star_skibc_op_eta(size_lambda)));
+        console.debug(elim_name, size(elim(size_lambda)));
+      }
+      console.groupEnd();
+    }
+    {
+      // small [bf] branch first self-evaluator
+      console.group('bf');
+      const eager_s = triage(
+        abs('f', app(variable('f'), node)),
+        abs('u', abs('f', app(variable('f'), app(node, variable('u'))))),
+        abs('u', abs('v', abs('f', app(variable('f'), app(node, variable('u'), variable('v')))))),
+      );
+      const eager = abs('f', abs('x', app(eager_s, variable('x'), variable('f'))));
+      // const bffs = abs('x', abs('e', abs('y', abs('z', app(
+      //   eager_s,
+      //   app(variable('e'), variable('y'), variable('z')),
+      //   app(variable('e'), app(variable('e'), variable('x'), variable('z')))
+      // )))));
+      const bffs = abs('x', abs('e', app(
+        s1(abs('y', app(s, abs('z', app(
+          eager_s,
+          app(variable('e'), variable('y'), variable('z')),
+        ))))),
+        abs('y', abs('z', app(variable('e'), app(variable('e'), variable('x'), variable('z'))))))));
+      // const bfff = abs('w', abs('x', abs('e', abs('y', triage(
+      //   variable('w'),
+      //   app(variable('e'), variable('x')),
+      //   abs('z', app(variable('e'), app(variable('e'), variable('y'), variable('z'))))
+      // )))));
+      const bfff = abs('w', abs('x', abs('e', abs('y', app(triage_op,
+        variable('w'),
+        app(variable('e'), variable('x')),
+        abs('z', app(variable('e'), app(app(k, variable('e'), variable('x')), variable('y'), variable('z'))))
+      )))));
+      const bff = abs('e', abs('x', app(triage(
+        abs('e', k),
+        bffs,
+        bfff
+      ), variable('x'), variable('e'))));
+      const bf = fix(abs('e', triage(
+        node,
+        node,
+        app(bff, variable('e'))
+      )));
+      console.log(size(star_skibc_op_eta(bf)));
+
+      for (const [elim_name, elim] of Object.entries(decent_eliminators)) {
+        // sanity check behavior
+        const bf_to_test = term(elim(bf));
+        for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, bf_to_test])
+          console.assert(
+            m.to_nat(e.apply(size_tree, test_term)) ===
+            m.to_nat(e.apply(e.apply(bf_to_test, size_tree), test_term)),
+            'invalid bf program');
+
+        console.debug(elim_name, size(elim(bf)));
+      }
       console.groupEnd();
     }
   }
