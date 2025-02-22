@@ -10,7 +10,7 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   func_eager,
 };
 
-function test<TTree>(name: string, e: Evaluator<TTree>) {
+function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
   console.group(name);
   const m = marshal(e);
   const tt = m.of_bool(true);
@@ -49,5 +49,5 @@ function test<TTree>(name: string, e: Evaluator<TTree>) {
 }
 
 for (const [name, e] of Object.entries(evaluators))
-  test(name, e);
+  test_evaluator(name, e);
 
