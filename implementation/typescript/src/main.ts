@@ -1,9 +1,11 @@
-import { Evaluator, marshal, measure } from "./common";
-import { bench_alloc_and_identity_ternary, bench_recursive_fib_ternary, equal_ternary, succ_dag } from "./example_programs";
+import { Evaluator, marshal, measure, raise } from "./common";
+import { bench_alloc_and_identity_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "./example_programs";
 import { of_dag, to_dag } from "./format/dag";
 import { of_ternary, to_ternary } from "./format/ternary";
 import array_mutable from "./evaluator/array-mutable";
 import func_eager from "./evaluator/func-eager";
+import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
+import { bracket_ski, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
 
 const evaluators: { [name: string]: Evaluator<any> } = {
   array_mutable,
@@ -51,3 +53,72 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
 for (const [name, e] of Object.entries(evaluators))
   test_evaluator(name, e);
 
+function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
+  console.group('Abstraction elimination');
+  const m = marshal(e);
+  const term = marshal_term(e);
+  const size_tree = of_ternary(e, size_ternary);
+  const size = (x: Term_Lambda): bigint => m.to_nat(e.apply(size_tree, term(x)));
+
+  {
+    const triage = (u: Term_Lambda, v: Term_Lambda, w: Term_Lambda) => app(node, app(node, u, v), w);
+    const s1 = (u: Term_Lambda) => app(node, app(node, u));
+    const k = app(node, node);
+    const k1 = (u: Term_Lambda) => app(k, u);
+    const i = app(s1(k), node);
+    const compose = (f: Term_Lambda, g: Term_Lambda) => abs('compose_x', app(f, app(g, variable('compose_x'))));
+    // const compose = (f: Term_Lambda, g: Term_Lambda) => app(node, app(node, app(k, f)), g);
+    const self_apply = abs('x', app(variable('x'), variable('x')));
+    const self_apply_k = abs('x', app(variable('x'), k1(variable('x'))));
+    const wait = (a: Term_Lambda) => abs('b', abs('c', app(s1(a), k1(variable('c')), variable('b'))));
+    const wait1 = (a: Term_Lambda) => s1(app(s1(k1(s1(a))), k));
+    const fix = (functional: Term_Lambda) => app(wait(self_apply_k), abs('x', app(functional, app(wait1(self_apply_k), variable('x')))));
+    {
+      // small [wait] program (applied to dummy program △, so subtract 1 for the size of [wait] itself)
+      console.group('wait');
+      const wait_node = wait(node);
+      console.debug('bracket_ski', size(bracket_ski(wait_node)) - 1n);
+      console.debug('star_ski', size(star_ski(wait_node)) - 1n);
+      console.debug('star_ski_eta', size(star_ski_eta(wait_node)) - 1n);
+      console.debug('star_skibc_eta', size(star_skibc_op_eta(wait_node)) - 1n);
+      console.groupEnd();
+    }
+    {
+      // small [size] program
+      console.group('size');
+      const zero = node;
+      const succ = node;
+      // number' := number -> number
+      // _triage :: tree -> (tree -> number') -> number'
+      const _triage = triage(
+        abs('self', abs('n', variable('n'))),
+        abs('u', abs('self', app(variable('self'), variable('u')))),
+        abs('u', abs('v', abs('self', compose(app(variable('self'), variable('u')), app(variable('self'), variable('v')))))),
+      );
+      // _functional:: (tree -> number') -> (tree -> number')
+      const _functional = abs('self', abs('x', compose(succ, app(_triage, variable('x'), variable('self')))));
+      // _size:: tree -> number'
+      const _size = fix(_functional);
+      // size:: tree -> number
+      const size_lambda = abs('x', app(_size, variable('x'), zero));
+
+      // quick sanity check
+      for (const elim_to_check of [star_ski, star_ski_eta, star_skibc_op_eta]) {
+        const size_to_test = term(elim_to_check(size_lambda));
+        const chain_to_n = (x: TTree): bigint => e.triage(() => 0n, u => 1n + chain_to_n(u), (u, v) => raise('unexpexted'))(x);
+        for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, size_to_test])
+          console.assert(m.to_nat(e.apply(size_tree, test_term)) === chain_to_n(e.apply(size_to_test, test_term)), 'invalid size program');
+      }
+
+      // console.debug('bracket_ski', size(bracket_ski(size_lambda)));
+      console.debug('star_ski', size(star_ski(size_lambda)));
+      console.debug('star_ski_eta', size(star_ski_eta(size_lambda)));
+      console.debug('star_skibc_eta', size(star_skibc_op_eta(size_lambda)));
+      console.groupEnd();
+    }
+  }
+
+  console.groupEnd();
+}
+
+test_abs_elimination(array_mutable);
