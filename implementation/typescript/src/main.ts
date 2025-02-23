@@ -145,15 +145,10 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
           app(variable('e'), variable('y'), variable('z')),
         ))))),
         abs('y', abs('z', app(variable('e'), app(variable('e'), variable('x'), variable('z'))))))));
-      // const bfff = abs('w', abs('x', abs('e', abs('y', triage(
-      //   variable('w'),
-      //   app(variable('e'), variable('x')),
-      //   abs('z', app(variable('e'), app(variable('e'), variable('y'), variable('z'))))
-      // )))));
-      const bfff = abs('w', abs('x', abs('e', abs('y', app(triage_op,
+      const bfff = abs('w', abs('x', abs('e', abs('y', triage(
         variable('w'),
         app(variable('e'), variable('x')),
-        abs('z', app(variable('e'), app(app(k, variable('e'), variable('x')), variable('y'), variable('z'))))
+        abs('z', app(variable('e'), app(variable('e'), variable('y'), variable('z'))))
       )))));
       const bff = abs('e', abs('x', app(triage(
         abs('e', k),
@@ -165,7 +160,6 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
         node,
         app(bff, variable('e'))
       )));
-      console.log(size(star_skibc_op_eta(bf)));
 
       for (const [elim_name, elim] of Object.entries(decent_eliminators)) {
         // sanity check behavior
