@@ -5,7 +5,7 @@ import { of_ternary, to_ternary } from "./format/ternary";
 import array_mutable from "./evaluator/array-mutable";
 import func_eager from "./evaluator/func-eager";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
-import { bracket_ski, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
+import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
 
 const evaluators: { [name: string]: Evaluator<any> } = {
   array_mutable,
@@ -81,6 +81,7 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
       star_skibc_op_eta,
       kiselyov_plain,
       kiselyov_kopt,
+      kiselyov_eta,
     };
     {
       // small [wait] program (applied to dummy program △, so subtract 1 for the size of [wait] itself)
