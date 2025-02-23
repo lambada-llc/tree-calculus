@@ -158,63 +158,53 @@ function kiselyov_base(term: Term_Lambda, app: (d1: term, d2: term) => Term_Lamb
 }
 
 export function kiselyov_plain(term: Term_Lambda): Term_Lambda {
-  type term = { eta: bigint; term: Term_Lambda };
   // (0 , d1) # (0 , d2) = d1 :@ d2
   // (0 , d1) # (n , d2) = (0, Com "B" :@ d1) # (n - 1, d2)
   // (n , d1) # (0 , d2) = (0, Com "R" :@ d2) # (n - 1, d1)
   // (n1, d1) # (n2, d2) = (n1 - 1, (0, Com "S") # (n1 - 1, d1)) # (n2 - 1, d2)
-  const op = (d1: term, d2: term): Term_Lambda => {
-    if (d1.eta === 0n)
-      if (d2.eta === 0n)
+  const app = (d1: term, d2: term): Term_Lambda => {
+    if (d1.eta.length === 0)
+      if (d2.eta.length === 0)
         return { variant: 'App', a: d1.term, b: d2.term };
       else
-        return op({ eta: 0n, term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta - 1n, term: d2.term });
+        return app({ eta: [], term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta[1], term: d2.term });
     else
-      if (d2.eta === 0n)
-        return op({ eta: 0n, term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta - 1n, term: d1.term });
+      if (d2.eta.length === 0)
+        return app({ eta: [], term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta[1], term: d1.term });
       else
-        return op({ eta: d1.eta - 1n, term: op({ eta: 0n, term: s_op }, { eta: d1.eta - 1n, term: d1.term }) }, { eta: d2.eta - 1n, term: d2.term });
+        return app({ eta: d1.eta[1], term: app({ eta: [], term: s_op }, { eta: d1.eta[1], term: d1.term }) }, { eta: d2.eta[1], term: d2.term });
   };
-  // convert (#) = \case
-  //   N Z -> (1, Com "I")
-  //   N (S e) -> (n + 1, (0, Com "K") # t) where t@(n, _) = rec $ N e
-  //   L e -> case rec e of
-  //     (0, d) -> (0, Com "K" :@ d)
-  //     (n, d) -> (n - 1, d)
-  //   A e1 e2 -> (max n1 n2, t1 # t2) where
-  //     t1@(n1, _) = rec e1
-  //     t2@(n2, _) = rec e2
-  //   Free s -> (0, Com s)
-  //   where rec = convert (#)
   const abs_stack: string[] = [];
-  const convert = (term: Term_Lambda): term => {
+  const zip = (a: bools, b: bools): bools =>
+    a.length === 0 ? b : (b.length === 0 ? a : [a[0] || b[0], zip(a[1], b[1])]);
+  const convertBool = (term: Term_Lambda): term => {
     switch (term.variant) {
       case 'Var':
-        let res: term = { eta: 1n, term: i_op };
+        let res: term = { eta: [true, []], term: i_op };
         let i = abs_stack.length - 1;
         for (; i >= 0 && abs_stack[i] !== term.name; --i)
-          res = { eta: res.eta + 1n, term: op({ eta: 0n, term: k_op }, res) };
+          res = { eta: [false, res.eta], term: app({ eta: [], term: k_op }, res) };
         if (i < 0)
-          return { eta: 0n, term };
+          return { eta: [], term };
         return res;
       case 'Abs':
         abs_stack.push(term.name);
-        const rec = convert(term.body);
-        if (rec.eta === 0n)
+        const rec = convertBool(term.body);
+        if (rec.eta.length === 0)
           rec.term = { variant: 'App', a: k_op, b: rec.term };
         else
-          rec.eta--;
+          rec.eta = rec.eta[1];
         abs_stack.pop();
         return rec;
       case 'App':
-        const t1 = convert(term.a);
-        const t2 = convert(term.b);
-        return { eta: t1.eta > t2.eta ? t1.eta : t2.eta, term: op(t1, t2) };
+        const t1 = convertBool(term.a);
+        const t2 = convertBool(term.b);
+        return { eta: zip(t1.eta, t2.eta), term: app(t1, t2) };
       case 'Node':
-        return { eta: 0n, term };
+        return { eta: [], term };
     }
   };
-  return convert(term).term;
+  return convertBool(term).term;
 }
 
 export function kiselyov_kopt(term: Term_Lambda): Term_Lambda {
