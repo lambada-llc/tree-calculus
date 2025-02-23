@@ -105,13 +105,65 @@ export const star_skibc_op_eta = process(elim_star_skibc_op_eta);
 // The following Kiselyov algorithms have been adapted from Ben Lynn's
 // implementations at https://crypto.stanford.edu/~blynn/lambda/kiselyov.html
 
+type bools = [] | [boolean, bools];
+type term = { eta: bools; term: Term_Lambda };
+function kiselyov_base(term: Term_Lambda, app: (d1: term, d2: term) => Term_Lambda): Term_Lambda {
+  const zip = (a: bools, b: bools): bools =>
+    a.length === 0 ? b : (b.length === 0 ? a : [a[0] || b[0], zip(a[1], b[1])]);
+  const abs_stack: string[] = [];
+  // convertBool (#) = \case
+  //   N Z -> (True:[], Com "I")
+  //   N (S e) -> (False:g, d) where (g, d) = rec $ N e
+  //   L e -> case rec e of
+  //     ([], d) -> ([], Com "K" :@ d)
+  //     (False:g, d) -> (g, ([], Com "K") # (g, d))
+  //     (True:g, d) -> (g, d)
+  //   A e1 e2 -> (zipWithDefault False (||) g1 g2, t1 # t2) where
+  //     t1@(g1, _) = rec e1
+  //     t2@(g2, _) = rec e2
+  //   Free s -> ([], Com s)
+  //   where rec = convertBool (#)
+  const convertBool = (term: Term_Lambda): term => {
+    switch (term.variant) {
+      case 'Var':
+        let res: term = { eta: [true, []], term: i_op };
+        let i = abs_stack.length - 1;
+        for (; i >= 0 && abs_stack[i] !== term.name; --i)
+          res = { eta: [false, res.eta], term: res.term };
+        if (i < 0)
+          return { eta: [], term };
+        return res;
+      case 'Abs':
+        abs_stack.push(term.name);
+        const rec = convertBool(term.body);
+        if (rec.eta.length === 0)
+          rec.term = { variant: 'App', a: k_op, b: rec.term };
+        else {
+          const head = rec.eta[0];
+          rec.eta = rec.eta[1];
+          if (!head)
+            rec.term = app({ eta: [], term: k_op }, rec);
+        }
+        abs_stack.pop();
+        return rec;
+      case 'App':
+        const t1 = convertBool(term.a);
+        const t2 = convertBool(term.b);
+        return { eta: zip(t1.eta, t2.eta), term: app(t1, t2) };
+      case 'Node':
+        return { eta: [], term };
+    }
+  };
+  return convertBool(term).term;
+}
+
 export function kiselyov_plain(term: Term_Lambda): Term_Lambda {
-  type tuple = { eta: bigint; term: Term_Lambda };
+  type term = { eta: bigint; term: Term_Lambda };
   // (0 , d1) # (0 , d2) = d1 :@ d2
   // (0 , d1) # (n , d2) = (0, Com "B" :@ d1) # (n - 1, d2)
   // (n , d1) # (0 , d2) = (0, Com "R" :@ d2) # (n - 1, d1)
   // (n1, d1) # (n2, d2) = (n1 - 1, (0, Com "S") # (n1 - 1, d1)) # (n2 - 1, d2)
-  const op = (d1: tuple, d2: tuple): Term_Lambda => {
+  const op = (d1: term, d2: term): Term_Lambda => {
     if (d1.eta === 0n)
       if (d2.eta === 0n)
         return { variant: 'App', a: d1.term, b: d2.term };
@@ -135,10 +187,10 @@ export function kiselyov_plain(term: Term_Lambda): Term_Lambda {
   //   Free s -> (0, Com s)
   //   where rec = convert (#)
   const abs_stack: string[] = [];
-  const convert = (term: Term_Lambda): tuple => {
+  const convert = (term: Term_Lambda): term => {
     switch (term.variant) {
       case 'Var':
-        let res: tuple = { eta: 1n, term: i_op };
+        let res: term = { eta: 1n, term: i_op };
         let i = abs_stack.length - 1;
         for (; i >= 0 && abs_stack[i] !== term.name; --i)
           res = { eta: res.eta + 1n, term: op({ eta: 0n, term: k_op }, res) };
@@ -166,10 +218,6 @@ export function kiselyov_plain(term: Term_Lambda): Term_Lambda {
 }
 
 export function kiselyov_kopt(term: Term_Lambda): Term_Lambda {
-  type bools = [] | [boolean, bools];
-  const zip = (a: bools, b: bools): bools =>
-    a.length === 0 ? b : (b.length === 0 ? a : [a[0] || b[0], zip(a[1], b[1])]);
-  type tuple = { eta: bools; term: Term_Lambda };
   // ([], d1) # ([], d2) = d1 :@ d2
   // ([], d1) # (True:g2, d2) = ([], Com "B" :@ d1) # (g2, d2)
   // ([], d1) # (False:g2, d2) = ([], d1) # (g2, d2)
@@ -179,81 +227,37 @@ export function kiselyov_kopt(term: Term_Lambda): Term_Lambda {
   // (False:g1, d1) # (True:g2, d2) = (g1, ([], Com "B") # (g1, d1)) # (g2, d2)
   // (True:g1, d1) # (False:g2, d2) = (g1, ([], Com "C") # (g1, d1)) # (g2, d2)
   // (False:g1, d1) # (False:g2, d2) = (g1, d1) # (g2, d2)
-  const op = (d1: tuple, d2: tuple): Term_Lambda => {
+  const app = (d1: term, d2: term): Term_Lambda => {
     if (d1.eta.length === 0)
       if (d2.eta.length === 0)
         return { variant: 'App', a: d1.term, b: d2.term };
       else
         if (d2.eta[0])
-          return op({ eta: [], term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta[1], term: d2.term });
+          return app({ eta: [], term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta[1], term: d2.term });
         else
-          return op(d1, { eta: d2.eta[1], term: d2.term });
+          return app(d1, { eta: d2.eta[1], term: d2.term });
     else
       if (d2.eta.length === 0)
         if (d1.eta[0])
-          return op({ eta: [], term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta[1], term: d1.term });
+          return app({ eta: [], term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta[1], term: d1.term });
         else
-          return op({ eta: d1.eta[1], term: d1.term }, d2);
+          return app({ eta: d1.eta[1], term: d1.term }, d2);
       else
-        return op(
+        return app(
           {
             eta: d1.eta[1],
             term:
               (d1.eta[0]
                 ? (d2.eta[0]
-                  ? op({ eta: [], term: s_op }, { eta: d1.eta[1], term: d1.term })
-                  : op({ eta: [], term: c_op }, { eta: d1.eta[1], term: d1.term }))
+                  ? app({ eta: [], term: s_op }, { eta: d1.eta[1], term: d1.term })
+                  : app({ eta: [], term: c_op }, { eta: d1.eta[1], term: d1.term }))
                 : (d2.eta[0]
-                  ? op({ eta: [], term: b_op }, { eta: d1.eta[1], term: d1.term })
+                  ? app({ eta: [], term: b_op }, { eta: d1.eta[1], term: d1.term })
                   : d1.term))
           },
           { eta: d2.eta[1], term: d2.term });
   };
-  // convertBool (#) = \case
-  //   N Z -> (True:[], Com "I")
-  //   N (S e) -> (False:g, d) where (g, d) = rec $ N e
-  //   L e -> case rec e of
-  //     ([], d) -> ([], Com "K" :@ d)
-  //     (False:g, d) -> (g, ([], Com "K") # (g, d))
-  //     (True:g, d) -> (g, d)
-  //   A e1 e2 -> (zipWithDefault False (||) g1 g2, t1 # t2) where
-  //     t1@(g1, _) = rec e1
-  //     t2@(g2, _) = rec e2
-  //   Free s -> ([], Com s)
-  //   where rec = convertBool (#)
-  const abs_stack: string[] = [];
-  const convert = (term: Term_Lambda): tuple => {
-    switch (term.variant) {
-      case 'Var':
-        let res: tuple = { eta: [true, []], term: i_op };
-        let i = abs_stack.length - 1;
-        for (; i >= 0 && abs_stack[i] !== term.name; --i)
-          res = { eta: [false, res.eta], term: res.term };
-        if (i < 0)
-          return { eta: [], term };
-        return res;
-      case 'Abs':
-        abs_stack.push(term.name);
-        const rec = convert(term.body);
-        if (rec.eta.length === 0)
-          rec.term = { variant: 'App', a: k_op, b: rec.term };
-        else {
-          const head = rec.eta[0];
-          rec.eta = rec.eta[1];
-          if (!head)
-            rec.term = op({ eta: [], term: k_op }, rec);
-        }
-        abs_stack.pop();
-        return rec;
-      case 'App':
-        const t1 = convert(term.a);
-        const t2 = convert(term.b);
-        return { eta: zip(t1.eta, t2.eta), term: op(t1, t2) };
-      case 'Node':
-        return { eta: [], term };
-    }
-  };
-  return convert(term).term;
+  return kiselyov_base(term, app);
 }
 
 // detects "△ (△ (△ △)) x" and "△ (△ △ △) △" as identity functions
@@ -275,11 +279,7 @@ function is_id(term: Term_Lambda): boolean {
 }
 
 export function kiselyov_eta(term: Term_Lambda): Term_Lambda {
-  type bools = [] | [boolean, bools];
-  const zip = (a: bools, b: bools): bools =>
-    a.length === 0 ? b : (b.length === 0 ? a : [a[0] || b[0], zip(a[1], b[1])]);
-  type tuple = { eta: bools; term: Term_Lambda };
-  const is_id2 = (t: tuple) => t.eta.length !== 0 && t.eta[1].length === 0 && is_id(t.term);
+  const is_id2 = (t: term) => t.eta.length !== 0 && t.eta[1].length === 0 && is_id(t.term);
   //  ([], d1) # ([], d2) = d1 :@ d2
   // ([], d1) # (True:[], Com "I") = d1
   //  ([], d1) # (True:g2, d2) = ([], Com "B" :@ d1) # (g2, d2)
@@ -293,7 +293,7 @@ export function kiselyov_eta(term: Term_Lambda): Term_Lambda {
   // (False:g1, d1) # (True:[], Com "I") = d1
   //  (False:g1, d1) # (True:g2, d2) = (g1, ([], Com "B") # (g1, d1)) # (g2, d2)
   //  (False:g1, d1) # (False:g2, d2) = (g1, d1) # (g2, d2)
-  const op = (d1: tuple, d2: tuple): Term_Lambda => {
+  const app = (d1: term, d2: term): Term_Lambda => {
     if (d1.eta.length === 0)
       if (d2.eta.length === 0)
         return { variant: 'App', a: d1.term, b: d2.term };
@@ -301,68 +301,36 @@ export function kiselyov_eta(term: Term_Lambda): Term_Lambda {
         if (d2.eta[0])
           return is_id2(d2)
             ? d1.term
-            : op({ eta: [], term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta[1], term: d2.term });
+            : app({ eta: [], term: { variant: 'App', a: b_op, b: d1.term } }, { eta: d2.eta[1], term: d2.term });
         else
-          return op(d1, { eta: d2.eta[1], term: d2.term });
+          return app(d1, { eta: d2.eta[1], term: d2.term });
     else
       if (d2.eta.length === 0)
         if (d1.eta[0])
           return is_id2(d1)
             ? { variant: 'App', a: t_op, b: d2.term }
-            : op({ eta: [], term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta[1], term: d1.term });
+            : app({ eta: [], term: { variant: 'App', a: r_op, b: d2.term } }, { eta: d1.eta[1], term: d1.term });
         else
-          return op({ eta: d1.eta[1], term: d1.term }, d2);
+          return app({ eta: d1.eta[1], term: d1.term }, d2);
       else
-        if (is_id2(d1)&& !d2.eta[0])
-          return op({ eta: [], term: t_op }, { eta: d2.eta[1], term: d2.term });
+        if (is_id2(d1) && !d2.eta[0])
+          return app({ eta: [], term: t_op }, { eta: d2.eta[1], term: d2.term });
         else if (is_id2(d2) && !d1.eta[0])
           return d1.term;
         else
-          return op(
+          return app(
             {
               eta: d1.eta[1],
               term:
                 (d1.eta[0]
                   ? (d2.eta[0]
-                    ? op({ eta: [], term: s_op }, { eta: d1.eta[1], term: d1.term })
-                    : op({ eta: [], term: c_op }, { eta: d1.eta[1], term: d1.term }))
+                    ? app({ eta: [], term: s_op }, { eta: d1.eta[1], term: d1.term })
+                    : app({ eta: [], term: c_op }, { eta: d1.eta[1], term: d1.term }))
                   : (d2.eta[0]
-                    ? op({ eta: [], term: b_op }, { eta: d1.eta[1], term: d1.term })
+                    ? app({ eta: [], term: b_op }, { eta: d1.eta[1], term: d1.term })
                     : d1.term))
             },
             { eta: d2.eta[1], term: d2.term });
   };
-  const abs_stack: string[] = [];
-  const convert = (term: Term_Lambda): tuple => {
-    switch (term.variant) {
-      case 'Var':
-        let res: tuple = { eta: [true, []], term: i_op };
-        let i = abs_stack.length - 1;
-        for (; i >= 0 && abs_stack[i] !== term.name; --i)
-          res = { eta: [false, res.eta], term: res.term };
-        if (i < 0)
-          return { eta: [], term };
-        return res;
-      case 'Abs':
-        abs_stack.push(term.name);
-        const rec = convert(term.body);
-        if (rec.eta.length === 0)
-          rec.term = { variant: 'App', a: k_op, b: rec.term };
-        else {
-          const head = rec.eta[0];
-          rec.eta = rec.eta[1];
-          if (!head)
-            rec.term = op({ eta: [], term: k_op }, rec);
-        }
-        abs_stack.pop();
-        return rec;
-      case 'App':
-        const t1 = convert(term.a);
-        const t2 = convert(term.b);
-        return { eta: zip(t1.eta, t2.eta), term: op(t1, t2) };
-      case 'Node':
-        return { eta: [], term };
-    }
-  };
-  return convert(term).term;
+  return kiselyov_base(term, app);
 }
