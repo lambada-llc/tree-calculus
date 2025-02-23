@@ -5,7 +5,7 @@ import { of_ternary, to_ternary } from "./format/ternary";
 import array_mutable from "./evaluator/array-mutable";
 import func_eager from "./evaluator/func-eager";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
-import { bracket_ski, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
+import { bracket_ski, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
 
 const evaluators: { [name: string]: Evaluator<any> } = {
   array_mutable,
@@ -79,6 +79,7 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
       star_ski,
       star_ski_eta,
       star_skibc_op_eta,
+      kiselyov_plain,
     };
     {
       // small [wait] program (applied to dummy program △, so subtract 1 for the size of [wait] itself)
@@ -111,7 +112,7 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
       for (const [elim_name, elim] of Object.entries(decent_eliminators)) {
         // sanity check behavior
         const size_to_test = term(elim(size_lambda));
-        const chain_to_n = (x: TTree): bigint => e.triage(() => 0n, u => 1n + chain_to_n(u), (u, v) => raise('unexpexted'))(x);
+        const chain_to_n = (x: TTree): bigint => e.triage(() => 0n, u => 1n + chain_to_n(u), (u, v) => raise('unexpected'))(x);
         for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, size_to_test])
           console.assert(
             m.to_nat(e.apply(size_tree, test_term)) ===
