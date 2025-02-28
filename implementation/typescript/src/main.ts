@@ -4,12 +4,14 @@ import { of_dag, to_dag } from "./format/dag";
 import { of_ternary, to_ternary } from "./format/ternary";
 import array_mutable from "./evaluator/array-mutable";
 import func_eager from "./evaluator/func-eager";
+import leaf_stem_fork_apply from "./evaluator/leaf-stem-fork-apply";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
 import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
 
 const evaluators: { [name: string]: Evaluator<any> } = {
   array_mutable,
   func_eager,
+  leaf_stem_fork_apply,
 };
 
 function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
