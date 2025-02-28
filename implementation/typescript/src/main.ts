@@ -1,11 +1,12 @@
 import { Evaluator, marshal, measure, raise } from "./common";
-import { bench_alloc_and_identity_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "./example_programs";
+import { bench_alloc_and_identity_ternary, bench_linear_fib_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "./example_programs";
 import { of_dag, to_dag } from "./format/dag";
 import { of_ternary, to_ternary } from "./format/ternary";
 import eager_func from "./evaluator/eager-func";
 import eager_node_app from "./evaluator/eager-node-app";
 import eager_stacks from "./evaluator/eager-stacks";
 import eager_value_adt from "./evaluator/eager-value-adt";
+import lazy_value_adt from "./evaluator/lazy-value-adt";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
 import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
 
@@ -14,6 +15,7 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   eager_node_app,
   eager_stacks,
   eager_value_adt,
+  lazy_value_adt, // stack overflows
 };
 
 function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
@@ -43,10 +45,16 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
       i + 1n === m.to_nat(e.apply(succ, m.of_nat(i))),
       'succ behaved unexpectedly');
   // performance
-  const bench_recursive_fib = of_ternary(e, bench_recursive_fib_ternary);
-  const fib20 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(20n))));
-  console.assert(10946n === fib20.result);
-  console.debug("recursive fib 20:", fib20.elasped_ms + "ms");
+  const bench_linear_fib = of_ternary(e, bench_linear_fib_ternary);
+  const fib100 = measure(() => m.to_nat(e.apply(bench_linear_fib, m.of_nat(100n))));
+  console.assert(573147844013817084101n === fib100.result);
+  console.debug("linear fib 100:", fib100.elasped_ms + "ms");
+  if (e !== lazy_value_adt as any) { // stack overflow
+    const bench_recursive_fib = of_ternary(e, bench_recursive_fib_ternary);
+    const fib20 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(20n))));
+    console.assert(10946n === fib20.result);
+    console.debug("recursive fib 20:", fib20.elasped_ms + "ms");
+  }
   const bench_alloc_and_identity = of_ternary(e, bench_alloc_and_identity_ternary);
   const alloc_id = measure(() => m.to_string(e.apply(e.apply(bench_alloc_and_identity, m.of_nat(1000000n)), m.of_string("hello world"))));
   console.assert("hello world" === alloc_id.result);
