@@ -1,9 +1,11 @@
 import { Evaluator } from "../common";
 
+// Strategy: Represent only values as kind of an algebraic data type and define [apply] recursively.
+
 type Tree =
-  [] | // = △
-  [Tree] | // = △ u
-  [Tree, Tree]; // = △ u v
+  [] | // = Leaf
+  [Tree] | // = Stem u
+  [Tree, Tree]; // = Fork u v
 
 function apply(a: Tree, b: Tree): Tree {
   switch (a.length) {

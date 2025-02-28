@@ -25,6 +25,9 @@ import { Evaluator, raise } from "../common";
 //   and we'll want to update anyone who originally referred to either expression.
 //   The strategy below gets around this by being eager: "a" is already a value by
 //   the time we encounter the reduction of "△ △ a b".
+//
+// The other reference implementations should speak for themselves: Less code, easier
+// to reason about, faster.
 
 type Tree = undefined // = △
   | [Tree, Tree]; // = a b
