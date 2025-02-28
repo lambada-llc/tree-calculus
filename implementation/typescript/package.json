@@ -5,7 +5,8 @@
   "scripts": {
     "build": "tsc --project src",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node src/main.js"
+    "start": "node src/main.js",
+    "debug": "node --inspect-brk src/main.js  # attach from Chrome via about:inspect"
   },
   "author": "Johannes Bader",
   "license": "MIT",
