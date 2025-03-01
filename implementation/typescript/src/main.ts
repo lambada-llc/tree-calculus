@@ -18,6 +18,9 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   lazy_value_adt, // stack overflows
 };
 
+const assertEqual = <T>(expected: T, actual: T, testCase: string) =>
+  console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${testCase}`);
+
 function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
   console.group(name);
   const m = marshal(e);
@@ -27,37 +30,39 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
 
   // ternary
   const equal = of_ternary(e, equal_ternary);
-  console.assert(equal_ternary === to_ternary(e, equal), 'ternary formatter does not round-trip');
+  assertEqual(equal_ternary, to_ternary(e, equal), 'ternary formatter round-trips');
   // dag
   const succ = of_dag(e, succ_dag);
   const succ_roundtrip = of_dag(e, to_dag(e, of_dag(e, succ_dag)));
-  console.assert(to_ternary(e, succ) === to_ternary(e, succ_roundtrip), 'dag formatter does not round-trip');
+  assertEqual(to_ternary(e, succ), to_ternary(e, succ_roundtrip), 'dag formatter round-trips');
   // evaluation
-  console.assert(true === m.to_bool(e.apply(not, ff)), 'true != not false');
-  console.assert(false === m.to_bool(e.apply(not, tt)), 'false != not true');
+  assertEqual(true, m.to_bool(e.apply(not, ff)), 'not');
+  assertEqual(false, m.to_bool(e.apply(not, tt)), 'not');
   for (const a of [not, tt, ff])
     for (const b of [not, tt, ff])
-      console.assert(
-        (a === b) === m.to_bool(e.apply(e.apply(e.apply(e.apply(equal, a), b), tt), ff)),
-        'unexpected equality result');
+      assertEqual(
+        (a === b),
+        m.to_bool(e.apply(e.apply(e.apply(e.apply(equal, a), b), tt), ff)),
+        'equal');
   for (const i of [0n, 1n, 2n, 3n, 7n, 8n, 65535n, 65535n + 8n])
-    console.assert(
-      i + 1n === m.to_nat(e.apply(succ, m.of_nat(i))),
-      'succ behaved unexpectedly');
+    assertEqual(
+      i + 1n,
+      m.to_nat(e.apply(succ, m.of_nat(i))),
+      'succ');
   // performance
   const bench_linear_fib = of_ternary(e, bench_linear_fib_ternary);
   const fib100 = measure(() => m.to_nat(e.apply(bench_linear_fib, m.of_nat(100n))));
-  console.assert(573147844013817084101n === fib100.result);
+  assertEqual(573147844013817084101n, fib100.result, "fib 100");
   console.debug("linear fib 100:", fib100.elasped_ms + "ms");
   if (e !== lazy_value_adt as any) { // stack overflow
     const bench_recursive_fib = of_ternary(e, bench_recursive_fib_ternary);
     const fib20 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(20n))));
-    console.assert(10946n === fib20.result);
+    assertEqual(10946n, fib20.result, "fib 20");
     console.debug("recursive fib 20:", fib20.elasped_ms + "ms");
   }
   const bench_alloc_and_identity = of_ternary(e, bench_alloc_and_identity_ternary);
   const alloc_id = measure(() => m.to_string(e.apply(e.apply(bench_alloc_and_identity, m.of_nat(1000000n)), m.of_string("hello world"))));
-  console.assert("hello world" === alloc_id.result);
+  assertEqual("hello world", alloc_id.result, "identity with needless allocation");
   console.debug("alloc and identity:", alloc_id.elasped_ms + "ms");
   console.groupEnd();
 }
@@ -128,10 +133,10 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
         const size_to_test = term(elim(size_lambda));
         const chain_to_n = (x: TTree): bigint => e.triage(() => 0n, u => 1n + chain_to_n(u), (u, v) => raise('unexpected'))(x);
         for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, size_to_test])
-          console.assert(
-            m.to_nat(e.apply(size_tree, test_term)) ===
+          assertEqual(
+            m.to_nat(e.apply(size_tree, test_term)),
             chain_to_n(e.apply(size_to_test, test_term)),
-            'invalid size program');
+            'size');
 
         console.debug(elim_name, size(elim(size_lambda)));
       }
@@ -177,10 +182,10 @@ function test_abs_elimination<TTree>(e: Evaluator<TTree>) {
         // sanity check behavior
         const bf_to_test = term(elim(bf));
         for (const test_term of [e.leaf, e.stem(e.leaf), e.fork(e.leaf, e.leaf), size_tree, bf_to_test])
-          console.assert(
-            m.to_nat(e.apply(size_tree, test_term)) ===
+          assertEqual(
+            m.to_nat(e.apply(size_tree, test_term)),
             m.to_nat(e.apply(e.apply(bf_to_test, size_tree), test_term)),
-            'invalid bf program');
+            'bf');
 
         console.debug(elim_name, size(elim(bf)));
       }
