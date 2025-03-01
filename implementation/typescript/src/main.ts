@@ -31,6 +31,53 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
   // ternary
   const equal = of_ternary(e, equal_ternary);
   assertEqual(equal_ternary, to_ternary(e, equal), 'ternary formatter round-trips');
+  {
+    // basic reduction rule check
+    const ruleCheck = (rule: string, expected: string, a: string, b: string) =>
+      assertEqual(expected, to_ternary(e, e.apply(of_ternary(e, a), of_ternary(e, b))), "rule " + rule);
+    const tl = '0';
+    const ts = '10';
+    const tf = '200';
+    const t = [tl, ts, tf]; // some simple trees
+    for (const z of t)
+      ruleCheck('0a', '1' + z, '0', z);
+    for (const y of t)
+      for (const z of t)
+        ruleCheck('0b', '2' + y + z, '1' + y, z);
+    for (const y of t)
+      for (const z of t)
+        ruleCheck('1', y, '20' + y, z);
+    for (const z of t)
+      ruleCheck('2', '2' + z + '1' + z, '2100', z); // x = 0, y = 0
+    for (const yc of t)
+      for (const z of t)
+        ruleCheck('2', '2' + z + '2' + yc + z, '2101' + yc, z); // x = 0, y = 1+yz
+    for (const y of t)
+      for (const z of t)
+        ruleCheck('2', z, '2110' + y, z); // x = 10
+    for (const w of t)
+      for (const x of t)
+        for (const y of t)
+          ruleCheck('3a', w, '22' + w + x + y, '0');
+    for (const w of t)
+      for (const y of t)
+        for (const u of t)
+          ruleCheck('3b', '1' + u, '22' + w + '0' + y, '1' + u); // x = 0
+    for (const w of t)
+      for (const y of t)
+        for (const u of t)
+          ruleCheck('3b', '20' + u, '22' + w + '10' + y, '1' + u); // x = 10
+    for (const w of t)
+      for (const x of t)
+        for (const u of t)
+          for (const v of t)
+            ruleCheck('3c', '2' + u + v, '22' + w + x + '0', '2' + u + v); // y = 0
+    for (const w of t)
+      for (const x of t)
+        for (const u of t)
+          for (const v of t)
+            ruleCheck('3c', u, '22' + w + x + '10', '2' + u + v); // y = 10
+  }
   // dag
   const succ = of_dag(e, succ_dag);
   const succ_roundtrip = of_dag(e, to_dag(e, of_dag(e, succ_dag)));
