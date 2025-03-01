@@ -105,9 +105,9 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
   console.debug("linear fib 100:", fib100.elasped_ms + "ms");
   if (e !== lazy_value_adt as any) { // stack overflow
     const bench_recursive_fib = of_ternary(e, bench_recursive_fib_ternary);
-    const fib20 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(20n))));
-    assertEqual(10946n, fib20.result, "fib 20");
-    console.debug("recursive fib 20:", fib20.elasped_ms + "ms");
+    const fib23 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(23n))));
+    assertEqual(46368n, fib23.result, "fib 23");
+    console.debug("recursive fib 23:", fib23.elasped_ms + "ms");
   }
   const bench_alloc_and_identity = of_ternary(e, bench_alloc_and_identity_ternary);
   const alloc_id = measure(() => m.to_string(e.apply(e.apply(bench_alloc_and_identity, m.of_nat(1000000n)), m.of_string("hello world"))));
