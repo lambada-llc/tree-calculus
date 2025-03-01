@@ -6,6 +6,7 @@ import eager_func from "./evaluator/eager-func";
 import eager_node_app from "./evaluator/eager-node-app";
 import eager_stacks from "./evaluator/eager-stacks";
 import eager_value_adt from "./evaluator/eager-value-adt";
+import eager_value_mem from "./evaluator/eager-value-mem";
 import lazy_value_adt from "./evaluator/lazy-value-adt";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./lambda/term";
 import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./lambda/abs-elimination";
@@ -15,7 +16,8 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   eager_node_app,
   eager_stacks,
   eager_value_adt,
-  lazy_value_adt, // stack overflows
+  lazy_value_adt, // prone to stack overflow
+  eager_value_mem: eager_value_mem(), // does not free memory
 };
 
 const assertEqual = <T>(expected: T, actual: T, testCase: string) =>
