@@ -46,8 +46,22 @@ function test_wait() {
   for (const [elim_name, elim] of Object.entries(decent_eliminators))
     console.debug(elim_name, evaluate(elim));
   // records
-  assert_equal(16n, evaluate(star_skibc_op_eta), 'wait record');
-  assert_equal(16n, evaluate(kiselyov_eta), 'wait record');
+  assert_equal(16n, evaluate(star_skibc_op_eta), 'record');
+  assert_equal(16n, evaluate(kiselyov_eta), 'record');
+  console.groupEnd();
+}
+
+function test_fix() {
+  // small fixed-point program (applied to dummy program △, so subtract 1 for the size of [wait] itself)
+  console.group('fix');
+  const fix_node = fix(node);
+  const evaluate = (elim: (term: Term_Lambda) => Term_Lambda) => size(elim(fix_node)) - 1n;
+  console.debug('bracket_ski', evaluate(bracket_ski));
+  for (const [elim_name, elim] of Object.entries(decent_eliminators))
+    console.debug(elim_name, evaluate(elim));
+  // records
+  assert_equal(44n, evaluate(star_skibc_op_eta), 'record');
+  assert_equal(44n, evaluate(kiselyov_eta), 'record');
   console.groupEnd();
 }
 
@@ -84,8 +98,8 @@ function test_size() {
     console.debug(elim_name, evaluate(elim));
   }
   // records
-  assert_equal(168n, evaluate(star_skibc_op_eta), 'size record');
-  assert_equal(168n, evaluate(kiselyov_eta), 'size record');
+  assert_equal(168n, evaluate(star_skibc_op_eta), 'record');
+  assert_equal(168n, evaluate(kiselyov_eta), 'record');
   console.groupEnd();
 }
 
@@ -138,7 +152,7 @@ function test_bf() {
     console.debug(elim_name, evaluate(elim));
   }
   // records
-  assert_equal(349n, evaluate(kiselyov_eta), 'size record');
+  assert_equal(349n, evaluate(kiselyov_eta), 'record');
   console.groupEnd();
 }
 
@@ -146,6 +160,7 @@ function test_bf() {
 export function test() {
   console.group('Abstraction elimination');
   test_wait();
+  test_fix();
   test_size();
   test_bf();
   console.groupEnd();
