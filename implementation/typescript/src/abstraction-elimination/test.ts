@@ -13,7 +13,7 @@ const term = marshal_term(e);
 const size_tree = of_ternary(e, size_ternary);
 const size = (x: Term_Lambda): bigint => m.to_nat(e.apply(size_tree, term(x)));
 
-const decent_eliminators = { // i.e. all but [bracket_ski], which OOMs on various test cases
+const decent_eliminators = {
   star_ski,
   star_ski_eta,
   star_skibc_op_eta,
@@ -21,6 +21,10 @@ const decent_eliminators = { // i.e. all but [bracket_ski], which OOMs on variou
   kiselyov_kopt,
   kiselyov_eta,
 };
+const eliminators = {
+  bracket_ski, // OOMs on larger programs
+  ...decent_eliminators
+}
 
 const triage = (u: Term_Lambda, v: Term_Lambda, w: Term_Lambda) => app(node, app(node, u, v), w);
 const s1 = (u: Term_Lambda) => app(node, app(node, u));
@@ -42,8 +46,7 @@ function test_wait() {
   console.group('wait');
   const wait_node = wait(node);
   const evaluate = (elim: (term: Term_Lambda) => Term_Lambda) => size(elim(wait_node)) - 1n;
-  console.debug('bracket_ski', evaluate(bracket_ski));
-  for (const [elim_name, elim] of Object.entries(decent_eliminators))
+  for (const [elim_name, elim] of Object.entries(eliminators))
     console.debug(elim_name, evaluate(elim));
   // records
   assert_equal(16n, evaluate(star_skibc_op_eta), 'record');
@@ -56,8 +59,7 @@ function test_fix() {
   console.group('fix');
   const fix_node = fix(node);
   const evaluate = (elim: (term: Term_Lambda) => Term_Lambda) => size(elim(fix_node)) - 1n;
-  console.debug('bracket_ski', evaluate(bracket_ski));
-  for (const [elim_name, elim] of Object.entries(decent_eliminators))
+  for (const [elim_name, elim] of Object.entries(eliminators))
     console.debug(elim_name, evaluate(elim));
   // records
   assert_equal(44n, evaluate(star_skibc_op_eta), 'record');
