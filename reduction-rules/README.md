@@ -7,11 +7,11 @@ In 2024, Johannes suggested the rules presented here and used throughout this re
 
 $$
 \begin{alignat*}{6}
-& \triangle\ & &\triangle        &&\ y\ & &z                && \longrightarrow     y                       && (1)\\
-& \triangle\ &(&\triangle\ x)    &&\ y\ & &z                && \longrightarrow     x\ z\ (y\ z) \quad\quad && (2)\\
-& \triangle\ &(&\triangle\ w\ x) &&\ y\ & &\triangle        && \longrightarrow     w                       && (3a)\\
-& \triangle\ &(&\triangle\ w\ x) &&\ y\ &(&\triangle\ u)    && \longrightarrow     x\ u                    && (3b)\\
-& \triangle\ &(&\triangle\ w\ x) &&\ y\ &(&\triangle\ u\ v) && \longrightarrow     y\ u\ v                 && (3c)
+& \triangle\ &\ \triangle        &&\ y\ &\ z                && \longrightarrow &&    y                  && (1)\\
+& \triangle\ &( \triangle\ x)    &&\ y\ &\ z                && \longrightarrow &&    x\ z\ (y\ z) \quad && (2)\\
+& \triangle\ &( \triangle\ w\ x) &&\ y\ &\ \triangle        && \longrightarrow &&    w                  && (3a)\\
+& \triangle\ &( \triangle\ w\ x) &&\ y\ &( \triangle\ u)    && \longrightarrow &&    x\ u               && (3b)\\
+& \triangle\ &( \triangle\ w\ x) &&\ y\ &( \triangle\ u\ v) && \longrightarrow &&    y\ u\ v            && (3c)
 \end{alignat*}
 $$
 
