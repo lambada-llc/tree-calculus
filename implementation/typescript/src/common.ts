@@ -1,3 +1,8 @@
+
+export function assert_equal<T>(expected: T, actual: T, testCase: string){
+  console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${testCase}`);
+}
+
 export function measure<T>(f: () => T): { result: T, elasped_ms: number } {
   const before_ms = Date.now();
   const result = f();
