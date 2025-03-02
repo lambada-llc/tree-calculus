@@ -10,4 +10,4 @@ This repo is maintained by Johannes Bader and aims to be a starting point for le
   - Rocq proofs and slides can be found in the same repo
 - [Barry's blog](https://github.com/barry-jay-personal/blog)
 - Article: [A visual introduction to tree calculus](https://olydis.medium.com/a-visual-introduction-to-tree-calculus-2f4a34ceffc2)
-- This repo: Implementations and pointers to implementations
+- This repo: Implementations, tests, benchmarks and various pointers
