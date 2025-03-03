@@ -116,7 +116,7 @@ public:
     return leaf();
   }
 
-  bool t_true() {
+  Tree t_true() {
     return stem(leaf());
   }
 
@@ -154,15 +154,15 @@ public:
     return f;
   }
 
-  int to_nat(Tree x) {
-    int result = 0;
+  int64_t to_nat(Tree x) {
+    int64_t result = 0;
     std::vector<Tree> list = to_list(x);
     for (auto it = list.rbegin(); it != list.rend(); ++it)
       result = 2 * result + (to_bool(*it) ? 1 : 0);
     return result;
   }
 
-  Tree of_nat(int n) {
+  Tree of_nat(int64_t n) {
     std::vector<Tree> l;
     for (; n; n >>= 1)
       l.push_back(of_bool(n % 2 == 1));
@@ -178,9 +178,8 @@ public:
 
   Tree of_string(std::string s) {
     std::vector<Tree> l;
-    for (char c : s) {
-        l.push_back(of_nat(c));
-    }
+    for (char c : s)
+      l.push_back(of_nat(c));
     return of_list(l);
   }
 };
@@ -317,7 +316,7 @@ void print_statistics(std::string title, const std::vector<double>& samples) {
   std::cout << "  Median: " << median << std::endl;
 }
 
-int main() {
+void sanity_checks() {
   Evaluator e;
   test_basic_reduction_rules(e);
   Tree bench_recursive_fib = e.of_ternary(bench_recursive_fib_ternary);
@@ -326,12 +325,38 @@ int main() {
     throw std::runtime_error("fib misbehavior");
   if (e.to_nat(e.apply(bench_linear_fib, e.of_nat(9))) != 55)
     throw std::runtime_error("fib misbehavior");
-  
-  auto recursive_duration = repeat_measure_sec<void>([&]() { e.to_nat(e.apply(bench_recursive_fib, e.of_nat(23))); });
-  auto linear_duration = repeat_measure_sec<void>([&]() { e.to_nat(e.apply(bench_linear_fib, e.of_nat(23))); });
+  std::cout << std::endl << "Tree nodes allocated: " << e.size() << std::endl;
+}
 
-  print_statistics("Recursive fib", recursive_duration);
-  print_statistics("Linear fib", linear_duration);
-  std::cout << std::endl << "Size: " << e.size() << std::endl;
+int main() {
+  sanity_checks();
+  print_statistics(
+    "Setup, should be negligibly fast",
+    repeat_measure_sec<void>(
+      []() { 
+        Evaluator e;
+        e.of_ternary(bench_recursive_fib_ternary);
+        e.of_ternary(bench_linear_fib_ternary);
+      }));
+  print_statistics(
+    "Linear fib",
+    repeat_measure_sec<void>(
+      []() {
+        Evaluator e;
+        Tree fib = e.of_ternary(bench_linear_fib_ternary);
+        auto result = e.to_nat(e.apply(fib, e.of_nat(90)));
+        if (result != 4660046610375530309)
+          throw std::runtime_error("fib misbehavior: " + std::to_string(result));
+      }));
+  print_statistics(
+    "Recursive fib",
+    repeat_measure_sec<void>(
+      []() { 
+        Evaluator e;
+        Tree fib = e.of_ternary(bench_recursive_fib_ternary);
+        auto result = e.to_nat(e.apply(fib, e.of_nat(26)));
+        if (result != 196418)
+          throw std::runtime_error("fib misbehavior: " + std::to_string(result));
+      }));
   return 0;
 }
