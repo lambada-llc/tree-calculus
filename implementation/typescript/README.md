@@ -31,7 +31,7 @@ or
 npm run build -- --watch
 ```
 
-### Run small demo
+### Run tests and self-check
 ```
 npm start
 ```
