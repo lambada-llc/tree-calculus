@@ -1,0 +1,11 @@
+(lang dune 3.17)
+(name tree_calculus_reference_implementation)
+(generate_opam_files true)
+(source (github lambada-llc/tree-calculus))
+(authors "Johannes Bader")
+(license MIT)
+(package
+ (name tree_calculus_reference_implementation)
+ (synopsis "Tree Calculus Reference Implementation")
+ (description "Tree Calculus Reference Implementation")
+ (depends ocaml))
