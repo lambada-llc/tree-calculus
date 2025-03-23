@@ -1,11 +1,12 @@
 import { Evaluator, raise } from "../common";
+import { Formatter } from "./formatter";
 
 // Format:
 // Leaf = 0
 // Stem u = 1u
 // Fork u v = 2uv
 
-export function to_ternary<TTree>(e: Evaluator<TTree>, x: TTree): string {
+export function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
   const res: string[] = [];
   const triage = e.triage<void>(
     () => res.push('0'),
@@ -15,7 +16,7 @@ export function to_ternary<TTree>(e: Evaluator<TTree>, x: TTree): string {
   return res.join('');
 }
 
-export function of_ternary<TTree>(e: Evaluator<TTree>, s: string): TTree {
+export function of<TTree>(e: Evaluator<TTree>, s: string): TTree {
   const stack = s.split('').reverse();
   const f = (): TTree => {
     switch (stack.pop()) {
@@ -27,3 +28,6 @@ export function of_ternary<TTree>(e: Evaluator<TTree>, s: string): TTree {
   };
   return f();
 }
+
+const formatter: Formatter = { to, of };
+export default formatter;

@@ -1,7 +1,7 @@
 import { assert_equal, Evaluator, marshal, measure, raise } from "../common";
 import { bench_alloc_and_identity_ternary, bench_linear_fib_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "../example-programs";
-import { of_dag, to_dag } from "../format/dag";
-import { of_ternary, to_ternary } from "../format/ternary";
+import formatter_dag from "../format/dag";
+import formatter_ternary from "../format/ternary";
 import eager_func from "../evaluator/eager-func";
 import eager_node_app from "../evaluator/eager-node-app";
 import eager_stacks from "../evaluator/eager-stacks";
@@ -12,7 +12,7 @@ import lazy_value_adt from "../evaluator/lazy-value-adt";
 function test_basic_reduction_rules<TTree>(e: Evaluator<TTree>) {
   // basic reduction rule check
   const ruleCheck = (rule: string, expected: string, a: string, b: string) =>
-    assert_equal(expected, to_ternary(e, e.apply(of_ternary(e, a), of_ternary(e, b))), "rule " + rule);
+    assert_equal(expected, formatter_ternary.to(e, e.apply(formatter_ternary.of(e, a), formatter_ternary.of(e, b))), "rule " + rule);
   const tl = '0';
   const ts = '10';
   const tf = '200';
@@ -59,17 +59,17 @@ function test_basic_reduction_rules<TTree>(e: Evaluator<TTree>) {
 
 function benchmark<TTree>(e: Evaluator<TTree>) {
   const m = marshal(e);
-  const bench_linear_fib = of_ternary(e, bench_linear_fib_ternary);
+  const bench_linear_fib = formatter_ternary.of(e, bench_linear_fib_ternary);
   const fib100 = measure(() => m.to_nat(e.apply(bench_linear_fib, m.of_nat(100n))));
   assert_equal(573147844013817084101n, fib100.result, "fib 100");
   console.debug("linear fib 100:", fib100.elasped_ms + "ms");
   if (e !== lazy_value_adt as any) { // stack overflow
-    const bench_recursive_fib = of_ternary(e, bench_recursive_fib_ternary);
+    const bench_recursive_fib = formatter_ternary.of(e, bench_recursive_fib_ternary);
     const fib23 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(23n))));
     assert_equal(46368n, fib23.result, "fib 23");
     console.debug("recursive fib 23:", fib23.elasped_ms + "ms");
   }
-  const bench_alloc_and_identity = of_ternary(e, bench_alloc_and_identity_ternary);
+  const bench_alloc_and_identity = formatter_ternary.of(e, bench_alloc_and_identity_ternary);
   const alloc_id = measure(() => m.to_string(e.apply(e.apply(bench_alloc_and_identity, m.of_nat(1000000n)), m.of_string("hello world"))));
   assert_equal("hello world", alloc_id.result, "identity with needless allocation");
   console.debug("alloc and identity:", alloc_id.elasped_ms + "ms");
@@ -82,14 +82,8 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
   const tt = m.of_bool(true);
   const ff = m.of_bool(false);
   const not = e.fork(e.fork(e.stem(e.leaf), e.fork(e.leaf, e.leaf)), e.leaf);
-
-  // ternary
-  const equal = of_ternary(e, equal_ternary);
-  assert_equal(equal_ternary, to_ternary(e, equal), 'ternary formatter round-trips');
-  // dag
-  const succ = of_dag(e, succ_dag);
-  const succ_roundtrip = of_dag(e, to_dag(e, of_dag(e, succ_dag)));
-  assert_equal(to_ternary(e, succ), to_ternary(e, succ_roundtrip), 'dag formatter round-trips');
+  const equal = formatter_ternary.of(e, equal_ternary);
+  const succ = formatter_dag.of(e, succ_dag);
 
   // evaluation
   test_basic_reduction_rules(e);

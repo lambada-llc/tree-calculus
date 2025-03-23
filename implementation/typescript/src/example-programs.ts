@@ -3,6 +3,8 @@
 // For efficient dag representations, copy the output of the "DAG (out)" tab
 // in any output preview section at https://treecalcul.us/live/.
 
+export const id_ternary = '21100';
+
 // From "Typed Program Analysis without Encodings" (Jay, PEPM 2025).
 export const equal_ternary =
   `212121202120112110102121200212002120112002120

@@ -1,11 +1,12 @@
 import { children, Evaluator, raise } from "../common";
+import { Formatter } from "./formatter";
 
 // Format:
 // a b c  can be thought of as "let a = b c in" and
 // a b    as "let a = b in" and
 // a      terminates parsing, returning "a"
 
-export function to_dag<TTree>(e: Evaluator<TTree>, x: TTree): string {
+function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
   const res = [];
   let i = 0;
   const app_keys: { [app_key: string]: string } = {};
@@ -37,7 +38,7 @@ export function to_dag<TTree>(e: Evaluator<TTree>, x: TTree): string {
   return res.join('\n');
 }
 
-export function of_dag<TTree>(e: Evaluator<TTree>, s: string): TTree {
+function of<TTree>(e: Evaluator<TTree>, s: string): TTree {
   const env: { [name: string]: TTree } = {};
   const get_env = (name: string) => name in env ? env[name] : e.leaf;
   for (const line of s.split(/\r?\n/)) {
@@ -49,3 +50,5 @@ export function of_dag<TTree>(e: Evaluator<TTree>, s: string): TTree {
   return raise('dag representation was unepxectedly not terminated by a value');
 }
 
+const formatter: Formatter = { to, of };
+export default formatter;
