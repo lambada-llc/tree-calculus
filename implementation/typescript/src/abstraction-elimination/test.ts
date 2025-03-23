@@ -1,6 +1,6 @@
 import { assert_equal, Evaluator, marshal, raise } from "../common";
 import { size_ternary } from "../example-programs";
-import { of_ternary } from "../format/ternary";
+import formatter_ternary from "../format/ternary";
 import { abs, app, marshal_term, node, Term_Lambda, variable } from "./term";
 import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./strategies";
 
@@ -10,7 +10,7 @@ type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
 const m = marshal(e);
 const term = marshal_term(e);
-const size_tree = of_ternary(e, size_ternary);
+const size_tree = formatter_ternary.of(e, size_ternary);
 const size = (x: Term_Lambda): bigint => m.to_nat(e.apply(size_tree, term(x)));
 
 const decent_eliminators = {

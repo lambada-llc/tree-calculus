@@ -1,6 +1,6 @@
 
-export function assert_equal<T>(expected: T, actual: T, testCase: string){
-  console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${testCase}`);
+export function assert_equal<T>(expected: T, actual: T, test_case: string){
+  console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${test_case}`);
 }
 
 export function measure<T>(f: () => T): { result: T, elasped_ms: number } {
