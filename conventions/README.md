@@ -1,3 +1,50 @@
+# Representing trees as text
+To communicate trees precisely and concisely, it makes sense to come up with some conventions.
+
+Implementations for some of these can be found in this repo, for instance [here](../implementation/typescript/src/format).
+
+### Human-readable expressions
+This hardly counts, but for completeness: We may choose to represent expressions directly, using `△` for the node operator, assuming left-associativity of application and using parentheses otherwise.
+
+For instance, the identity program $△ (△ (△ △)) △$ would be `△ (△ (△ △)) △`.
+
+Note: This can represent unreduced expressions as well, e.g. `△ △ △ △` which would reduce to `△`.
+
+### Ternary
+We can represent unlabeled binary trees using their _preorder arity encoding_, which yields `0` for bare leaf nodes, `1...` for stems (have one child) and `2...` for forks (have two children).
+This corresponds to the $\textbf{num}\{...\}$ operator from [Typed Program Analysis without Encodings](https://github.com/barry-jay-personal/typed_tree_calculus/blob/main/typed_program_analysis.pdf) (Barry Jay, PEPM 2025), chapter 3.
+
+For example, the identity program would be `21100`.
+
+Note: This can only represent fully reduced values. While it may seem easy to extend the encoding to cover trees with higher arity, it requires further complexity/definitions to unambiguously represent nodes of arity > 9.
+
+### Binary DAG (directed acyclic graph)
+The trees representing large data or programs tend to result in the same subtrees appearing multiple times (e.g. from the same characters appearing several times in some text or from the same function being used in multiple spots).
+This suggests making use of sharing both when representing trees in memory, but also when commucating them.
+
+"Trees with sharing" are really directed acyclic graphs.
+We draw inspiration from how let-bindings make some expression available to subsequent code via some name, e.g.
+```
+let k = △ △ in
+let △k = △ k in
+let sk = △ △k in
+let i = sk △ in
+let false = k i in
+false
+```
+defines a DAG where sub-DAG `k` is "pointed to" twice by the `false` sub-DAG, once directly and once indirectly via `i`. The corresponding tree contains subtree `k` twice.
+
+The format we use sometimes is analogous to let-bindings, except that it drops all additional syntax. The above example would be:
+```
+k △ △
+△k △ k
+sk △ △k
+i sk △
+false k i
+false
+```
+
+# Representing data as trees
 [Reduction rules](../reduction-rules) imply how to represent _logic_, for instance $△ (△ (△ △)) △$ is an identity program.
 However, how to represent traditional _data_ such as number or text, is up to us.
 
