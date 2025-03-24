@@ -5,12 +5,14 @@
   "homepage": "https://github.com/lambada-llc/tree-calculus/tree/main/implementation/typescript",
   "scripts": {
     "build": "tsc --project src",
+    "test": "node src/test.js",
     "start": "node src/main.js",
     "debug": "node --inspect-brk src/main.js  # attach from Chrome via about:inspect"
   },
   "author": "Johannes Bader",
   "license": "MIT",
   "devDependencies": {
+    "@types/node": "^22.13.11",
     "typescript": "^5.7.3"
   }
 }
