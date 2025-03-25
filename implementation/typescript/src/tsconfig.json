@@ -2,6 +2,6 @@
   "compilerOptions": {
     "strict": true,
     "target": "ES2020",
-    "module": "UMD",
+    "module": "CommonJS"
   }
 }
