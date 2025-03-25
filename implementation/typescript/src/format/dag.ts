@@ -28,7 +28,7 @@ function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
       for (const c of children(e, node))
         todo.push({ node: c, enter: true });
     } else {
-      let current = "t";
+      let current = '△';
       for (const c of children(e, node))
         current = apply_keys(current, keys.get(c)!);
       keys.set(node, current);
@@ -39,8 +39,8 @@ function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
 }
 
 function of<TTree>(e: Evaluator<TTree>, s: string): TTree {
-  const env: { [name: string]: TTree } = {};
-  const get_env = (name: string) => name in env ? env[name] : e.leaf;
+  const env: { [name: string]: TTree } = { '△': e.leaf };
+  const get_env = (name: string) => name in env ? env[name] : raise(`unbound variable: ${name}`);
   for (const line of s.split(/\r?\n/)) {
     const [a, b, c] = line.split(' ');
     if (c) env[a] = e.apply(get_env(b), get_env(c));

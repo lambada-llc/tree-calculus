@@ -34,13 +34,13 @@ function assert_roundtrips_strong(formatter: Formatter, s: string) {
 export function test() {
   assert_roundtrips_strong(formatter_ternary, id_ternary);
   assert_roundtrips_strong(formatter_ternary, equal_ternary);
-  assert_roundtrips_weak(formatter_dag, formatter_dag.of(e, id_ternary));
-  assert_roundtrips_weak(formatter_dag, formatter_dag.of(e, equal_ternary));
-  assert_roundtrips_weak(formatter_dag, formatter_ternary.of(e, succ_dag));
+  assert_roundtrips_weak(formatter_dag, formatter_ternary.of(e, id_ternary));
+  assert_roundtrips_weak(formatter_dag, formatter_ternary.of(e, equal_ternary));
+  assert_roundtrips_weak(formatter_dag, formatter_dag.of(e, succ_dag));
   assert_roundtrips_strong(formatter_readable, '△');
   assert_roundtrips_strong(formatter_readable, '△ (△ (△ △)) △');
   assert_roundtrips_strong(formatter_readable, '△ (△ △ △) △');
-  assert_roundtrips_weak(formatter_readable, formatter_dag.of(e, id_ternary));
-  assert_roundtrips_weak(formatter_readable, formatter_dag.of(e, equal_ternary));
-  assert_roundtrips_weak(formatter_readable, formatter_ternary.of(e, succ_dag));
+  assert_roundtrips_weak(formatter_readable, formatter_ternary.of(e, id_ternary));
+  assert_roundtrips_weak(formatter_readable, formatter_ternary.of(e, equal_ternary));
+  assert_roundtrips_weak(formatter_readable, formatter_dag.of(e, succ_dag));
 }
