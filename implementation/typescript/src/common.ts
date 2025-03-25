@@ -69,3 +69,7 @@ export function marshal<TTree>(e: Evaluator<TTree>): Marshaller<TTree> {
     of_string
   };
 }
+
+export function id<TTree>(e: Evaluator<TTree>): TTree {
+  return e.fork(e.stem(e.stem(e.leaf)), e.leaf);
+}

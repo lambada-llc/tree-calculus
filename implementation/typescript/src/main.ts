@@ -1,10 +1,9 @@
-import { Evaluator, marshal, raise } from "./common";
+import { Evaluator, id, marshal, raise } from "./common";
 import e from "./evaluator/eager-stacks";
 import formatter_dag from "./format/dag";
 import formatter_ternary from "./format/ternary";
 import formatter_readable from "./format/readable";
 import { Formatter } from "./format/formatter";
-import { id_ternary } from "./example-programs";
 
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
@@ -73,7 +72,7 @@ const args = process.argv.slice(2);
 let input_mode_file = true;
 let current_format = 'infer';
 let last_format = 'readable';
-let current_value: TTree = formatter_ternary.of(e, id_ternary);
+let current_value: TTree = id(e);
 for (const raw_arg of args) {
   if (raw_arg.startsWith('-') && raw_arg.length > 1) {
     // set format
