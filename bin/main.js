@@ -329,7 +329,7 @@ var formatters = {
   string: of_marshaller(m.of_string, m.to_string, (s) => s, (x) => x),
   ternary: of_formatter(ternary_1.default),
   dag: of_formatter(dag_1.default),
-  readable: of_formatter(readable_1.default)
+  term: of_formatter(readable_1.default)
 };
 var parse_infer = (s) => {
   const guess = (format) => {
@@ -340,30 +340,29 @@ var parse_infer = (s) => {
       return null;
     }
   };
-  return guess("bool") || guess("ternary") || guess("nat") || guess("readable") || guess("dag") || guess("string") || (0, common_1.raise)(`could not infer format`);
+  return guess("bool") || guess("ternary") || guess("nat") || guess("term") || guess("dag") || guess("string") || (0, common_1.raise)(`could not infer format`);
 };
 var formatters_infer = {};
 for (const format in formatters)
   formatters_infer[format] = (s) => [formatters[format].of(s), format];
 formatters_infer["infer"] = parse_infer;
 var args = process.argv.slice(2);
-var input_mode_file = true;
+var input_mode_file = false;
 var current_format = "infer";
-var last_format = "readable";
+var last_format = "term";
 var current_value = (0, common_1.id)(eager_stacks_1.default);
 for (const raw_arg of args) {
   if (raw_arg.startsWith("-") && raw_arg.length > 1) {
     const arg = raw_arg.replace(/^-+/, "");
     if (arg === "file")
       input_mode_file = true;
-    else if (arg === "inline")
-      input_mode_file = false;
     else if (arg in formatters_infer)
       last_format = current_format = arg;
     else
       (0, common_1.raise)(`unrecognized format ${arg}`);
   } else {
     const content = input_mode_file ? require("fs").readFileSync(raw_arg === "-" ? 0 : raw_arg, "utf8").trimEnd() : raw_arg;
+    input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
     current_value = eager_stacks_1.default.apply(current_value, value);

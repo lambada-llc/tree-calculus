@@ -26,7 +26,7 @@ For example:
 To communicate trees precisely and concisely, it makes sense to come up with some conventions.
 Implementations for some of these can be found in this repo, for instance [here](../implementation/typescript/src/format).
 
-### Human-readable expressions
+### Human-readable terms
 This hardly counts, but for completeness: We may choose to represent expressions directly, using `△` for the node operator, assuming left-associativity of application and using parentheses otherwise.
 For instance, the identity program $△ (△ (△ △)) △$ would be `△ (△ (△ △)) △`.
 

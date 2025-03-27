@@ -42,7 +42,7 @@ const formatters: { [format: string]: { of: (s: string) => TTree, to: (x: TTree)
   ),
   ternary: of_formatter(formatter_ternary),
   dag: of_formatter(formatter_dag),
-  readable: of_formatter(formatter_readable),
+  term: of_formatter(formatter_readable),
 };
 const parse_infer = (s: string): [TTree, string] => {
   const guess = (format: string): [TTree, string] | null => {
@@ -56,7 +56,7 @@ const parse_infer = (s: string): [TTree, string] => {
   return guess('bool')
     || guess('ternary')
     || guess('nat')
-    || guess('readable')
+    || guess('term')
     || guess('dag')
     || guess('string')
     || raise(`could not infer format`);
@@ -69,16 +69,15 @@ formatters_infer['infer'] = parse_infer;
 
 // Process arguments
 const args = process.argv.slice(2);
-let input_mode_file = true;
+let input_mode_file = false;
 let current_format = 'infer';
-let last_format = 'readable';
+let last_format = 'term';
 let current_value: TTree = id(e);
 for (const raw_arg of args) {
   if (raw_arg.startsWith('-') && raw_arg.length > 1) {
     // set format
     const arg = raw_arg.replace(/^-+/, '');
     if (arg === 'file') input_mode_file = true;
-    else if (arg === 'inline') input_mode_file = false;
     else if (arg in formatters_infer) last_format = current_format = arg;
     else raise(`unrecognized format ${arg}`);
   }
@@ -88,6 +87,7 @@ for (const raw_arg of args) {
       input_mode_file
         ? require('fs').readFileSync(raw_arg === '-' ? 0 : raw_arg, 'utf8').trimEnd()
         : raw_arg;
+    input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
     current_value = e.apply(current_value, value);
