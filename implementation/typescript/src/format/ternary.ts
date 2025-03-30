@@ -19,11 +19,13 @@ export function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
 export function of<TTree>(e: Evaluator<TTree>, s: string): TTree {
   const stack = s.split('').reverse();
   const f = (): TTree => {
-    switch (stack.pop()) {
+    const c = stack.pop();
+    if (c === undefined) raise('unexpected end of ternary encoding');
+    switch (c) {
       case '0': return e.leaf;
       case '1': return e.stem(f());
       case '2': return e.fork(f(), f());
-      default: return raise('unexpected character in ternary encoding');
+      default: return raise(`unexpected character in ternary encoding: ${c}`);
     }
   };
   return f();

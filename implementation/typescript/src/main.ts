@@ -84,9 +84,11 @@ for (const raw_arg of args) {
   else {
     // parse file
     const content =
-      input_mode_file
-        ? require('fs').readFileSync(raw_arg === '-' ? 0 : raw_arg, 'utf8').trimEnd()
-        : raw_arg;
+      raw_arg === '-'
+        ? require('fs').readFileSync(0, 'utf8').trimEnd()
+        : input_mode_file
+          ? require('fs').readFileSync(raw_arg, 'utf8').trimEnd()
+          : raw_arg;
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;

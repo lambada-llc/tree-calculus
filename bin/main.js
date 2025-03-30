@@ -229,7 +229,8 @@ function to2(e, x) {
 function of2(e, s) {
   const stack = s.split("").reverse();
   const f = () => {
-    switch (stack.pop()) {
+    const c = stack.pop();
+    switch (c) {
       case "0":
         return e.leaf;
       case "1":
@@ -237,7 +238,7 @@ function of2(e, s) {
       case "2":
         return e.fork(f(), f());
       default:
-        return raise("unexpected character in ternary encoding");
+        return raise(`unexpected character in ternary encoding: ${c}`);
     }
   };
   return f();
@@ -361,7 +362,7 @@ for (const raw_arg of args) {
     else
       (0, common_1.raise)(`unrecognized format ${arg}`);
   } else {
-    const content = input_mode_file ? require("fs").readFileSync(raw_arg === "-" ? 0 : raw_arg, "utf8").trimEnd() : raw_arg;
+    const content = raw_arg === "-" ? require("fs").readFileSync(0, "utf8").trimEnd() : input_mode_file ? require("fs").readFileSync(raw_arg, "utf8").trimEnd() : raw_arg;
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
