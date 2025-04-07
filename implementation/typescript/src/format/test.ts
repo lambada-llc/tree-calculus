@@ -1,8 +1,8 @@
 import { assert_equal, Evaluator } from "../common";
 import { equal_ternary, id_ternary, succ_dag } from "../example-programs";
-import formatter_dag from "../format/dag";
-import formatter_ternary from "../format/ternary";
-import formatter_readable from "../format/readable";
+import formatter_dag from "./dag";
+import formatter_ternary from "./ternary";
+import formatter_readable from "./readable";
 import { Formatter } from "./formatter";
 
 // Evaluator to use for this test -- any valid one works
