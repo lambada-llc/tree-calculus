@@ -1,4 +1,4 @@
-import { Evaluator } from "../common";
+import { Evaluator } from "../common.mjs";
 
 // Like eager version of this strategy, but with ability to delay application.
 // As the benchmarks show, this has the expected benefits for programs that do

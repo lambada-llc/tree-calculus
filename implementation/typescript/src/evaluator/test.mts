@@ -1,13 +1,13 @@
-import { assert_equal, Evaluator, marshal, measure, raise } from "../common";
-import { bench_alloc_and_identity_ternary, bench_linear_fib_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "../example-programs";
-import formatter_dag from "../format/dag";
-import formatter_ternary from "../format/ternary";
-import eager_func from "./eager-func";
-import eager_node_app from "./eager-node-app";
-import eager_stacks from "./eager-stacks";
-import eager_value_adt from "./eager-value-adt";
-import eager_value_mem from "./eager-value-mem";
-import lazy_value_adt from "./lazy-value-adt";
+import { assert_equal, Evaluator, marshal, measure, raise } from "../common.mjs";
+import { bench_alloc_and_identity_ternary, bench_linear_fib_ternary, bench_recursive_fib_ternary, equal_ternary, size_ternary, succ_dag } from "../example-programs.mjs";
+import formatter_dag from "../format/dag.mjs";
+import formatter_ternary from "../format/ternary.mjs";
+import eager_func from "./eager-func.mjs";
+import eager_node_app from "./eager-node-app.mjs";
+import eager_stacks from "./eager-stacks.mjs";
+import eager_value_adt from "./eager-value-adt.mjs";
+import eager_value_mem from "./eager-value-mem.mjs";
+import lazy_value_adt from "./lazy-value-adt.mjs";
 
 function test_basic_reduction_rules<TTree>(e: Evaluator<TTree>) {
   // basic reduction rule check

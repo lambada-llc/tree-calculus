@@ -1,15 +1,15 @@
-import { Evaluator, id, marshal, raise } from "./common";
-import e from "./evaluator/eager-stacks";
-import formatter_dag from "./format/dag";
-import formatter_ternary from "./format/ternary";
-import formatter_readable from "./format/readable";
-import { Formatter } from "./format/formatter";
+import { Evaluator, id, marshal, raise } from "./common.mjs";
+import e from "./evaluator/eager-stacks.mjs";
+import formatter_dag from "./format/dag.mjs";
+import formatter_ternary from "./format/ternary.mjs";
+import formatter_readable from "./format/readable.mjs";
+import { Formatter } from "./format/formatter.mjs";
 
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
 // Formatters
 const m = marshal(e);
-const of_marshaller = <T>(
+const of_marshaller = <T,>(
   of: (x: T) => TTree,
   to: (x: TTree) => T,
   of_string: (s: string) => T,

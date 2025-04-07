@@ -1,4 +1,4 @@
-import { Evaluator, Marshaller, raise } from "../common";
+import { Evaluator, raise } from "../common.mjs";
 
 export type Term_Lambda =
   { variant: 'Node' } |
@@ -16,7 +16,7 @@ export const app = (...xs: Term_Lambda[]): Term_Lambda => {
 export const variable = (name: string): Term_Lambda => ({ variant: 'Var', name });
 export const abs = (name: string, body: Term_Lambda): Term_Lambda => ({ variant: 'Abs', name, body });
 
-export const marshal_term = <TTree>(e: Evaluator<TTree>) => {
+export const marshal_term = <TTree,>(e: Evaluator<TTree>) => {
   const f =
     (term: Term_Lambda): TTree => {
       switch (term.variant) {

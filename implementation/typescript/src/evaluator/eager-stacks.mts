@@ -1,4 +1,4 @@
-import { Evaluator } from "../common";
+import { Evaluator } from "../common.mjs";
 
 type Tree = Tree[]; // = △ <array entries in reverse order>
 

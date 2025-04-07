@@ -1,5 +1,5 @@
-import { children, Evaluator, raise } from "../common";
-import { Formatter } from "./formatter";
+import { children, Evaluator, raise } from "../common.mjs";
+import { Formatter } from "./formatter.mjs";
 
 // Format:
 // a b c  can be thought of as "let a = b c in" and

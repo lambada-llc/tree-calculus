@@ -4,11 +4,11 @@
   "description": "Tree Calculus Reference Implementation",
   "homepage": "https://github.com/lambada-llc/tree-calculus/tree/main/implementation/typescript",
   "scripts": {
-    "bundle": "esbuild src/main.js --bundle --platform=node --outfile=main.js",
+    "bundle": "esbuild src/main.mjs --bundle --platform=node --outfile=main.js",
     "build": "tsc --project src",
-    "test": "node src/test.js",
-    "start": "node src/main.js",
-    "debug": "node --inspect-brk src/main.js  # attach from Chrome via about:inspect"
+    "test": "node src/test.mjs",
+    "start": "node src/main.mjs",
+    "debug": "node --inspect-brk src/main.mjs  # attach from Chrome via about:inspect"
   },
   "author": "Johannes Bader",
   "license": "MIT",

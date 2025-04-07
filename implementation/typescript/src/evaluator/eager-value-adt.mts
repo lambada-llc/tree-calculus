@@ -1,4 +1,4 @@
-import { Evaluator } from "../common";
+import { Evaluator } from "../common.mjs";
 
 // Strategy: Represent only values as kind of an algebraic data type and define [apply] recursively.
 

@@ -1,12 +1,12 @@
-import { assert_equal, Evaluator } from "../common";
-import { equal_ternary, id_ternary, succ_dag } from "../example-programs";
-import formatter_dag from "./dag";
-import formatter_ternary from "./ternary";
-import formatter_readable from "./readable";
-import { Formatter } from "./formatter";
+import { assert_equal, Evaluator } from "../common.mjs";
+import { equal_ternary, id_ternary, succ_dag } from "../example-programs.mjs";
+import formatter_dag from "./dag.mjs";
+import formatter_ternary from "./ternary.mjs";
+import formatter_readable from "./readable.mjs";
+import { Formatter } from "./formatter.mjs";
 
 // Evaluator to use for this test -- any valid one works
-import e from "../evaluator/eager-stacks";
+import e from "../evaluator/eager-stacks.mjs";
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
 function assert_equal_tree(expected: TTree, actual: TTree, test_case: string) {

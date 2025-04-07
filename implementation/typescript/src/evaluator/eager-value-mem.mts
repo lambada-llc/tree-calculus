@@ -1,4 +1,4 @@
-import { Evaluator, raise } from "../common";
+import { Evaluator, raise } from "../common.mjs";
 
 // Strategy: Like [eager-value-adt] but memory layout and management is explicit. Never frees memory.
 

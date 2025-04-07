@@ -1,4 +1,4 @@
-import { Evaluator, raise } from "../common";
+import { Evaluator, raise } from "../common.mjs";
 
 // Disclaimer: It may seem like a good idea to represent expressions as binary trees
 // where leaves are △ and inner nodes are function application. This implementation
@@ -32,7 +32,7 @@ import { Evaluator, raise } from "../common";
 type Tree = undefined // = △
   | [Tree, Tree]; // = a b
 
-const triage = <T>(on_leaf: () => T, on_stem: (u: Tree) => T, on_fork: (u: Tree, v: Tree) => T) => (x: Tree) => {
+const triage = <T,>(on_leaf: () => T, on_stem: (u: Tree) => T, on_fork: (u: Tree, v: Tree) => T) => (x: Tree) => {
   if (x === undefined) return on_leaf();
   if (x[0] === undefined) return on_stem(x[1]);
   if (x[0][0] === undefined) return on_fork(x[0][1], x[1]);

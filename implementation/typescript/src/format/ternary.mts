@@ -1,5 +1,5 @@
-import { Evaluator, raise } from "../common";
-import { Formatter } from "./formatter";
+import { Evaluator, raise } from "../common.mjs";
+import { Formatter } from "./formatter.mjs";
 
 // Format:
 // Leaf = 0

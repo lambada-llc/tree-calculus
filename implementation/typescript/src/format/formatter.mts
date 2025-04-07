@@ -1,4 +1,4 @@
-import { Evaluator, raise } from "../common";
+import { Evaluator } from "../common.mjs";
 
 export interface Formatter {
   to: <TTree>(e: Evaluator<TTree>, x: TTree) => string;

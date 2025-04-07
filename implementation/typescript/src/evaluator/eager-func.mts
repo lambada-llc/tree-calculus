@@ -1,4 +1,4 @@
-import { Evaluator } from "../common";
+import { Evaluator } from "../common.mjs";
 
 type F = ((f: F) => F) & ({ x?: F, y?: F });
 

@@ -1,11 +1,11 @@
-import { assert_equal, Evaluator, marshal, raise } from "../common";
-import { size_ternary } from "../example-programs";
-import formatter_ternary from "../format/ternary";
-import { abs, app, marshal_term, node, Term_Lambda, variable } from "./term";
-import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./strategies";
+import { assert_equal, Evaluator, marshal, raise } from "../common.mjs";
+import { size_ternary } from "../example-programs.mjs";
+import formatter_ternary from "../format/ternary.mjs";
+import { abs, app, marshal_term, node, Term_Lambda, variable } from "./term.mjs";
+import { bracket_ski, kiselyov_eta, kiselyov_kopt, kiselyov_plain, star_ski, star_ski_eta, star_skibc_op_eta } from "./strategies.mjs";
 
 // Evaluator to use for this test -- any valid one works
-import e from "../evaluator/eager-stacks";
+import e from "../evaluator/eager-stacks.mjs";
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
 const m = marshal(e);

@@ -1,5 +1,5 @@
-import { Evaluator, raise } from "../common";
-import { Formatter } from "./formatter";
+import { Evaluator, raise } from "../common.mjs";
+import { Formatter } from "./formatter.mjs";
 
 export function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
   const triage: (x: TTree) => string = e.triage<string>(

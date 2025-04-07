@@ -1,5 +1,5 @@
-import { raise } from "../common";
-import { abs, app, node, Term_Lambda, variable } from "./term";
+import { raise } from "../common.mjs";
+import { abs, app, node, Term_Lambda, variable } from "./term.mjs";
 
 const k_op = app(node, node);
 const k1 = (u: Term_Lambda): Term_Lambda => app(k_op, u);
