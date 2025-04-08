@@ -5,6 +5,7 @@ type Tree = Tree[]; // = △ <array entries in reverse order>
 const reduceOne = (todo: Tree[]): void => {
   const s = todo.pop()!;
   if (s.length < 3) return;
+  debug.num_steps++;
   todo.push(s);
   const x = s.pop()!, y = s.pop()!, z = s.pop()!;
   if (x.length === 0) s.push(...y); // leaf
@@ -44,4 +45,6 @@ const evaluator: Evaluator<Tree> = {
   }
 };
 
+let debug = { num_steps: 0 };
+export { debug };
 export default evaluator;
