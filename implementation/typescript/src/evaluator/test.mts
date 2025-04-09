@@ -7,6 +7,7 @@ import eager_node_app from "./eager-node-app.mjs";
 import eager_stacks from "./eager-stacks.mjs";
 import eager_value_adt from "./eager-value-adt.mjs";
 import eager_value_mem from "./eager-value-mem.mjs";
+import lazy_func from "./lazy-func.mjs";
 import lazy_value_adt from "./lazy-value-adt.mjs";
 
 function test_basic_reduction_rules<TTree>(e: Evaluator<TTree>) {
@@ -63,7 +64,7 @@ function benchmark<TTree>(e: Evaluator<TTree>) {
   const fib100 = measure(() => m.to_nat(e.apply(bench_linear_fib, m.of_nat(100n))));
   assert_equal(573147844013817084101n, fib100.result, "fib 100");
   console.debug("linear fib 100:", fib100.elasped_ms + "ms");
-  if (e !== lazy_value_adt as any) { // stack overflow
+  if (e !== lazy_func as any && e !== lazy_value_adt as any) { // stack overflow
     const bench_recursive_fib = formatter_ternary.of(e, bench_recursive_fib_ternary);
     const fib23 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(23n))));
     assert_equal(46368n, fib23.result, "fib 23");
@@ -107,6 +108,7 @@ function test_evaluator<TTree>(name: string, e: Evaluator<TTree>) {
 
 const evaluators: { [name: string]: Evaluator<any> } = {
   eager_func,
+  lazy_func, // prone to stack overflow
   eager_node_app,
   eager_stacks,
   eager_value_adt,
