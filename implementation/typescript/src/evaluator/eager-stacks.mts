@@ -45,6 +45,6 @@ const evaluator: Evaluator<Tree> = {
   }
 };
 
-let debug = { num_steps: 0 };
+const debug = { num_steps: 0 };
 export { debug };
 export default evaluator;

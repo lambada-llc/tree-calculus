@@ -11,8 +11,19 @@ type Ctx = {
 };
 
 const make_evaluator: () => Evaluator<Tree> = () => {
-  // TODO: auto-resize
-  const size = 1024 * 1024 * 16;
+  let size = 1024 * 1024;
+  const expand = () => {
+    size = size * 2;
+    const u = new Int32Array(size);
+    const v = new Int32Array(size);
+    const type = new Int32Array(size);
+    u.set(ctx.u);
+    v.set(ctx.v);
+    type.set(ctx.type);
+    ctx.u = u;
+    ctx.v = v;
+    ctx.type = type;
+  };
   const ctx: Ctx = {
     type: new Int32Array(size),
     u: new Int32Array(size),
@@ -20,7 +31,7 @@ const make_evaluator: () => Evaluator<Tree> = () => {
     free_from: 1 // implicitly make index 0 the (one and only) leaf node
   };
   const alloc = (): Tree => {
-    if (ctx.free_from === size) return raise('out of memory');
+    if (ctx.free_from === size) expand();
     return ctx.free_from++;
   };
   const alloc_stem = (u: Tree): Tree => {
@@ -41,6 +52,7 @@ const make_evaluator: () => Evaluator<Tree> = () => {
       case 0: return alloc_stem(b);
       case 1: return alloc_fork(ctx.u[a], b);
       case 2:
+        debug.num_steps++;
         const u = ctx.u[a];
         switch (ctx.type[u]) {
           case 0: return ctx.v[a];
@@ -77,4 +89,6 @@ const make_evaluator: () => Evaluator<Tree> = () => {
   return evaluator;
 };
 
+const debug = { num_steps: 0 };
+export { debug };
 export default make_evaluator;
