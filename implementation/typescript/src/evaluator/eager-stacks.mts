@@ -2,7 +2,7 @@ import { Evaluator } from "../common.mjs";
 
 type Tree = Tree[]; // = △ <array entries in reverse order>
 
-const reduceOne = (todo: Tree[]): void => {
+const reduce_one = (todo: Tree[]): void => {
   const s = todo.pop()!;
   if (s.length < 3) return;
   debug.num_steps++;
@@ -23,7 +23,7 @@ const reduceOne = (todo: Tree[]): void => {
 function reduce(expression: Tree): Tree { // assumes all but top level of expression is already fully reduced!
   const todo = [expression];
   while (todo.length)
-    reduceOne(todo);
+    reduce_one(todo);
   return expression;
 }
 
