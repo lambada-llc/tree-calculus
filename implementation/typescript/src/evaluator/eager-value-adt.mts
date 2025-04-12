@@ -12,11 +12,12 @@ function apply(a: Tree, b: Tree): Tree {
     case 0: return [b];
     case 1: return [a[0], b];
     case 2:
+      debug.num_steps++;
       switch (a[0].length) {
         case 0: return a[1];
         case 1: return apply(apply(a[0][0], b), apply(a[1], b));
         case 2:
-          switch(b.length) {
+          switch (b.length) {
             case 0: return a[0][0];
             case 1: return apply(a[0][1], b[0]);
             case 2: return apply(apply(a[1], b[0]), b[1]);
@@ -42,4 +43,6 @@ const evaluator: Evaluator<Tree> = {
   }
 };
 
+const debug = { num_steps: 0 };
+export { debug };
 export default evaluator;
