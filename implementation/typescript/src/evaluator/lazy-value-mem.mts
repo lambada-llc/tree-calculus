@@ -55,58 +55,56 @@ const make_evaluator: () => Evaluator<Tree> = () => {
     return res;
   };
   const reduce_one = function* (app: Tree): Generator<Tree> {
-    if (ctx.type[app] !== 3) return;
-    const a = ctx.u[app];
-    if (ctx.type[a] === 3) yield a;
-    const b = ctx.v[app];
-    switch (ctx.type[a]) {
-      case 0:
-        alloc_stem(b, app);
-        break;
-      case 1:
-        alloc_fork(ctx.u[a], b, app);
-        break;
-      case 2:
-        debug.num_steps++;
-        const u = ctx.u[a];
-        if (ctx.type[u] === 3) yield u;
-        switch (ctx.type[u]) {
-          case 0:
-            const tmp = ctx.v[a];
-            if (ctx.type[tmp] === 3) yield tmp;
-            ctx.type[app] = ctx.type[tmp];
-            ctx.u[app] = ctx.u[tmp];
-            ctx.v[app] = ctx.v[tmp];
-            break;
-          case 1:
-            apply(apply(ctx.u[u], b), apply(ctx.v[a], b), app);
-            yield app;
-            break;
-          case 2:
-            if (ctx.type[b] === 3) yield b;
-            switch (ctx.type[b]) {
-              case 0:
-                const tmp = ctx.u[u];
-                if (ctx.type[tmp] === 3) yield tmp;
-                ctx.type[app] = ctx.type[tmp];
-                ctx.u[app] = ctx.u[tmp];
-                ctx.v[app] = ctx.v[tmp];
-                break;
-              case 1:
-                apply(ctx.v[u], ctx.u[b], app);
-                yield app;
-                break;
-              case 2:
-                apply(apply(ctx.v[a], ctx.u[b]), ctx.v[b], app);
-                yield app;
-                break;
-              default: return raise(`invariant violation: type ${ctx.type[b]} at index ${b} not 0, 1 or 2`);
-            }
-            break;
-          default: return raise(`invariant violation: type ${ctx.type[u]} at index ${u} not 0, 1 or 2`);
-        }
-        break;
-      default: return raise(`invariant violation: type ${ctx.type[a]} at index ${a} not 0, 1 or 2`);
+    while (ctx.type[app] === 3) {
+      const a = ctx.u[app];
+      if (ctx.type[a] === 3) yield a;
+      const b = ctx.v[app];
+      switch (ctx.type[a]) {
+        case 0:
+          alloc_stem(b, app);
+          break;
+        case 1:
+          alloc_fork(ctx.u[a], b, app);
+          break;
+        case 2:
+          debug.num_steps++;
+          const u = ctx.u[a];
+          if (ctx.type[u] === 3) yield u;
+          switch (ctx.type[u]) {
+            case 0:
+              const tmp = ctx.v[a];
+              if (ctx.type[tmp] === 3) yield tmp;
+              ctx.type[app] = ctx.type[tmp];
+              ctx.u[app] = ctx.u[tmp];
+              ctx.v[app] = ctx.v[tmp];
+              break;
+            case 1:
+              apply(apply(ctx.u[u], b), apply(ctx.v[a], b), app);
+              break;
+            case 2:
+              if (ctx.type[b] === 3) yield b;
+              switch (ctx.type[b]) {
+                case 0:
+                  const tmp = ctx.u[u];
+                  if (ctx.type[tmp] === 3) yield tmp;
+                  ctx.type[app] = ctx.type[tmp];
+                  ctx.u[app] = ctx.u[tmp];
+                  ctx.v[app] = ctx.v[tmp];
+                  break;
+                case 1:
+                  apply(ctx.v[u], ctx.u[b], app);
+                  break;
+                case 2:
+                  apply(apply(ctx.v[a], ctx.u[b]), ctx.v[b], app);
+                  break;
+                default: return raise(`invariant violation: type ${ctx.type[b]} at index ${b} not 0, 1 or 2`);
+              }
+              break;
+            default: return raise(`invariant violation: type ${ctx.type[u]} at index ${u} not 0, 1 or 2`);
+          }
+          break;
+        default: return raise(`invariant violation: type ${ctx.type[a]} at index ${a} not 0, 1 or 2`);
+      }
     }
   };
   const force_root = (t: Tree): void => {
