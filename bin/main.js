@@ -51,10 +51,11 @@ function id(e) {
 }
 
 // src/evaluator/eager-stacks.mjs
-var reduceOne = (todo) => {
+var reduce_one = (todo) => {
   const s = todo.pop();
   if (s.length < 3)
     return;
+  debug.num_steps++;
   todo.push(s);
   const x = s.pop(), y = s.pop(), z = s.pop();
   if (x.length === 0)
@@ -75,7 +76,7 @@ var reduceOne = (todo) => {
 function reduce(expression) {
   const todo = [expression];
   while (todo.length)
-    reduceOne(todo);
+    reduce_one(todo);
   return expression;
 }
 var evaluator = {
@@ -99,6 +100,7 @@ var evaluator = {
     }
   }
 };
+var debug = { num_steps: 0 };
 var eager_stacks_default = evaluator;
 
 // src/format/dag.mjs
