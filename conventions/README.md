@@ -4,7 +4,7 @@ However, how to represent traditional _data_ such as numbers or text, is up to u
 
 ## Extensional
 Whatever works in λ-calculus and combinatory logic also works in tree calculus.
-[Church encoding](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding) produce certain terms and their values can be deduced by observing how they _behave_. For instance, it is typical to define _true_ as $λa.λb.a$ (in tree calculus: $△ △$) and _false_ as $λa.λb.b$ (in tree calculus: $△ △ (△ (△ (△ △)) △)$). Booleans encoded this way can then be distinguished by applying them to two arguments, effectively a "then" branch and "else" branch.
+[Church encoding](https://en.wikipedia.org/wiki/Church_encoding) or [Scott encoding](https://en.wikipedia.org/wiki/Mogensen%E2%80%93Scott_encoding) produce certain terms and their values can be deduced by observing how they _behave_. For instance, it is typical to define _true_ as $λa.λb.a$ (in tree calculus: $△ △$) and _false_ as $λa.λb.b$ (in tree calculus: $△ △ (△ (△ (△ △)) △)$ ). Booleans encoded this way can then be distinguished by applying them to two arguments, effectively a "then" branch and "else" branch.
 
 Note that extensional encodings like this tend to result in one and the same value being representable by infinitely many (internally different) terms. See [this demo](https://treecalcul.us/live/?example=bootstrap-basics) for a demonstration of this fact using Church encodings of the number 3.
 
