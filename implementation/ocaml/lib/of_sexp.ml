@@ -1,5 +1,4 @@
 open Core
-open Eager_value_adt
 open Tree
 
 let rec t_of_sexp = function
