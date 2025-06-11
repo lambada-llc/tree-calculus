@@ -10,6 +10,15 @@ let bool_of_tree = function
 
 let tree_of_bool = function false -> Leaf | true -> Stem Leaf
 
+let option_of_tree elem_of_tree = function
+  | Leaf -> None
+  | Stem t -> Some (elem_of_tree t)
+  | Fork _ -> failwith "option_of_tree: unexpected Fork"
+
+let tree_of_option tree_of_elem = function
+  | None -> Leaf
+  | Some x -> Stem (tree_of_elem x)
+
 let rec list_of_tree elem_of_tree = function
   | Leaf -> []
   | Fork (t1, t2) -> elem_of_tree t1 :: list_of_tree elem_of_tree t2
@@ -87,7 +96,11 @@ let%expect_test "ppx tree_of" =
   print_s ~mach:() [%sexp ("A" |> [%tree_of: string] : t)];
   [%expect {| (()(()(()())(()()(()()(()()(()()(()()(()(()())())))))))()) |}];
   print_s ~mach:() [%sexp ([ 'A' ] |> [%tree_of: char list] : t)];
-  [%expect {| (()(()(()())(()()(()()(()()(()()(()()(()(()())())))))))()) |}]
+  [%expect {| (()(()(()())(()()(()()(()()(()()(()()(()(()())())))))))()) |}];
+  print_s ~mach:() [%sexp (None |> [%tree_of: int option] : t)];
+  [%expect {| () |}];
+  print_s ~mach:() [%sexp (Some 13 |> [%tree_of: int option] : t)];
+  [%expect {| (()(()(()())(()()(()(()())(()(()())()))))) |}]
 
 let%expect_test "ppx of_tree" =
   let tree_true = [%tree_of: bool] true in
