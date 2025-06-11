@@ -3,5 +3,5 @@
  (name tree_calculus_reference_implementation)
  (inline_tests)
  (preprocess
-  (pps ppx_compare ppx_expect ppx_let ppx_sexp_conv ppx_sexp_value))
+  (pps ppx_compare ppx_expect ppx_let ppx_sexp_conv ppx_sexp_value ppx_tree_conv))
  (libraries base core))

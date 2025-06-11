@@ -54,19 +54,20 @@ let%expect_test "int conv" =
   let open Sexp_of in
   print_s [%sexp (tree_of_int 0 : t)];
   [%expect {| () |}];
-  print_s [%sexp (tree_of_int 42 : t)];
-  [%expect {| (() () (() (() ()) (() () (() (() ()) (() () (() (() ()) ())))))) |}];
+  print_s [%sexp (tree_of_int 13 : t)];
+  [%expect {| (() (() ()) (() () (() (() ()) (() (() ()) ())))) |}];
   print_s [%sexp (tree_of_int 0 |> int_of_tree : int)];
   [%expect {| 0 |}];
-  print_s [%sexp (tree_of_int 42 |> int_of_tree : int)];
-  [%expect {| 42 |}]
+  print_s [%sexp (tree_of_int 13 |> int_of_tree : int)];
+  [%expect {| 13 |}]
 
 let%expect_test "string conv" =
   let open Sexp_of in
   print_s [%sexp (tree_of_string "" : t)];
   [%expect {| () |}];
   print_s [%sexp (tree_of_string "AB!" : t)];
-  [%expect {|
+  [%expect
+    {|
     (() (() (() ()) (() () (() () (() () (() () (() () (() (() ()) ())))))))
      (() (() () (() (() ()) (() () (() () (() () (() () (() (() ()) ())))))))
       (() (() (() ()) (() () (() () (() () (() () (() (() ()) ())))))) ())))
@@ -75,3 +76,36 @@ let%expect_test "string conv" =
   [%expect {| "" |}];
   print_s [%sexp (tree_of_string "AB!" |> string_of_tree : string)];
   [%expect {| AB! |}]
+
+let%expect_test "ppx tree_of" =
+  print_s ~mach:() [%sexp (true |> [%tree_of: bool] : t)];
+  [%expect {| (()()) |}];
+  print_s ~mach:() [%sexp (65 |> [%tree_of: int] : t)];
+  [%expect {| (()(()())(()()(()()(()()(()()(()()(()(()())()))))))) |}];
+  print_s ~mach:() [%sexp ('A' |> [%tree_of: char] : t)];
+  [%expect {| (()(()())(()()(()()(()()(()()(()()(()(()())()))))))) |}];
+  print_s ~mach:() [%sexp ("A" |> [%tree_of: string] : t)];
+  [%expect {| (()(()(()())(()()(()()(()()(()()(()()(()(()())())))))))()) |}];
+  print_s ~mach:() [%sexp ([ 'A' ] |> [%tree_of: char list] : t)];
+  [%expect {| (()(()(()())(()()(()()(()()(()()(()()(()(()())())))))))()) |}]
+
+let%expect_test "ppx of_tree" =
+  let tree_true = [%tree_of: bool] true in
+  print_s ~mach:() [%sexp (tree_true |> [%of_tree: bool] : bool)];
+  [%expect {| true |}];
+  let tree_65 = [%tree_of: int] 65 in
+  print_s ~mach:() [%sexp (tree_65 |> [%of_tree: int] : int)];
+  [%expect {| 65 |}];
+  print_s ~mach:() [%sexp (tree_65 |> [%of_tree: char] : char)];
+  [%expect {| A |}];
+  print_s ~mach:() [%sexp (tree_65 |> [%of_tree: bool list] : bool list)];
+  [%expect {| (true false false false false false true) |}];
+  let tree_foo = [%tree_of: string] "foo" in
+  print_s ~mach:() [%sexp (tree_foo |> [%of_tree: string] : string)];
+  [%expect {| foo |}];
+  print_s ~mach:() [%sexp (tree_foo |> [%of_tree: char list] : char list)];
+  [%expect {| (f o o) |}];
+  print_s ~mach:()
+    [%sexp (tree_foo |> [%of_tree: bool list list] : bool list list)];
+  [%expect
+    {| ((false true true false false true true)(true true true true false true true)(true true true true false true true)) |}]
