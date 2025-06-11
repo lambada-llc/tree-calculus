@@ -57,22 +57,28 @@ let%expect_test "id" =
   print_s [%sexp (apply id (Fork (Leaf, Leaf)) : t)];
   [%expect {| (() () ()) |}]
 
-let%expect_test "not" =
-  let not_ =
-    "b"
-    ^ triage
-        (Marshal.tree_of_bool true |> of_tree)
-        (Marshal.tree_of_bool false |> of_tree |> k)
-        Node
-      * Ref "b"
+let%expect_test "omega" =
+  let omega = "x" ^ (Ref "x" * Ref "x") |> to_tree in
+  let open Tree in
+  let open Sexp_of in
+  print_s [%sexp (apply omega Leaf : t)];
+  [%expect {| (() ()) |}];
+  print_s [%sexp (apply omega (Stem Leaf) : t)];
+  [%expect {| (() () (() ())) |}]
+
+let%expect_test "if" =
+  let if_ =
+    "condition" ^ "then" ^ "else"
+    ^ (triage (Ref "else") (Ref "then" |> k) Node * Ref "condition")
     |> to_tree
   in
   let open Tree in
-  print_s
-    [%sexp
-      (apply not_ (Marshal.tree_of_bool true) |> Marshal.bool_of_tree : bool)];
-  [%expect {| false |}];
-  print_s
-    [%sexp
-      (apply not_ (Marshal.tree_of_bool false) |> Marshal.bool_of_tree : bool)];
-  [%expect {| true |}]
+  let open Sexp_of in
+  let tree_of_bool = function false -> Leaf | true -> Stem Leaf in
+  let if_ cond then_ else_ =
+    apply (apply (apply if_ (tree_of_bool cond)) then_) else_
+  in
+  print_s [%sexp (if_ true Leaf (Stem Leaf) : t)];
+  [%expect {| () |}];
+  print_s [%sexp (if_ false Leaf (Stem Leaf) : t)];
+  [%expect {| (() ()) |}]
