@@ -11,6 +11,12 @@ let rec type_of_tree ty =
   | Ptyp_constr (id, args) ->
       let args = List.map args ~f:type_of_tree in
       Ast_builder.Default.type_constr_conv ~loc ~f:(Printf.sprintf fmt) id args
+  | Ptyp_arrow (_label, ty_arg, ty_res) ->
+      let ty_arg = Ppx_tree_of.tree_of_type ty_arg in
+      let ty_res = type_of_tree ty_res in
+      Ast_builder.Default.type_constr_conv ~loc ~f:(Printf.sprintf fmt)
+        { txt = Lident "fun"; loc }
+        [ ty_arg; ty_res ]
   | _ ->
       let ext =
         Location.error_extensionf ~loc "Type not supported: %a"

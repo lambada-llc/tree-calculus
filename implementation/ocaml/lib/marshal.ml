@@ -44,6 +44,11 @@ let char_of_tree t = int_of_tree t |> Char.of_int_exn
 let tree_of_char c = Char.to_int c |> tree_of_int
 let string_of_tree t = list_of_tree char_of_tree t |> String.of_char_list
 let tree_of_string s = String.to_list s |> tree_of_list tree_of_char
+let t_of_tree = Fn.id
+let tree_of_t = Fn.id
+
+let fun_of_tree tree_of_arg res_of_tree t =
+ fun arg -> tree_of_arg arg |> apply t |> res_of_tree
 
 (* inline tests *)
 
@@ -87,6 +92,8 @@ let%expect_test "string conv" =
   [%expect {| AB! |}]
 
 let%expect_test "ppx tree_of" =
+  print_s ~mach:() [%sexp (Stem Leaf |> [%tree_of: t] : t)];
+  [%expect {| (()()) |}];
   print_s ~mach:() [%sexp (true |> [%tree_of: bool] : t)];
   [%expect {| (()()) |}];
   print_s ~mach:() [%sexp (65 |> [%tree_of: int] : t)];
@@ -106,6 +113,8 @@ let%expect_test "ppx of_tree" =
   let tree_true = [%tree_of: bool] true in
   print_s ~mach:() [%sexp (tree_true |> [%of_tree: bool] : bool)];
   [%expect {| true |}];
+  print_s ~mach:() [%sexp (tree_true |> [%of_tree: t] : t)];
+  [%expect {| (()()) |}];
   let tree_65 = [%tree_of: int] 65 in
   print_s ~mach:() [%sexp (tree_65 |> [%of_tree: int] : int)];
   [%expect {| 65 |}];
@@ -121,4 +130,14 @@ let%expect_test "ppx of_tree" =
   print_s ~mach:()
     [%sexp (tree_foo |> [%of_tree: bool list list] : bool list list)];
   [%expect
-    {| ((false true true false false true true)(true true true true false true true)(true true true true false true true)) |}]
+    {| ((false true true false false true true)(true true true true false true true)(true true true true false true true)) |}];
+  let tree_id = Tree_builder.("x" ^ Ref "x" |> to_tree) in
+  print_s ~mach:() [%sexp (tree_id |> [%of_tree: t] : t)];
+  [%expect {| (()(()(()()))()) |}];
+  print_s ~mach:()
+    [%sexp (tree_id |> [%of_tree: bool -> bool] |> fun id -> id true : bool)];
+  [%expect {| true |}];
+  print_s ~mach:()
+    [%sexp
+      (tree_id |> [%of_tree: string -> string] |> fun id -> id "foo" : string)];
+  [%expect {| foo |}]
