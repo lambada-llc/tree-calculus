@@ -4,4 +4,11 @@
  (inline_tests)
  (preprocess
   (pps ppx_compare ppx_expect ppx_let ppxlib.metaquot ppxlib.traverse))
- (libraries base core ppxlib.stdppx compiler-libs.common ppxlib ppxlib_jane ppxlib.metaquot_lifters))
+ (libraries
+  base
+  core
+  ppxlib.stdppx
+  compiler-libs.common
+  ppxlib
+  ppxlib_jane
+  ppxlib.metaquot_lifters))
