@@ -12,11 +12,7 @@ let rec tree_of_type ty =
       let args = List.map args ~f:tree_of_type in
       Ast_builder.Default.type_constr_conv ~loc ~f:(Printf.sprintf fmt) id args
   | _ ->
-      let ext =
-        Location.error_extensionf ~loc "Type not supported: %a"
-          Pprintast.core_type ty
-      in
-      Ast_builder.Default.pexp_extension ~loc ext
+      Location.raise_errorf ~loc "Type not supported: %a" Pprintast.core_type ty
 
 let () =
   let name = "tree_of" in

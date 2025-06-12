@@ -18,11 +18,7 @@ let rec type_of_tree ty =
         { txt = Lident "fun"; loc }
         [ ty_arg; ty_res ]
   | _ ->
-      let ext =
-        Location.error_extensionf ~loc "Type not supported: %a"
-          Pprintast.core_type ty
-      in
-      Ast_builder.Default.pexp_extension ~loc ext
+      Location.raise_errorf ~loc "Type not supported: %a" Pprintast.core_type ty
 
 let () =
   let name = "of_tree" in
