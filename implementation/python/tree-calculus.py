@@ -28,16 +28,11 @@ def apply(a, b):
                     return apply(apply(y, u), v)
 
 def reduce(t):
-    match t:
-        case ():
-            return t
-        case (x,):
-            return (reduce(x),)
-        case (x, y):
-            return (reduce(x), reduce(y))
-        case (x, y, z, *w):
-            tmp = apply((reduce(x), reduce(y)), z)
-            return reduce((*tmp, *w))
+    t = tuple(map(reduce, t))
+    while len(t) > 2:
+        x, y, z, *w = t
+        t = (*apply((x, y), z), *w)
+    return t
 
 
 # Example: negating booleans
