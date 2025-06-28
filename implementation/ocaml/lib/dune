@@ -6,6 +6,7 @@
   (pps
    ppx_compare
    ppx_expect
+   ppx_hash
    ppx_let
    ppx_sexp_conv
    ppx_sexp_value

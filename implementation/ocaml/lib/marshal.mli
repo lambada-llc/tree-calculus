@@ -14,4 +14,4 @@ val string_of_tree : t -> string
 val tree_of_string : string -> t
 val t_of_tree : t -> t
 val tree_of_t : t -> t
-val fun_of_tree : ('arg -> t) -> (t -> 'res) -> t -> ('arg -> 'res)
+val fun_of_tree : ('arg -> t) -> (t -> 'res) -> t -> 'arg -> 'res
