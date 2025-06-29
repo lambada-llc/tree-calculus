@@ -175,21 +175,74 @@ let%expect_test "not" =
      (5 (Stem 4)) (6 (Fork 4 0)))
     |}]
 
-let%expect_test "naive fib" =
-  let rec tree_of_small_int = function
-    | 0 -> Leaf
-    | n when n > 0 -> Stem (tree_of_small_int (n - 1))
-    | _ -> failwith "Negative integers are not supported"
-  in
-  let fib_tree =
+let%expect_test "exp" =
+  let exp_tree =
+    (* Program that takes a small nat n and returns a tree with 2^n leafs.
+       Lambada syntax: exp = fix $ \self triage △ (\n △ (self n) (self n)) △ *)
     Of_sexp.t_of_sexp
       (Sexp.of_string
-         "(()(()(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()(()(())(()(()(()(()(()(()(()(())(()(()(()(())(()))))))(())))(()(())(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(())(()(()(()(()(()))(()))(())))))(()(()(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()))))(()(()(()(())(())))(())))))(()(())(()(()))))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()))))))(()))))))(()(())))))(()(())))))(()(())(())))))(()(()(()(())(()(())))))))(()(())(()(()(()))))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(()))))))))))(()(())(()))))))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())))(()))))))(()(())))))(()(()(())(()(()(()(())))(())))(()))))))))(()(())))))(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()(()(()(())(())))(()))))(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()))))(()(()(()(())(())))(())))))(()(())(()(()))))))(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()))))(()(())(()(()(())(()(()(()(())))(())))(()))))))))))(()(())(()(()(()(()))(()(())(())))(()))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(()))))))))(()(()(())(()(()(()(())))(())))(()))))(()(())(())))")
+         "(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()(())))))(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()))))))(()(()(()(())))(())))))(()(())(())))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(()))))))")
+  in
+  let rec num_leafs = function
+    | Leaf -> 1
+    | Stem a -> num_leafs a
+    | Fork (a, b) -> num_leafs a + num_leafs b
+  in
+  let t = empty in
+  let t, exp_id = encode t exp_tree in
+  let test t n =
+    let t, n_id = encode t (Marshal.tree_of_small_int n) in
+    let t, { App_res.id = res_id; cost } = apply t exp_id n_id in
+    print_s ~mach:()
+      [%sexp
+        "exp",
+        (n : int),
+        "=",
+        (decode t res_id |> num_leafs : int),
+        ",",
+        "cost",
+        (cost : Cost.t)];
+    t
+  in
+  (* we expect exponential theoretical cost, but linear actual cost *)
+  let t = test t 0 in
+  let t = test t 1 in
+  let t = test t 2 in
+  let t = test t 3 in
+  let t = test t 4 in
+  let t = test t 8 in
+  let t = test t 16 in
+  [%expect {|
+    (exp 0 = 1 , cost((theoretical_num_apps 46)(theoretical_num_allocs 17)(num_apps 38)(num_allocs 11)(num_cache_hits 5)))
+    (exp 1 = 2 , cost((theoretical_num_apps 143)(theoretical_num_allocs 53)(num_apps 12)(num_allocs 2)(num_cache_hits 5)))
+    (exp 2 = 4 , cost((theoretical_num_apps 337)(theoretical_num_allocs 125)(num_apps 13)(num_allocs 3)(num_cache_hits 4)))
+    (exp 3 = 8 , cost((theoretical_num_apps 725)(theoretical_num_allocs 269)(num_apps 14)(num_allocs 4)(num_cache_hits 3)))
+    (exp 4 = 16 , cost((theoretical_num_apps 1501)(theoretical_num_allocs 557)(num_apps 14)(num_allocs 4)(num_cache_hits 3)))
+    (exp 8 = 256 , cost((theoretical_num_apps 24781)(theoretical_num_allocs 9197)(num_apps 56)(num_allocs 16)(num_cache_hits 9)))
+    (exp 16 = 65536 , cost((theoretical_num_apps 6356941)(theoretical_num_allocs 2359277)(num_apps 112)(num_allocs 32)(num_cache_hits 17)))
+    |}];
+  (* caches are also tiny compared to the resulting tree, thanks to sharing *)
+  print_s [%sexp "known trees", (Map.length t.decode : int)];
+  print_s [%sexp "known apps", (Map.length t.cache : int)];
+  [%expect {|
+    ("known trees" 130)
+    ("known apps" 316)
+    |}]
+
+let%expect_test "naive fib" =
+  let fib_tree =
+    (* Function that takes a small nat n and returns a nat that's the n-th
+       fibonacci number, by naively recursing, i.e. yielding an exponential call
+       pattern. Lambada syntax:
+       fib = \n (fix $ \self triage 1 (\n add (self (sn_pred n)) (self n)) △) (sn_pred n) *)
+    Of_sexp.t_of_sexp
+      (Sexp.of_string
+         "(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()(()(()(()))(()))))))(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()))))(()(()(()(())(())))(())))))(()(())(()(()))))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(())(()(()(()(()(())(()(())(()(()(()))(()))))(()))(())))))(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()))))(()(()(()(())(())))(())))))(()(())(()(()))))))(()(()(()(())(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(()))))))))(()(()(()(())(()(()(()(())(()(()(())(()))))))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()))))))(()(())))))))))))(()(())(()(()(()(())(()(()(()(()(()(())(()(()(())(())))))(()(()(()(()(()(()(()))(()(())(())))(()(())(()(()(()(()(()(())(())))(()(()(()(()))(()(())(())))(()))))(()(()(()(())))(())))))(()))(()(())(()(()(()(()(()(()(()(())(())))(()(()(()(()))(()(())(())))(()))))(()(()(()(())))(())))(()(())(()(()(()))(()(())(()(()))))))(()))))(())))))))(()(()))))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(())))))))))))(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(())(()(()(())(())))))(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()(()(()(())(())))(()(()))))))))(()(()))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(())))))))(()))(()(()(()(())(()(()))))(()(()(()(())(()(()(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(()))))(()(())(()(()(()(())(()(()(()(())(()(()(())(())))))(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()(()(()(())(())))(()))))(()(())))))(()(()(()(())(())))(()(()(()))(()(())(())))))))))(()(()))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(()))))))(())))))(()(()(()(())(()(()(()(())(()(())))))))(()(()(()(())(()(()(()(())(()))))))(())))))))))))(()(()(()(())(()(()(()(()(()(())))(()))(())))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()(()(())(()(()(()(())(()(()(()(()(()(())(()(()(()(())(()))))))(())))(()(())(()))))))))(())))))))(()(())))))(()(()(()(())(()(()))))))))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(())))))))))(()(())(()))))))))(()(()(()(()(()(())(()(()(()(())(())))(()))))(()(()))))(()(())(()(()(())(()(()(()(())))(())))(())))))))(()(()(()(())))(())))))(()(())(())))))(()(()(()(())(()(()(()(()(()(())(()(()(()(()(()(()(()(())))(())))(()(()(()(())))(())))))))(()(())))))))(()(()))))))))(()(()(())(()(()(()(())))(())))(())))")
   in
   let t = empty in
   let t, fib_id = encode t fib_tree in
   let test t n =
-    let t, n_id = encode t (tree_of_small_int n) in
+    let t, n_id = encode t (Marshal.tree_of_small_int n) in
     let t, { App_res.id = res_id; cost } = apply t fib_id n_id in
     print_s ~mach:()
       [%sexp
@@ -202,45 +255,32 @@ let%expect_test "naive fib" =
         (cost : Cost.t)];
     t
   in
-  let t = test t 0 in
-  let t = test t 1 in
-  let t = test t 2 in
-  let t = test t 3 in
-  let t = test t 4 in
+  (* once again we expect linear actual cost *)
   let t = test t 8 in
   let t = test t 16 in
-  let t = test t 15 in
-  let t = test t 24 in
-  let t = test t 23 in
+  let t = test t 32 in
+  let t = test t 64 in
   [%expect
     {|
-    (fib 0 = 1 , cost((theoretical_num_apps 203)(theoretical_num_allocs 67)(num_apps 171)(num_allocs 45)(num_cache_hits 23)))
-    (fib 1 = 1 , cost((theoretical_num_apps 207)(theoretical_num_allocs 69)(num_apps 6)(num_allocs 0)(num_cache_hits 5)))
-    (fib 2 = 2 , cost((theoretical_num_apps 633)(theoretical_num_allocs 211)(num_apps 51)(num_allocs 6)(num_cache_hits 18)))
-    (fib 3 = 3 , cost((theoretical_num_apps 984)(theoretical_num_allocs 329)(num_apps 81)(num_allocs 18)(num_cache_hits 17)))
-    (fib 4 = 5 , cost((theoretical_num_apps 1842)(theoretical_num_allocs 616)(num_apps 109)(num_allocs 25)(num_cache_hits 24)))
-    (fib 8 = 34 , cost((theoretical_num_apps 14320)(theoretical_num_allocs 4796)(num_apps 875)(num_allocs 192)(num_cache_hits 209)))
-    (fib 16 = 1597 , cost((theoretical_num_apps 686733)(theoretical_num_allocs 230097)(num_apps 37392)(num_allocs 7868)(num_cache_hits 10019)))
-    (fib 15 = 987 , cost((theoretical_num_apps 424066)(theoretical_num_allocs 142087)(num_apps 81)(num_allocs 0)(num_cache_hits 67)))
-    (fib 24 = 75025 , cost((theoretical_num_apps 32295510)(theoretical_num_allocs 10821084)(num_apps 1739177)(num_allocs 365190)(num_cache_hits 468660)))
-    (fib 23 = 46368 , cost((theoretical_num_apps 19959472)(theoretical_num_allocs 6687712)(num_apps 55)(num_allocs 0)(num_cache_hits 45)))
+    (fib 8 = 34 , cost((theoretical_num_apps 24618)(theoretical_num_allocs 8380)(num_apps 1297)(num_allocs 321)(num_cache_hits 285)))
+    (fib 16 = 1597 , cost((theoretical_num_apps 1240125)(theoretical_num_allocs 422216)(num_apps 2903)(num_allocs 773)(num_cache_hits 580)))
+    (fib 32 = 3524578 , cost((theoretical_num_apps 2743918347)(theoretical_num_allocs 934204111)(num_apps 13933)(num_allocs 3787)(num_cache_hits 2504)))
+    (fib 64 = 17167680177565 , cost((theoretical_num_apps 13365234260278392)(theoretical_num_allocs 4550374781676206)(num_apps 65378)(num_allocs 17886)(num_cache_hits 11382)))
+    |}];
+  (* computing (sub-)results again should be close to free *)
+  let t = test t 64 in
+  let t = test t 63 in
+  [%expect
+    {|
+    (fib 64 = 17167680177565 , cost((theoretical_num_apps 13365234260278392)(theoretical_num_allocs 4550374781676206)(num_apps 0)(num_allocs 0)(num_cache_hits 1)))
+    (fib 63 = 10610209857723 , cost((theoretical_num_apps 8260169040452570)(theoretical_num_allocs 2812286276624898)(num_apps 5)(num_allocs 0)(num_cache_hits 3)))
     |}];
   print_s [%sexp "known trees", (Map.length t.decode : int)];
   print_s [%sexp "known apps", (Map.length t.cache : int)];
-  print_s
-    [%sexp
-      "max app cost",
-      (Map.data t.cache
-       |> List.map ~f:(fun { App_res.cost; _ } ->
-              cost.Cost.theoretical_num_apps)
-       |> List.max_elt ~compare:Int.compare
-       |> Option.value_exn
-        : int)];
   [%expect
     {|
-    ("known trees" 373512)
-    ("known apps" 1778165)
-    ("max app cost" 32295510)
+    ("known trees" 23083)
+    ("known apps" 83831)
     |}]
 
 let apply a b =

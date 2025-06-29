@@ -2,6 +2,8 @@ open Tree
 
 val bool_of_tree : t -> bool
 val tree_of_bool : bool -> t
+val small_int_of_tree : t -> int
+val tree_of_small_int : int -> t
 val option_of_tree : (t -> 'a) -> t -> 'a option
 val tree_of_option : ('a -> t) -> 'a option -> t
 val list_of_tree : (t -> 'a) -> t -> 'a list

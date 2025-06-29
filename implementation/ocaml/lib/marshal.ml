@@ -10,6 +10,16 @@ let bool_of_tree = function
 
 let tree_of_bool = function false -> Leaf | true -> Stem Leaf
 
+let rec small_int_of_tree = function
+  | Leaf -> 0
+  | Stem t -> 1 + small_int_of_tree t
+  | Fork _ -> failwith "small_int_of_tree: unexpected Fork"
+
+let rec tree_of_small_int = function
+  | 0 -> Leaf
+  | n when n > 0 -> Stem (tree_of_small_int (n - 1))
+  | _ -> failwith "Negative ints are not supported"
+
 let option_of_tree elem_of_tree = function
   | Leaf -> None
   | Stem t -> Some (elem_of_tree t)
