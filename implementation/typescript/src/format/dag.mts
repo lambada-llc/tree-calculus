@@ -23,6 +23,7 @@ function to<TTree>(e: Evaluator<TTree>, x: TTree): string {
   const todo = [{ node: x, enter: true }];
   while (todo.length) {
     const { node, enter } = todo.pop()!;
+    if (keys.has(node)) continue;
     if (enter) {
       todo.push({ node, enter: false });
       for (const c of children(e, node))
