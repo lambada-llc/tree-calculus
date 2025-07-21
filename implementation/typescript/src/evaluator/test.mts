@@ -6,11 +6,11 @@ import eager_func from "./eager-func.mjs";
 import eager_node_app from "./eager-node-app.mjs";
 import eager_stacks from "./eager-stacks.mjs";
 import eager_value_adt from "./eager-value-adt.mjs";
-import eager_value_mem from "./eager-value-mem.mjs";
+import eager_value_memory from "./eager-value-memory.mjs";
 import lazy_func from "./lazy-func.mjs";
 import lazy_stacks from "./lazy-stacks.mjs";
 import lazy_value_adt from "./lazy-value-adt.mjs";
-import lazy_value_mem from "./lazy-value-mem.mjs";
+import lazy_value_memory from "./lazy-value-memory.mjs";
 
 function test_basic_reduction_rules<TTree>(e: Evaluator<TTree>) {
   // basic reduction rule check
@@ -116,8 +116,8 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   lazy_stacks,
   eager_value_adt,
   lazy_value_adt, // prone to stack overflow
-  eager_value_mem: eager_value_mem(), // does not free memory
-  lazy_value_mem: lazy_value_mem(), // does not free memory
+  eager_value_memory: eager_value_memory(), // does not free memory
+  lazy_value_memory: lazy_value_memory(), // does not free memory
 };
 
 export function test() {
