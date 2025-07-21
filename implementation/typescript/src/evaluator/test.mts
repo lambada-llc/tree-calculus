@@ -7,6 +7,7 @@ import eager_node_app from "./eager-node-app.mjs";
 import eager_stacks from "./eager-stacks.mjs";
 import eager_value_adt from "./eager-value-adt.mjs";
 import eager_value_memoizing from "./eager-value-memoizing.mjs";
+import eager_value_memoizing_alt from "./eager-value-memoizing-alt.mjs";
 import eager_value_memory from "./eager-value-memory.mjs";
 import lazy_func from "./lazy-func.mjs";
 import lazy_stacks from "./lazy-stacks.mjs";
@@ -118,6 +119,7 @@ const evaluators: { [name: string]: Evaluator<any> } = {
   eager_value_adt,
   lazy_value_adt, // prone to stack overflow
   eager_value_memoizing: eager_value_memoizing(),
+  eager_value_memoizing_alt: eager_value_memoizing_alt(),
   eager_value_memory: eager_value_memory(), // does not free memory
   lazy_value_memory: lazy_value_memory(), // does not free memory
 };
