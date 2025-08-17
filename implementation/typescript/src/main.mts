@@ -1,9 +1,10 @@
 import { Evaluator, id, marshal, raise } from "./common.mjs";
-import e from "./evaluator/eager-stacks.mjs";
+import e from "./evaluator/lazy-stacks.mjs";
 import formatter_dag from "./format/dag.mjs";
 import formatter_ternary from "./format/ternary.mjs";
 import formatter_readable from "./format/readable.mjs";
 import { Formatter } from "./format/formatter.mjs";
+import { readFileSync } from "fs";
 
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
@@ -85,9 +86,9 @@ for (const raw_arg of args) {
     // parse file
     const content =
       raw_arg === '-'
-        ? require('fs').readFileSync(0, 'utf8').trimEnd()
+        ? readFileSync(0, 'utf8').trimEnd()
         : input_mode_file
-          ? require('fs').readFileSync(raw_arg, 'utf8').trimEnd()
+          ? readFileSync(raw_arg, 'utf8').trimEnd()
           : raw_arg;
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);

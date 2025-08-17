@@ -50,34 +50,50 @@ function id(e) {
   return e.fork(e.stem(e.stem(e.leaf)), e.leaf);
 }
 
-// src/evaluator/eager-stacks.mjs
-var reduce_one = (todo) => {
-  const s = todo.pop();
-  if (s.length < 3)
-    return;
-  debug.num_steps++;
-  todo.push(s);
-  const x = s.pop(), y = s.pop(), z = s.pop();
-  if (x.length === 0)
-    s.push(...y);
-  else if (x.length === 1) {
-    const newPotRedex = [z, ...y];
-    s.push(newPotRedex, z, ...x[0]);
-    todo.push(newPotRedex);
-  } else if (x.length === 2) {
-    if (z.length === 0)
-      s.push(...x[1]);
-    else if (z.length === 1)
-      s.push(z[0], ...x[0]);
-    else if (z.length === 2)
-      s.push(z[0], z[1], ...y);
+// src/evaluator/lazy-stacks.mjs
+var reduce_one = function* (s) {
+  while (s.length >= 3) {
+    debug.num_steps++;
+    const x = s.pop(), y = s.pop(), z = s.pop();
+    if (x.length > 2)
+      yield x;
+    if (x.length === 0) {
+      if (y.length > 2)
+        yield y;
+      s.push(...y);
+    } else if (x.length === 1) {
+      if (x[0].length > 2)
+        yield x[0];
+      s.push([z, ...y], z, ...x[0]);
+    } else if (x.length === 2) {
+      if (z.length > 2)
+        yield z;
+      if (z.length === 0) {
+        if (x[1].length > 2)
+          yield x[1];
+        s.push(...x[1]);
+      } else if (z.length === 1) {
+        if (x[0].length > 2)
+          yield x[0];
+        s.push(z[0], ...x[0]);
+      } else if (z.length === 2) {
+        if (y.length > 2)
+          yield y;
+        s.push(z[0], z[1], ...y);
+      }
+    }
   }
 };
-function reduce(expression) {
-  const todo = [expression];
-  while (todo.length)
-    reduce_one(todo);
-  return expression;
+function force_root(expression) {
+  const force = [reduce_one(expression)];
+  while (force.length > 0) {
+    const next = force[force.length - 1].next();
+    if (next.done) {
+      force.pop();
+    } else {
+      force.push(reduce_one(next.value));
+    }
+  }
 }
 var evaluator = {
   // construct
@@ -85,9 +101,10 @@ var evaluator = {
   stem: (u) => [u],
   fork: (u, v) => [v, u],
   // eval
-  apply: (a, b) => reduce([b, ...a]),
+  apply: (a, b) => [b, ...a],
   // destruct
   triage: (on_leaf, on_stem, on_fork) => (x) => {
+    force_root(x);
     switch (x.length) {
       case 0:
         return on_leaf();
@@ -101,7 +118,7 @@ var evaluator = {
   }
 };
 var debug = { num_steps: 0 };
-var eager_stacks_default = evaluator;
+var lazy_stacks_default = evaluator;
 
 // src/format/dag.mjs
 function to(e, x) {
@@ -121,6 +138,8 @@ function to(e, x) {
   const todo = [{ node: x, enter: true }];
   while (todo.length) {
     const { node, enter } = todo.pop();
+    if (keys.has(node))
+      continue;
     if (enter) {
       todo.push({ node, enter: false });
       for (const c of children(e, node))
@@ -216,14 +235,15 @@ var formatter3 = { to: to3, of: of3 };
 var readable_default = formatter3;
 
 // src/main.mjs
-var m = marshal(eager_stacks_default);
+var import_fs = require("fs");
+var m = marshal(lazy_stacks_default);
 var of_marshaller = (of4, to4, of_string, to_string) => ({
   of: (s) => of4(of_string(s)),
   to: (x) => to_string(to4(x))
 });
 var of_formatter = (f) => ({
-  of: (s) => f.of(eager_stacks_default, s),
-  to: (x) => f.to(eager_stacks_default, x)
+  of: (s) => f.of(lazy_stacks_default, s),
+  to: (x) => f.to(lazy_stacks_default, x)
 });
 var formatters = {
   bool: of_marshaller(m.of_bool, m.to_bool, (s) => s === "true" ? true : s === "false" ? false : raise("invalid boolean"), (x) => x ? "true" : "false"),
@@ -252,7 +272,7 @@ var args = process.argv.slice(2);
 var input_mode_file = false;
 var current_format = "infer";
 var last_format = "term";
-var current_value = id(eager_stacks_default);
+var current_value = id(lazy_stacks_default);
 for (const raw_arg of args) {
   if (raw_arg.startsWith("-") && raw_arg.length > 1) {
     const arg = raw_arg.replace(/^-+/, "");
@@ -263,11 +283,11 @@ for (const raw_arg of args) {
     else
       raise(`unrecognized format ${arg}`);
   } else {
-    const content = raw_arg === "-" ? require("fs").readFileSync(0, "utf8").trimEnd() : input_mode_file ? require("fs").readFileSync(raw_arg, "utf8").trimEnd() : raw_arg;
+    const content = raw_arg === "-" ? (0, import_fs.readFileSync)(0, "utf8").trimEnd() : input_mode_file ? (0, import_fs.readFileSync)(raw_arg, "utf8").trimEnd() : raw_arg;
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
-    current_value = eager_stacks_default.apply(current_value, value);
+    current_value = lazy_stacks_default.apply(current_value, value);
   }
 }
 console.log(formatters[last_format].to(current_value));
