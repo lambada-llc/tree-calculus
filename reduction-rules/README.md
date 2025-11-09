@@ -17,7 +17,7 @@ $$
 
 The following visualizations have also been used [here](https://olydis.medium.com/a-visual-introduction-to-tree-calculus-2f4a34ceffc2).
 
-## Implicit applications
+## Implicit application
 
 Applications are not represented explicitly, reducible subtrees are non-binary trees.
 The rules describe how to act on nodes with more than two children.
@@ -30,7 +30,7 @@ The rules describe how to act on nodes with more than two children.
 | (3b) | ![image](imp-3b-pre.svg) | &LongRightArrow; | ![image](imp-3b-post.svg) |
 | (3c) | ![image](imp-3c-pre.svg) | &LongRightArrow; | ![image](imp-3c-post.svg) |
 
-## Explicit applications
+## Explicit application
 
 Applications are represented explicitly as hollow nodes.
 The rules describe how to eliminate those application nodes.
