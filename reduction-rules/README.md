@@ -19,8 +19,10 @@ The following visualizations have also been used [here](https://olydis.medium.co
 
 ## Implicit application
 
-Applications are not represented explicitly, reducible subtrees are non-binary trees.
-The rules describe how to act on nodes with more than two children.
+Application of a program (binary tree) to arguments is not represented explicitly,
+but by appending the arguments to the program as (right-most) children, resulting
+in a non-binary tree.
+The reduction rules therefore describe how to act on nodes with more than two children.
 
 | Rule | Before                   |                  | After                     |
 | -----| ------------------------ | ---------------- | ------------------------- |
@@ -32,9 +34,9 @@ The rules describe how to act on nodes with more than two children.
 
 ## Explicit application
 
-Applications are represented explicitly as hollow nodes.
+Application of a program to an argument is represented explicitly as an "@" node.
 The rules describe how to eliminate those application nodes.
-Note that application nodes aside, trees are always irreducible values (binary trees).
+Note that "@" nodes aside, trees are irreducible values (binary trees).
 
 | Rule | Before                   |                  | After                     |
 | -----| ------------------------ | ---------------- | ------------------------- |
