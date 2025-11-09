@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Reduction Rules - Triage Calculus</title>
+    <style>
+        body {
+            font-family: math;
+            text-align: center;
+        }
+
+        table {
+            border-collapse: collapse;
+            margin: auto;
+        }
+
+        table.rules td {
+            font-size: 2em;
+            vertical-align: top;
+        }
+
+        table.rules td.arrow {
+            font-size: 2.5em;
+            font-weight: bold;
+        }
+
+        table.rules td:nth-child(1) {
+            padding-left: 0.5em;
+        }
+
+        img {
+            display: block;
+            margin-top: -0.1em;
+            margin-bottom: -0.4em;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f7f7f7;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Implicit Application</h1>
+    <h2>One Column</h2>
+    <table class="rules">
+        <tr>
+            <td>1)</td>
+            <td><img src="imp-1-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="imp-1-post.svg"></td>
+        </tr>
+        <tr>
+            <td>2)</td>
+            <td><img src="imp-2-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="imp-2-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3a)</td>
+            <td><img src="imp-3a-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="imp-3a-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3b)</td>
+            <td><img src="imp-3b-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="imp-3b-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3c)</td>
+            <td><img src="imp-3c-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="imp-3c-post.svg"></td>
+        </tr>
+    </table>
+    <h2>Two Columns</h2>
+    <table>
+        <tr>
+            <td>
+                <table class="rules">
+                    <tr>
+                        <td>1)</td>
+                        <td><img src="imp-1-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="imp-1-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>2)</td>
+                        <td><img src="imp-2-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="imp-2-post.svg"></td>
+                    </tr>
+                </table>
+            </td>
+            <td style="width: 6em;"></td>
+            <td>
+                <table class="rules">
+                    <tr>
+                        <td>3a)</td>
+                        <td><img src="imp-3a-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="imp-3a-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>3b)</td>
+                        <td><img src="imp-3b-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="imp-3b-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>3c)</td>
+                        <td><img src="imp-3c-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="imp-3c-post.svg"></td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+    <h1>Explicit Application</h1>
+    <h2>One Column</h2>
+    <table class="rules">
+        <tr>
+            <td>0a)</td>
+            <td><img src="exp-0a-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-0a-post.svg"></td>
+        </tr>
+        <tr>
+            <td>0b)</td>
+            <td><img src="exp-0b-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-0b-post.svg"></td>
+        </tr>
+        <tr>
+            <td>1)</td>
+            <td><img src="exp-1-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-1-post.svg"></td>
+        </tr>
+        <tr>
+            <td>2)</td>
+            <td><img src="exp-2-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-2-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3a)</td>
+            <td><img src="exp-3a-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-3a-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3b)</td>
+            <td><img src="exp-3b-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-3b-post.svg"></td>
+        </tr>
+        <tr>
+            <td>3c)</td>
+            <td><img src="exp-3c-pre.svg"></td>
+            <td class="arrow">&LongRightArrow;</td>
+            <td><img src="exp-3c-post.svg"></td>
+        </tr>
+    </table>
+    <h2>Two Columns</h2>
+    <table>
+        <tr>
+            <td>
+                <table class="rules">
+                    <tr>
+                        <td>0a)</td>
+                        <td><img src="exp-0a-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-0a-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>0b)</td>
+                        <td><img src="exp-0b-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-0b-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>1)</td>
+                        <td><img src="exp-1-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-1-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>2)</td>
+                        <td><img src="exp-2-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-2-post.svg"></td>
+                    </tr>
+                </table>
+            </td>
+            <td style="width: 6em;"></td>
+            <td>
+                <table class="rules">
+                    <tr>
+                        <td>3a)</td>
+                        <td><img src="exp-3a-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-3a-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>3b)</td>
+                        <td><img src="exp-3b-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-3b-post.svg"></td>
+                    </tr>
+                    <tr>
+                        <td>3c)</td>
+                        <td><img src="exp-3c-pre.svg"></td>
+                        <td class="arrow">&LongRightArrow;</td>
+                        <td><img src="exp-3c-post.svg"></td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+
+</html>
