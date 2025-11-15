@@ -1,1 +1,1 @@
-* https://github.com/spikeyarmaku/tc-evaluator/tree/main/src/inet
+* https://github.com/spikeyarmaku/tc-evaluator/tree/interaction-nets
