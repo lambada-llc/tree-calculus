@@ -45,6 +45,9 @@ export interface Marshaller<TTree> {
   // str = list of nats (Unicode code points)
   to_string: (x: TTree) => string;
   of_string: (x: string) => TTree;
+  // buffer = list of nats (bytes)
+  to_buffer: (x: TTree) => Uint8Array;
+  of_buffer: (x: Uint8Array) => TTree;
 }
 
 export function marshal<TTree>(e: Evaluator<TTree>): Marshaller<TTree> {
@@ -58,6 +61,8 @@ export function marshal<TTree>(e: Evaluator<TTree>): Marshaller<TTree> {
   const of_nat = (n: bigint) => { let l = []; for (; n; n >>= 1n) l.push(of_bool(n % 2n == 1n)); return of_list(l); };
   const to_string = (t: TTree) => to_list(t).map(to_nat).map(x => String.fromCharCode(Number(x))).join('');
   const of_string = (s: string) => of_list(s.split('').map(c => of_nat(BigInt(c.charCodeAt(0)))));
+  const to_buffer = (t: TTree) => new Uint8Array(to_list(t).map(to_nat).map(n => Number(n)));
+  const of_buffer = (s: Uint8Array) => of_list([...s].map(n => of_nat(BigInt(n))));
   return {
     to_bool,
     of_bool,
@@ -66,7 +71,9 @@ export function marshal<TTree>(e: Evaluator<TTree>): Marshaller<TTree> {
     to_nat,
     of_nat,
     to_string,
-    of_string
+    of_string,
+    to_buffer,
+    of_buffer,
   };
 }
 

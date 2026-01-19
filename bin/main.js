@@ -35,6 +35,8 @@ function marshal(e) {
   };
   const to_string = (t) => to_list(t).map(to_nat).map((x) => String.fromCharCode(Number(x))).join("");
   const of_string = (s) => of_list(s.split("").map((c) => of_nat(BigInt(c.charCodeAt(0)))));
+  const to_buffer = (t) => new Uint8Array(to_list(t).map(to_nat).map((n) => Number(n)));
+  const of_buffer = (s) => of_list([...s].map((n) => of_nat(BigInt(n))));
   return {
     to_bool,
     of_bool,
@@ -43,7 +45,9 @@ function marshal(e) {
     to_nat,
     of_nat,
     to_string,
-    of_string
+    of_string,
+    to_buffer,
+    of_buffer
   };
 }
 function id(e) {
@@ -236,19 +240,25 @@ var readable_default = formatter3;
 
 // src/main.mjs
 var import_fs = require("fs");
+var text_enc = new TextEncoder();
+var text_dec = new TextDecoder();
 var m = marshal(lazy_stacks_default);
 var of_marshaller = (of4, to4, of_string, to_string) => ({
-  of: (s) => of4(of_string(s)),
-  to: (x) => to_string(to4(x))
+  of: (s) => of4(of_string(text_dec.decode(s))),
+  to: (x) => text_enc.encode(to_string(to4(x)))
 });
 var of_formatter = (f) => ({
-  of: (s) => f.of(lazy_stacks_default, s),
-  to: (x) => f.to(lazy_stacks_default, x)
+  of: (s) => f.of(lazy_stacks_default, text_dec.decode(s)),
+  to: (x) => text_enc.encode(f.to(lazy_stacks_default, x))
 });
 var formatters = {
   bool: of_marshaller(m.of_bool, m.to_bool, (s) => s === "true" ? true : s === "false" ? false : raise("invalid boolean"), (x) => x ? "true" : "false"),
   nat: of_marshaller(m.of_nat, m.to_nat, (s) => BigInt(s), (x) => x.toString()),
   string: of_marshaller(m.of_string, m.to_string, (s) => s, (x) => x),
+  buffer: {
+    of: (s) => m.of_buffer(s),
+    to: (x) => m.to_buffer(x)
+  },
   ternary: of_formatter(ternary_default),
   dag: of_formatter(dag_default),
   term: of_formatter(readable_default)
@@ -262,7 +272,7 @@ var parse_infer = (s) => {
       return null;
     }
   };
-  return guess("bool") || guess("ternary") || guess("nat") || guess("term") || guess("dag") || guess("string") || raise(`could not infer format`);
+  return guess("bool") || guess("ternary") || guess("nat") || guess("term") || guess("dag") || guess("string") || guess("buffer") || raise(`could not infer format (unexpected, [buffer] should always work)`);
 };
 var formatters_infer = {};
 for (const format in formatters)
@@ -283,11 +293,14 @@ for (const raw_arg of args) {
     else
       raise(`unrecognized format ${arg}`);
   } else {
-    const content = raw_arg === "-" ? (0, import_fs.readFileSync)(0, "utf8").trimEnd() : input_mode_file ? (0, import_fs.readFileSync)(raw_arg, "utf8").trimEnd() : raw_arg;
+    const content = raw_arg === "-" ? new Uint8Array((0, import_fs.readFileSync)(0)) : input_mode_file ? new Uint8Array((0, import_fs.readFileSync)(raw_arg)) : text_enc.encode(raw_arg);
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
     current_value = lazy_stacks_default.apply(current_value, value);
   }
 }
-console.log(formatters[last_format].to(current_value));
+if (last_format == "buffer")
+  process.stdout.write(formatters[last_format].to(current_value));
+else
+  console.log(text_dec.decode(formatters[last_format].to(current_value)));

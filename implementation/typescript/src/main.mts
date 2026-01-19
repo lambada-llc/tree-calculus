@@ -5,24 +5,27 @@ import formatter_ternary from "./format/ternary.mjs";
 import formatter_readable from "./format/readable.mjs";
 import { Formatter } from "./format/formatter.mjs";
 import { readFileSync } from "fs";
+import { buffer } from "stream/consumers";
 
 type TTree = typeof e extends Evaluator<infer TTree> ? TTree : never;
 
 // Formatters
+const text_enc = new TextEncoder();
+const text_dec = new TextDecoder();
 const m = marshal(e);
 const of_marshaller = <T,>(
   of: (x: T) => TTree,
   to: (x: TTree) => T,
   of_string: (s: string) => T,
   to_string: (x: T) => string) => ({
-    of: (s: string) => of(of_string(s)),
-    to: (x: TTree) => to_string(to(x))
+    of: (s: Uint8Array) => of(of_string(text_dec.decode(s))),
+    to: (x: TTree) => text_enc.encode(to_string(to(x)))
   });
 const of_formatter = (f: Formatter) => ({
-  of: (s: string) => f.of(e, s),
-  to: (x: TTree) => f.to(e, x)
+  of: (s: Uint8Array) => f.of(e,  text_dec.decode(s)),
+  to: (x: TTree) => text_enc.encode(f.to(e, x))
 });
-const formatters: { [format: string]: { of: (s: string) => TTree, to: (x: TTree) => string } } = {
+const formatters: { [format: string]: { of: (s: Uint8Array) => TTree, to: (x: TTree) => Uint8Array } } = {
   bool: of_marshaller(
     m.of_bool,
     m.to_bool,
@@ -41,11 +44,15 @@ const formatters: { [format: string]: { of: (s: string) => TTree, to: (x: TTree)
     s => s,
     x => x
   ),
+  buffer: {
+    of: (s: Uint8Array) => m.of_buffer(s),
+    to: (x: TTree) => m.to_buffer(x),
+  },
   ternary: of_formatter(formatter_ternary),
   dag: of_formatter(formatter_dag),
   term: of_formatter(formatter_readable),
 };
-const parse_infer = (s: string): [TTree, string] => {
+const parse_infer = (s: Uint8Array): [TTree, string] => {
   const guess = (format: string): [TTree, string] | null => {
     const f = formatters[format];
     try {
@@ -60,12 +67,13 @@ const parse_infer = (s: string): [TTree, string] => {
     || guess('term')
     || guess('dag')
     || guess('string')
-    || raise(`could not infer format`);
+    || guess('buffer')
+    || raise(`could not infer format (unexpected, [buffer] should always work)`);
 };
-type Parser_infer = (s: string) => [TTree, string];
+type Parser_infer = (s: Uint8Array) => [TTree, string];
 const formatters_infer: { [format: string]: Parser_infer } = {};
 for (const format in formatters)
-  formatters_infer[format] = (s: string) => [formatters[format].of(s), format];
+  formatters_infer[format] = (s: Uint8Array) => [formatters[format].of(s), format];
 formatters_infer['infer'] = parse_infer;
 
 // Process arguments
@@ -86,10 +94,10 @@ for (const raw_arg of args) {
     // parse file
     const content =
       raw_arg === '-'
-        ? readFileSync(0, 'utf8').trimEnd()
-        : input_mode_file
-          ? readFileSync(raw_arg, 'utf8').trimEnd()
-          : raw_arg;
+      ? new Uint8Array(readFileSync(0))
+      : input_mode_file
+        ? new Uint8Array(readFileSync(raw_arg))
+        : text_enc.encode(raw_arg);
     input_mode_file = false;
     const [value, format] = formatters_infer[current_format](content);
     last_format = format;
@@ -97,5 +105,8 @@ for (const raw_arg of args) {
   }
 }
 
-console.log(formatters[last_format].to(current_value));
+if (last_format == 'buffer')
+  process.stdout.write(formatters[last_format].to(current_value));
+else
+  console.log(text_dec.decode(formatters[last_format].to(current_value)));
 
