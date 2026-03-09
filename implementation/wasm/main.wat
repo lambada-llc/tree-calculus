@@ -193,29 +193,15 @@
   ;; ============================================================
 
   (func $emit_tree (param $x i32)
-    (block $default
-    (block $is_fork
-    (block $is_stem
-    (block $is_leaf
-      (br_table $is_leaf $is_stem $is_fork $default
-        (call $get_type (local.get $x)))
-    )
-      ;; leaf → '0'
-      (call $write_byte (i32.const 0x30))
-      (return)
-    )
-      ;; stem → '1' then child
-      (call $write_byte (i32.const 0x31))
-      (call $emit_tree (call $get_u (local.get $x)))
-      (return)
-    )
-      ;; fork → '2' then left then right
-      (call $write_byte (i32.const 0x32))
-      (call $emit_tree (call $get_u (local.get $x)))
-      (call $emit_tree (call $get_v (local.get $x)))
-      (return)
-    )
-    (unreachable))
+    ;; Write tag byte: type(x) + '0'
+    (call $write_byte (i32.add (call $get_type (local.get $x)) (i32.const 0x30)))
+    ;; If stem or fork, recurse on left child
+    (if (call $get_type (local.get $x))
+      (then
+        (call $emit_tree (call $get_u (local.get $x)))
+        ;; If fork, also recurse on right child
+        (if (i32.sub (call $get_type (local.get $x)) (i32.const 1))
+          (then (call $emit_tree (call $get_v (local.get $x))))))))
 
   ;; ============================================================
   ;; Entry point (_start for WASI)
