@@ -37,6 +37,7 @@
 
   ;; ---- Globals ----
   (global $free_from (mut i32) (i32.const 1))   ;; next free node (0 = leaf)
+  (global $eof       (mut i32) (i32.const 0))   ;; set to 1 when stdin is exhausted
 
   ;; ============================================================
   ;; Node storage
@@ -156,7 +157,7 @@
           (call $fd_read (i32.const 0) (i32.const 0x00)
                          (i32.const 1) (i32.const 0x08))
           (i32.eqz (i32.load (i32.const 0x08))))
-      (then (i32.const -1))
+      (then (global.set $eof (i32.const 1)) (i32.const 0x30))
       (else (i32.load8_u (i32.const 0x0C)))))
 
   ;; Write one byte to stdout.
@@ -168,39 +169,24 @@
   ;; ============================================================
   ;; Parse ternary encoding  (stdin → node index)
   ;; ============================================================
-  ;; Reads bytes one at a time from stdin, skipping newlines.
-  ;; Returns node index, or -1 on EOF.
+  ;; Reads bytes one at a time from stdin, skipping non-'0','1','2' bytes.
+  ;; On EOF, $read_byte sets $eof and returns '0', so this returns leaf.
 
   (func $parse_tree (result i32)
-    (local $b i32)
-    (local $u i32)
-    (block $eof
-      ;; Skip newlines; read one tag byte
-      (loop $skip
-        (local.set $b (call $read_byte))
-        (br_if $eof  (i32.eq (local.get $b) (i32.const -1)))
-        (br_if $skip (i32.eq (local.get $b) (i32.const 0x0A)))
-        (br_if $skip (i32.eq (local.get $b) (i32.const 0x0D)))
-      )
-      ;; Dispatch on tag: '0'→leaf, '1'→stem, '2'→fork
-      (block $default
+    (loop $skip
       (block $is_fork
       (block $is_stem
       (block $is_leaf
-        (br_table $is_leaf $is_stem $is_fork $default
-          (i32.sub (local.get $b) (i32.const 0x30)))
+        (br_table $is_leaf $is_stem $is_fork $skip
+          (i32.sub (call $read_byte) (i32.const 0x30)))
       )
         (return (i32.const 0))
       )
         (return (call $alloc_stem (call $parse_tree)))
       )
-        (local.set $u (call $parse_tree))
-        (return (call $alloc_fork (local.get $u) (call $parse_tree)))
-      )
-      (unreachable)
+      (return (call $alloc_fork (call $parse_tree) (call $parse_tree)))
     )
-    ;; EOF
-    (i32.const -1))
+    (unreachable))
 
   ;; ============================================================
   ;; Emit ternary encoding  (node index → stdout)
@@ -249,7 +235,7 @@
     (block $end
     (loop $next
       (local.set $tree (call $parse_tree))
-      (br_if $end (i32.eq (local.get $tree) (i32.const -1)))
+      (br_if $end (global.get $eof))
       (local.set $result
         (call $apply (local.get $result) (local.get $tree)))
       (br $next)
