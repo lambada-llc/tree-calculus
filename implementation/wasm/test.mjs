@@ -31,6 +31,8 @@ function test(name, ...args) {
   }
 }
 
+test("no input");
+
 // Basic rules
 test("identity (λx.x)", "21100", "10");
 test("K combinator", "10", "0", "10");
