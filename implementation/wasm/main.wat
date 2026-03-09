@@ -31,6 +31,9 @@
 
   ;; ---- Memory: 64 MB ----
   (memory (export "memory") 1024)
+  ;; Pre-initialize iovec at 0x00: { buf_ptr=0x0C, buf_len=1 }
+  ;; Byte at 0x0C is used for single-byte I/O.  nread/nwritten at 0x08.
+  (data (i32.const 0x00) "\0C\00\00\00\01\00\00\00")
 
   ;; ---- Globals ----
   (global $free_from (mut i32) (i32.const 1))   ;; next free node (0 = leaf)
@@ -144,25 +147,21 @@
   ;; ============================================================
   ;; Byte-at-a-time I/O  (WASI)
   ;; ============================================================
-  ;; iovec at 0x00: buf_ptr=0x0C, buf_len=1.  nread/nwritten at 0x08.
+  ;; iovec at 0x00 is pre-initialized by the data segment above.
 
   ;; Read one byte from stdin.  Returns the byte, or -1 on EOF/error.
   (func $read_byte (result i32)
-    (i32.store (i32.const 0x00) (i32.const 0x0C))
-    (i32.store (i32.const 0x04) (i32.const 1))
     (if (result i32)
-        (call $fd_read (i32.const 0) (i32.const 0x00)
-                       (i32.const 1) (i32.const 0x08))
+        (i32.or  ;; nonzero if fd_read errored OR read 0 bytes
+          (call $fd_read (i32.const 0) (i32.const 0x00)
+                         (i32.const 1) (i32.const 0x08))
+          (i32.eqz (i32.load (i32.const 0x08))))
       (then (i32.const -1))
-      (else (if (result i32) (i32.eqz (i32.load (i32.const 0x08)))
-        (then (i32.const -1))
-        (else (i32.load8_u (i32.const 0x0C)))))))
+      (else (i32.load8_u (i32.const 0x0C)))))
 
   ;; Write one byte to stdout.
   (func $write_byte (param $b i32)
     (i32.store8 (i32.const 0x0C) (local.get $b))
-    (i32.store  (i32.const 0x00) (i32.const 0x0C))
-    (i32.store  (i32.const 0x04) (i32.const 1))
     (drop (call $fd_write (i32.const 1) (i32.const 0x00)
                           (i32.const 1) (i32.const 0x08))))
 
