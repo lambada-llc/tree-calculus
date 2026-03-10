@@ -13,14 +13,14 @@
   ;;   '2' <t1> <t2> = △ <t1> <t2>  (fork)
   ;;
   ;; Memory layout (1024 pages = 64 MB):
-  ;;   0x00000       16 B     WASI iovec scratch + I/O byte
-  ;;   0x80000     ~63 MB     Node storage
+  ;;   0x00–0x0F     WASI iovec scratch + I/O byte
+  ;;   0x10+         Node storage (12 bytes each, bump-allocated)
   ;;
-  ;; Each node i is 12 bytes at 0x80000 + i*12:
-  ;;   +0  type (i32):  0=leaf, 1=stem, 2=fork
-  ;;   +4  u    (i32):  left child index
-  ;;   +8  v    (i32):  right child index
-  ;; Node 0 is the unique leaf (zero-initialized by WASM).
+  ;; Each node is 12 bytes at some byte offset p:
+  ;;   p+0x10  type (i32):  0=leaf, 1=stem, 2=fork
+  ;;   p+0x14  u    (i32):  left child
+  ;;   p+0x18  v    (i32):  right child
+  ;; Node 0 (offset 0) is the unique leaf (zero-initialized by WASM).
   ;; ============================================================
 
   ;; ---- WASI imports ----
@@ -37,8 +37,8 @@
 
   ;; ---- Globals ----
   (global $free_from (mut i32) (i32.const 0)) ;; byte offset of last allocated node
-                                                 ;; (initialized to behind iovec)
-  (global $eof       (mut i32) (i32.const 0))    ;; set to 1 when stdin is exhausted
+                                              ;; (initialized to behind iovec)
+  (global $eof       (mut i32) (i32.const 0)) ;; set to 1 when stdin is exhausted
 
   ;; ============================================================
   ;; Node storage
@@ -126,7 +126,7 @@
   ;; ============================================================
   ;; iovec at 0x00 is pre-initialized by the data segment above.
 
-  ;; Read one byte from stdin.  Returns the byte, or -1 on EOF/error.
+  ;; Read one byte from stdin. On EOF, sets $eof and returns '0'.
   (func $read_byte (result i32)
     (if (result i32)
         (i32.or  ;; nonzero if fd_read errored OR read 0 bytes
@@ -145,8 +145,8 @@
   ;; ============================================================
   ;; Parse ternary encoding  (stdin → node index)
   ;; ============================================================
-  ;; Reads bytes one at a time from stdin, skipping non-'0','1','2' bytes.
-  ;; On EOF, $read_byte sets $eof and returns '0', so this returns leaf.
+  ;; Reads bytes one at a time, skipping anything outside '0','1','2'.
+  ;; On EOF, $read_byte returns '0', so this returns leaf.
 
   (func $parse_tree (result i32)
     (loop $skip
