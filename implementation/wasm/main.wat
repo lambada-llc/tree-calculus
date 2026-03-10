@@ -36,32 +36,24 @@
   (data (i32.const 0x00) "\0C\00\00\00\01\00\00\00")
 
   ;; ---- Globals ----
-  (global $free_from (mut i32) (i32.const 0))   ;; byte offset of last allocated node
-  (global $eof       (mut i32) (i32.const 0))   ;; set to 1 when stdin is exhausted
+  (global $free_from (mut i32) (i32.const 0)) ;; byte offset of last allocated node
+                                                 ;; (initialized to behind iovec)
+  (global $eof       (mut i32) (i32.const 0))    ;; set to 1 when stdin is exhausted
 
   ;; ============================================================
   ;; Node storage
   ;; ============================================================
 
-  ;; Address of node i in linear memory.
-  (func $node_addr (param $i i32) (result i32)
-    (i32.add (i32.const 0x80000) (local.get $i)))
-
-  (func $get_type (param $i i32) (result i32)
-    (i32.load (call $node_addr (local.get $i))))
-
-  (func $get_u (param $i i32) (result i32)
-    (i32.load offset=4 (call $node_addr (local.get $i))))
-
-  (func $get_v (param $i i32) (result i32)
-    (i32.load offset=8 (call $node_addr (local.get $i))))
+  (func $get_type (param $i i32) (result i32) (i32.load offset=0x10 (local.get $i)))
+  (func $get_u (param $i i32) (result i32) (i32.load offset=0x14 (local.get $i)))
+  (func $get_v (param $i i32) (result i32) (i32.load offset=0x18 (local.get $i)))
 
   ;; Allocate a node with given type, u, v fields.
   (func $alloc (param $type i32) (param $u i32) (param $v i32) (result i32)
     (global.set $free_from (i32.add (global.get $free_from) (i32.const 12)))
-    (i32.store          (call $node_addr (global.get $free_from)) (local.get $type))
-    (i32.store offset=4 (call $node_addr (global.get $free_from)) (local.get $u))
-    (i32.store offset=8 (call $node_addr (global.get $free_from)) (local.get $v))
+    (i32.store offset=0x10 (global.get $free_from) (local.get $type))
+    (i32.store offset=0x14 (global.get $free_from) (local.get $u))
+    (i32.store offset=0x18 (global.get $free_from) (local.get $v))
     (global.get $free_from))
 
   ;; ============================================================
