@@ -1,6 +1,6 @@
 A minimal reference implementation of [triage calculus](https://treecalcul.us/specification/) written directly in WebAssembly Text format (WAT).
 
-Reads one [minimalist-binary-encoded](../../../conventions/#minimalist-binary) trees from stdin, left-folds application, and writes the result to stdout.
+Reads one [minimalist-binary-encoded](../../../conventions/README.md#minimalist-binary) trees from stdin, left-folds application, and writes the result to stdout.
 
 ## Usage
 
