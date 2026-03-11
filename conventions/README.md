@@ -72,6 +72,8 @@ For example, we usually think of `△ △ △` as a tree with three nodes `fork(
 
 We pick a _preorder encoding_ where inner nodes (application) are `0` and leaves (`△`) are `1`. The example above would be `00111`.
 
+The identity program is `001010111`.
+
 Observations:
 * Any (sub)string `0...1` with one more `1` than `0`s represents a (sub)expression.
 * Expression are reducible iff their encoding contains substring `000`.

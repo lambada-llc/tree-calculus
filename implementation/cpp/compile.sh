@@ -1,5 +1,6 @@
-#/bin/sh
+#!/bin/sh
 
 set -euo pipefail
 
-clang++ eager-value-mem.cpp -O3 -std=c++20 -o eager-value-mem.exe
+clang++ main.cpp -O3 -std=c++20 -o main.exe
+clang++ test.cpp -O3 -std=c++20 -o test.exe
