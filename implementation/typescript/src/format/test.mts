@@ -3,6 +3,7 @@ import { equal_ternary, id_ternary, succ_dag } from "../example-programs.mjs";
 import formatter_dag from "./dag.mjs";
 import formatter_ternary from "./ternary.mjs";
 import formatter_readable from "./readable.mjs";
+import formatter_minbin from "./minbin.mjs";
 import { Formatter } from "./formatter.mjs";
 
 // Evaluator to use for this test -- any valid one works
@@ -43,4 +44,10 @@ export function test() {
   assert_roundtrips_weak(formatter_readable, formatter_ternary.of(e, id_ternary));
   assert_roundtrips_weak(formatter_readable, formatter_ternary.of(e, equal_ternary));
   assert_roundtrips_weak(formatter_readable, formatter_dag.of(e, succ_dag));
+  assert_roundtrips_strong(formatter_minbin, '1');              // △
+  assert_roundtrips_strong(formatter_minbin, '001010111');      // identity: △ (△ (△ △)) △
+  assert_roundtrips_strong(formatter_minbin, '00111');          // △ △ △
+  assert_roundtrips_weak(formatter_minbin, formatter_ternary.of(e, id_ternary));
+  assert_roundtrips_weak(formatter_minbin, formatter_ternary.of(e, equal_ternary));
+  assert_roundtrips_weak(formatter_minbin, formatter_dag.of(e, succ_dag));
 }

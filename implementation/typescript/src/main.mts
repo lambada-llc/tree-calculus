@@ -3,6 +3,7 @@ import e from "./evaluator/lazy-stacks.mjs";
 import formatter_dag from "./format/dag.mjs";
 import formatter_ternary from "./format/ternary.mjs";
 import formatter_readable from "./format/readable.mjs";
+import formatter_minbin from "./format/minbin.mjs";
 import { Formatter } from "./format/formatter.mjs";
 import { readFileSync } from "fs";
 import { buffer } from "stream/consumers";
@@ -51,6 +52,7 @@ const formatters: { [format: string]: { of: (s: Uint8Array) => TTree, to: (x: TT
   ternary: of_formatter(formatter_ternary),
   dag: of_formatter(formatter_dag),
   term: of_formatter(formatter_readable),
+  minbin: of_formatter(formatter_minbin),
 };
 const parse_infer = (s: Uint8Array): [TTree, string] => {
   const guess = (format: string): [TTree, string] | null => {

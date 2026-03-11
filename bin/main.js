@@ -238,14 +238,47 @@ function of3(e, s) {
 var formatter3 = { to: to3, of: of3 };
 var readable_default = formatter3;
 
+// src/format/minbin.mjs
+function to4(e, x) {
+  const res = [];
+  const triage = e.triage(() => res.push("1"), (u) => (res.push("0"), res.push("1"), triage(u)), (u, v) => (res.push("0"), res.push("0"), res.push("1"), triage(u), triage(v)));
+  triage(x);
+  return res.join("");
+}
+function of4(e, s) {
+  const stack = s.split("").reverse();
+  const f = () => {
+    const c = stack.pop();
+    if (c === void 0)
+      raise("unexpected end of minimalist binary encoding");
+    switch (c) {
+      case "1":
+        return e.leaf;
+      case "0": {
+        const func = f();
+        const arg = f();
+        return e.apply(func, arg);
+      }
+      default:
+        return raise(`unexpected character in minimalist binary encoding: ${c}`);
+    }
+  };
+  const result = f();
+  if (stack.length > 0)
+    raise("trailing characters in minimalist binary encoding");
+  return result;
+}
+var formatter4 = { to: to4, of: of4 };
+var minbin_default = formatter4;
+
 // src/main.mjs
 var import_fs = require("fs");
 var text_enc = new TextEncoder();
 var text_dec = new TextDecoder();
 var m = marshal(lazy_stacks_default);
-var of_marshaller = (of4, to4, of_string, to_string) => ({
-  of: (s) => of4(of_string(text_dec.decode(s))),
-  to: (x) => text_enc.encode(to_string(to4(x)))
+var of_marshaller = (of5, to5, of_string, to_string) => ({
+  of: (s) => of5(of_string(text_dec.decode(s))),
+  to: (x) => text_enc.encode(to_string(to5(x)))
 });
 var of_formatter = (f) => ({
   of: (s) => f.of(lazy_stacks_default, text_dec.decode(s)),
@@ -261,7 +294,8 @@ var formatters = {
   },
   ternary: of_formatter(ternary_default),
   dag: of_formatter(dag_default),
-  term: of_formatter(readable_default)
+  term: of_formatter(readable_default),
+  minbin: of_formatter(minbin_default)
 };
 var parse_infer = (s) => {
   const guess = (format) => {
