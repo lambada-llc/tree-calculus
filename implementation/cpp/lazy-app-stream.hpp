@@ -1,5 +1,6 @@
 #pragma once
 
+#include <ranges>
 #include <vector>
 #include <functional>
 #include <string>
@@ -39,7 +40,7 @@ private:
   // Copy a subtree from src[pos..] into dst, returning the position after it.
   static size_t copy_subtree(const Tree &src, size_t pos, Tree &dst) {
     size_t end = subtree_end(src, pos);
-    dst.insert(dst.end(), src.begin() + pos, src.begin() + end);
+    dst.append_range(std::ranges::subrange(src.begin() + pos, src.begin() + end));
     return end;
   }
 
@@ -117,7 +118,7 @@ private:
           changed = true;
           // G might create new redexes when combined with tail, so
           // just emit it and let the outer loop catch it
-          dst.insert(dst.end(), g.begin(), g.end());
+          dst.append_range(g);
           // We consumed B but didn't use it — still need to advance past it
           // Actually wait: the rule is fork(leaf, Z) W -> Z, so we DROP W.
           return after_b;
@@ -136,11 +137,11 @@ private:
           // = apply(apply(Y', W), apply(G, W))
           dst.push_back(false);
           dst.push_back(false);
-          dst.insert(dst.end(), yp.begin(), yp.end());
-          dst.insert(dst.end(), w.begin(), w.end());
+          dst.append_range(yp);
+          dst.append_range(w);
           dst.push_back(false);
-          dst.insert(dst.end(), g.begin(), g.end());
-          dst.insert(dst.end(), w.begin(), w.end());
+          dst.append_range(g);
+          dst.append_range(w);
           return after_b;
         }
 
@@ -170,7 +171,7 @@ private:
 
           if (w_reduced.size() >= 1 && w_reduced[0]) {
             // W = leaf: -> P
-            dst.insert(dst.end(), p.begin(), p.end());
+            dst.append_range(p);
             return after_b;
           }
 
@@ -178,8 +179,8 @@ private:
             // W = stem(D): -> apply(Q, D)
             Tree d(w_reduced.begin() + 2, w_reduced.end());
             dst.push_back(false);
-            dst.insert(dst.end(), q.begin(), q.end());
-            dst.insert(dst.end(), d.begin(), d.end());
+            dst.append_range(q);
+            dst.append_range(d);
             return after_b;
           }
 
@@ -190,9 +191,9 @@ private:
             Tree e(w_reduced.begin() + d_end, w_reduced.end());
             dst.push_back(false);
             dst.push_back(false);
-            dst.insert(dst.end(), g.begin(), g.end());
-            dst.insert(dst.end(), d.begin(), d.end());
-            dst.insert(dst.end(), e.begin(), e.end());
+            dst.append_range(g);
+            dst.append_range(d);
+            dst.append_range(e);
             return after_b;
           }
 
@@ -206,7 +207,7 @@ private:
 
     // Not a redex (or not a matching pattern): emit apply(A_reduced, B_reduced)
     dst.push_back(false);
-    dst.insert(dst.end(), a_buf.begin(), a_buf.end());
+    dst.append_range(a_buf);
     return stream_reduce(src, after_a, dst, changed);
   }
 
@@ -234,20 +235,15 @@ public:
   }
 
   Tree stem(Tree u) {
-    Tree result;
-    result.push_back(false);
-    result.push_back(true);
-    result.insert(result.end(), u.begin(), u.end());
+    Tree result = {false, true};
+    result.append_range(u);
     return result;
   }
 
   Tree fork(Tree u, Tree v) {
-    Tree result;
-    result.push_back(false);
-    result.push_back(false);
-    result.push_back(true);
-    result.insert(result.end(), u.begin(), u.end());
-    result.insert(result.end(), v.begin(), v.end());
+    Tree result = {false, false, true};
+    result.append_range(u);
+    result.append_range(v);
     return result;
   }
 
@@ -271,10 +267,9 @@ public:
   }
 
   Tree apply(Tree a, Tree b) {
-    Tree result;
-    result.push_back(false);
-    result.insert(result.end(), a.begin(), a.end());
-    result.insert(result.end(), b.begin(), b.end());
+    Tree result = {false};
+    result.append_range(a);
+    result.append_range(b);
     return result;
   }
 

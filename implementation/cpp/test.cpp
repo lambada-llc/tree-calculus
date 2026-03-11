@@ -1,9 +1,10 @@
 #include "eager-value-mem.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
+#include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <numeric>
-#include <chrono>
 
 std::string bench_recursive_fib_ternary =
   "21212021212011212110021100102021202121202120002120112021212120112000202021212"
