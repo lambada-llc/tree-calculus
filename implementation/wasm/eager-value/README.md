@@ -1,6 +1,6 @@
 A reference implementation of [triage calculus](https://treecalcul.us/specification/) written directly in WebAssembly Text format (WAT).
 
-Reads one [ternary-encoded](../../conventions/#ternary) tree per stdin line, left-folds application, and writes the result to stdout.
+Reads one [ternary-encoded](../../../conventions/#ternary) tree per stdin line, left-folds application, and writes the result to stdout.
 
 ## Usage
 
