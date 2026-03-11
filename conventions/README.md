@@ -40,7 +40,7 @@ For example, the identity program would be `21100`.
 
 Note: This can only represent fully reduced values. While it may seem easy to extend the encoding to cover trees with higher arity, it requires further complexity/definitions to unambiguously represent nodes of arity > 9.
 
-### Binary DAG (directed acyclic graph)
+### DAG (directed acyclic graph)
 The trees representing large data or programs tend to result in the same subtrees appearing multiple times (e.g. from the same characters appearing several times in some text or from the same function being used in multiple spots).
 This suggests making use of sharing both when representing trees in memory, but also when communicating them.
 
@@ -65,3 +65,23 @@ i sk △
 false k i
 false
 ```
+
+### Minimalist binary
+We can represent any expression (reduced or not) as a binary tree where leaves are `△` and inner nodes are application. Note that this is different from the tree structure we usually consider in tree calculus, in that it makes application explicit!
+For example, we usually think of `△ △ △` as a tree with three nodes `fork(leaf,leaf)`. But here, we want to think of it as the tree with five nodes `app(app(△,△),△)`.
+
+We pick a _preorder encoding_ where inner nodes (application) are `0` and leaves (`△`) are `1`. The example above would be `00111`.
+
+Observations:
+* Any (sub)string `0...1` with one more `1` than `0`s represents a (sub)expression.
+* Expression are reducible iff their encoding contains substring `000`.
+* The triage calculus reduction rules are
+  ```
+  00011ab -> a
+  000101abc -> 00ac0bc
+  0001001abc1 -> a
+  0001001abc01 -> 0b
+  0001001abc001 -> 00c
+  ```
+  where `a`,`b` and `c` are subexpressions.
+* This allows writing very minimalistic evaluators, such as the PCRE-based one used by [this demo](https://treecalcul.us/live/?example=portability).
