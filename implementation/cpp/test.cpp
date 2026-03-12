@@ -147,9 +147,9 @@ void sanity_checks(std::string name) {
   std::cout << "    Stats: " << e.stats() << std::endl;
   auto bench_recursive_fib = e.of_ternary(bench_recursive_fib_ternary);
   auto bench_linear_fib = e.of_ternary(bench_linear_fib_ternary);
-  if (e.to_nat(e.apply(bench_recursive_fib, e.of_nat(7))) != 21)
+  if (e.to_nat(e.apply(bench_recursive_fib, e.of_nat(10))) != 89)
     throw std::runtime_error("fib misbehavior");
-  if (e.to_nat(e.apply(bench_linear_fib, e.of_nat(7))) != 21)
+  if (e.to_nat(e.apply(bench_linear_fib, e.of_nat(10))) != 89)
     throw std::runtime_error("fib misbehavior");
   std::cout << "  Fib behaves as expected." << std::endl;
   std::cout << "    Stats: " << e.stats() << std::endl;

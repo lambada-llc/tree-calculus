@@ -24,14 +24,22 @@ public:
   using Tree = std::vector<bool>;
 
 private:
-  // Find the end of a subtree starting at position pos.
-  static size_t subtree_end(const Tree &t, size_t pos) {
+  // Copy one subtree from src[pos..] into dst. Returns position after it.
+  static size_t copy_tree(const Tree &src, size_t pos, Tree &dst) {
     size_t depth = 1;
     while (depth > 0) {
-      if (pos >= t.size()) throw std::runtime_error("subtree_end: out of bounds");
-      if (t[pos]) depth--;
-      else depth++;
-      pos++;
+      bool bit = src[pos++];
+      dst.push_back(bit);
+      if (bit) depth--; else depth++;
+    }
+    return pos;
+  }
+
+  // Skip one subtree in src starting at pos. Returns position after it.
+  static size_t skip_tree(const Tree &src, size_t pos) {
+    size_t depth = 1;
+    while (depth > 0) {
+      if (src[pos++]) depth--; else depth++;
     }
     return pos;
   }
@@ -51,85 +59,73 @@ private:
   // Consume one subtree from src[pos..], emit its reduced form into dst.
   // Returns position in src after the consumed subtree.
   static size_t stream_reduce(const Tree &src, size_t pos, Tree &dst, bool &changed) {
-    if (pos >= src.size()) throw std::runtime_error("stream_reduce: out of bounds");
     if (src[pos]) { dst.push_back(true); return pos + 1; }
 
-    // apply(A, B): reduce A, check for redex
-    Tree a;
-    size_t b_pos = stream_reduce(src, pos + 1, a, changed);
-
-    // A starts with 001 = apply(apply(leaf, Y), G) = fork(Y, G) → redex
-    if (a.size() >= 3 && !a[0] && !a[1] && a[2]) {
-      size_t y_end = subtree_end(a, 3);
-      return reduce_redex(src, b_pos,
-        Tree(a.begin() + 3, a.begin() + y_end),
-        Tree(a.begin() + y_end, a.end()),
-        dst, changed);
+    // Check for redex: apply(fork(Y, G), W) = 0,0,0,1,Y...,G...,W...
+    if (!src[pos+1] && !src[pos+2] && src[pos+3]) {
+      Tree y;
+      size_t g_pos = copy_tree(src, pos + 4, y);
+      size_t w_pos = skip_tree(src, g_pos);
+      reduce(y);
+      changed = true;
+      return reduce_redex(src, g_pos, w_pos, y, dst, changed);
     }
 
-    // No redex: emit apply(A_reduced, B_reduced)
+    // No redex: stream apply(A_reduced, B_reduced) directly into dst
     dst.push_back(false);
-    dst.append_range(a);
-    return stream_reduce(src, b_pos, dst, changed);
+    pos = stream_reduce(src, pos + 1, dst, changed);
+    return stream_reduce(src, pos, dst, changed);
   }
 
-  // Reduce the redex apply(fork(Y, G), W) where W starts at src[w_pos..].
-  // Emits result into dst. Returns position in src after W.
-  static size_t reduce_redex(const Tree &src, size_t w_pos,
-                              Tree y, Tree g, Tree &dst, bool &changed) {
-    reduce(y);
-    changed = true;
-
-    // Y=leaf: fork(leaf, G) W → G (drop W)
+  // Handle redex: apply(fork(Y, G), W). Y is reduced. G and W are in src.
+  static size_t reduce_redex(const Tree &src, size_t g_pos, size_t w_pos,
+                              const Tree &y, Tree &dst, bool &changed) {
+    // Y=leaf: → G
     if (y[0]) {
-      dst.append_range(g);
-      return subtree_end(src, w_pos);
+      copy_tree(src, g_pos, dst);
+      return skip_tree(src, w_pos);
     }
 
-    // Y=stem(Y'): fork(stem(Y'), G) W → apply(apply(Y', W), apply(G, W))
+    // Y=stem(Y'): → apply(apply(Y', W), apply(G, W))
     if (y[1]) {
       Tree w;
       size_t after_w = stream_reduce(src, w_pos, w, changed);
       dst.push_back(false);
       dst.push_back(false);
-      dst.append_range(Tree(y.begin() + 2, y.end()));
+      copy_tree(y, 2, dst);
       dst.append_range(w);
       dst.push_back(false);
-      dst.append_range(g);
+      copy_tree(src, g_pos, dst);
       dst.append_range(w);
       return after_w;
     }
 
     // Y=fork(P, Q): triage on W
-    size_t p_end = subtree_end(y, 3);
-    Tree p(y.begin() + 3, y.begin() + p_end);
-    Tree q(y.begin() + p_end, y.end());
-
+    size_t q_pos = skip_tree(y, 3);
     Tree w;
     size_t after_w = stream_reduce(src, w_pos, w, changed);
     reduce(w);
 
     // W=leaf: → P
     if (w[0]) {
-      dst.append_range(p);
+      copy_tree(y, 3, dst);
       return after_w;
     }
 
     // W=stem(D): → apply(Q, D)
     if (w[1]) {
       dst.push_back(false);
-      dst.append_range(q);
-      dst.append_range(Tree(w.begin() + 2, w.end()));
+      copy_tree(y, q_pos, dst);
+      copy_tree(w, 2, dst);
       return after_w;
     }
 
     // W=fork(D, E): → apply(apply(G, D), E)
-    size_t d_end = subtree_end(w, 3);
     dst.push_back(false);
     dst.push_back(false);
-    dst.append_range(g);
-    dst.append_range(Tree(w.begin() + 3, w.begin() + d_end));
-    dst.append_range(Tree(w.begin() + d_end, w.end()));
+    copy_tree(src, g_pos, dst);
+    size_t e_pos = copy_tree(w, 3, dst);
+    copy_tree(w, e_pos, dst);
     return after_w;
   }
 
@@ -160,20 +156,16 @@ public:
   template <typename T>
   T triage(std::function<T()> leaf_case, std::function<T(Tree)> stem_case, std::function<T(Tree, Tree)> fork_case, Tree x) {
     reduce(x);
-    if (x.size() == 1 && x[0]) {
-      return leaf_case();
+    if (x[0]) return leaf_case();
+    if (x[1]) {
+      Tree u;
+      copy_tree(x, 2, u);
+      return stem_case(std::move(u));
     }
-    if (x.size() >= 2 && !x[0] && x[1]) {
-      Tree u(x.begin() + 2, x.end());
-      return stem_case(u);
-    }
-    if (x.size() >= 3 && !x[0] && !x[1] && x[2]) {
-      size_t u_end = subtree_end(x, 3);
-      Tree u(x.begin() + 3, x.begin() + u_end);
-      Tree v(x.begin() + u_end, x.end());
-      return fork_case(u, v);
-    }
-    throw std::runtime_error("triage: tree is not fully reduced");
+    Tree u, v;
+    size_t v_pos = copy_tree(x, 3, u);
+    copy_tree(x, v_pos, v);
+    return fork_case(std::move(u), std::move(v));
   }
 
   Tree apply(Tree a, Tree b) {
