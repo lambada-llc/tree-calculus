@@ -1,4 +1,7 @@
 #include "eager-value-mem.hpp"
+#include "eager-ternary.hpp"
+#include "eager-ternary-ref.hpp"
+#include "eager-ternary-len.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -32,6 +35,12 @@ int main(int argc, char *argv[]) {
 
   if (evaluator == "eager-value-mem") {
     return run<EagerValueMem>();
+  } else if (evaluator == "eager-ternary") {
+    return run<EagerTernary>();
+  } else if (evaluator == "eager-ternary-ref") {
+    return run<EagerTernaryRef>();
+  } else if (evaluator == "eager-ternary-len") {
+    return run<EagerTernaryLen>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {

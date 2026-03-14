@@ -1,4 +1,7 @@
 #include "eager-value-mem.hpp"
+#include "eager-ternary.hpp"
+#include "eager-ternary-ref.hpp"
+#include "eager-ternary-len.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
@@ -138,6 +141,14 @@ void print_statistics(std::string title, const std::vector<double>& samples) {
   std::cout << "  Median: " << median << std::endl;
 }
 
+// Compute expected fib value matching the tree-calculus fib program's indexing:
+// fib(0)=1, fib(1)=1, fib(2)=2, ..., fib(10)=89
+int64_t expected_fib(int n) {
+  int64_t a = 0, b = 1;
+  for (int i = 0; i <= n; ++i) { int64_t t = a + b; a = b; b = t; }
+  return a;
+}
+
 template <typename Impl>
 void sanity_checks(std::string name) {
   std::cout << "Testing " << name << "..." << std::endl;
@@ -155,40 +166,57 @@ void sanity_checks(std::string name) {
   std::cout << "    Stats: " << e.stats() << std::endl;
 }
 
+template <typename Impl>
+void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, int iterations = 10) {
+  int64_t expected_linear = expected_fib(linear_fib_n);
+  int64_t expected_recursive = expected_fib(recursive_fib_n);
+
+  print_statistics(
+    "[" + name + "] Setup, should be negligibly fast",
+    repeat_measure_sec(
+      []() {
+        Evaluator<Impl> e;
+        e.of_ternary(bench_recursive_fib_ternary);
+        e.of_ternary(bench_linear_fib_ternary);
+      }, iterations));
+  print_statistics(
+    "[" + name + "] Linear fib(" + std::to_string(linear_fib_n) + ")",
+    repeat_measure_sec(
+      [&]() {
+        Evaluator<Impl> e;
+        auto fib = e.of_ternary(bench_linear_fib_ternary);
+        auto result = e.to_nat(e.apply(fib, e.of_nat(linear_fib_n)));
+        if (result != expected_linear)
+          throw std::runtime_error("fib misbehavior: " + std::to_string(result));
+      }, iterations));
+  print_statistics(
+    "[" + name + "] Recursive fib(" + std::to_string(recursive_fib_n) + ")",
+    repeat_measure_sec(
+      [&]() {
+        Evaluator<Impl> e;
+        auto fib = e.of_ternary(bench_recursive_fib_ternary);
+        auto result = e.to_nat(e.apply(fib, e.of_nat(recursive_fib_n)));
+        if (result != expected_recursive)
+          throw std::runtime_error("fib misbehavior: " + std::to_string(result));
+      }, iterations));
+}
+
 int main(int argc, char *argv[]) {
   sanity_checks<EagerValueMem>("EagerValueMem");
+  sanity_checks<EagerTernary>("EagerTernary");
+  sanity_checks<EagerTernaryRef>("EagerTernaryRef");
+  sanity_checks<EagerTernaryLen>("EagerTernaryLen");
   sanity_checks<LazyAppStream>("LazyAppStream");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
-    print_statistics(
-      "[EagerValueMem] Setup, should be negligibly fast",
-      repeat_measure_sec(
-        []() { 
-          Evaluator<EagerValueMem> e;
-          e.of_ternary(bench_recursive_fib_ternary);
-          e.of_ternary(bench_linear_fib_ternary);
-        }));
-    print_statistics(
-      "[EagerValueMem] Linear fib(90)",
-      repeat_measure_sec(
-        []() {
-          Evaluator<EagerValueMem> e;
-          auto fib = e.of_ternary(bench_linear_fib_ternary);
-          auto result = e.to_nat(e.apply(fib, e.of_nat(90)));
-          if (result != 4660046610375530309)
-            throw std::runtime_error("fib misbehavior: " + std::to_string(result));
-        }));
-    print_statistics(
-      "[EagerValueMem] Recursive fib(28)",
-      repeat_measure_sec(
-        []() {
-          Evaluator<EagerValueMem> e;
-          auto fib = e.of_ternary(bench_recursive_fib_ternary);
-          auto result = e.to_nat(e.apply(fib, e.of_nat(28)));
-          if (result != 514229)
-            throw std::runtime_error("fib misbehavior: " + std::to_string(result));
-        }));
+    // Fib arguments tuned so each benchmark takes ~0.1s.
+    // Linear fib is capped at 90 to avoid int64_t overflow.
+    bench_evaluator<EagerValueMem>("EagerValueMem", 90, 24);
+    bench_evaluator<EagerTernary>("EagerTernary", 55, 14);
+    bench_evaluator<EagerTernaryLen>("EagerTernaryLen", 55, 14);
+    bench_evaluator<EagerTernaryRef>("EagerTernaryRef", 90, 24);
+    bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
   }
 
   std::cout << std::endl << "All tests passed." << std::endl;
