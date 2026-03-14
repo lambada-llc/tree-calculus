@@ -2,6 +2,7 @@
 #include "eager-ternary.hpp"
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
+#include "eager-ternary-vm.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
@@ -206,6 +207,7 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernary>("EagerTernary");
   sanity_checks<EagerTernaryRef>("EagerTernaryRef");
   sanity_checks<EagerTernaryLen>("EagerTernaryLen");
+  sanity_checks<EagerTernaryVM>("EagerTernaryVM");
   sanity_checks<LazyAppStream>("LazyAppStream");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
@@ -216,6 +218,7 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerTernary>("EagerTernary", 55, 14);
     bench_evaluator<EagerTernaryLen>("EagerTernaryLen", 55, 14);
     bench_evaluator<EagerTernaryRef>("EagerTernaryRef", 90, 24);
+    bench_evaluator<EagerTernaryVM>("EagerTernaryVM", 90, 24);
     bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
   }
 

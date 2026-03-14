@@ -2,6 +2,7 @@
 #include "eager-ternary.hpp"
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
+#include "eager-ternary-vm.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -41,6 +42,8 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryRef>();
   } else if (evaluator == "eager-ternary-len") {
     return run<EagerTernaryLen>();
+  } else if (evaluator == "eager-ternary-vm") {
+    return run<EagerTernaryVM>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {
