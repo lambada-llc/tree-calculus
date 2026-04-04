@@ -14,7 +14,7 @@ static std::unordered_map<std::string, Info> env;
 static std::unordered_map<std::string, std::string> alias;
 static int counter = 0;
 
-static std::string fresh() { return "r" + std::to_string(counter++); }
+static std::string fresh() { return ":reduced:" + std::to_string(counter++); }
 
 static std::string resolve(const std::string& name) {
   const std::string* cur = &name;
