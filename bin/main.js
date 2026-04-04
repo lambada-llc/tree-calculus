@@ -1,5 +1,37 @@
 #!/usr/bin/env node
 "use strict";
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to5, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to5, key) && key !== except)
+        __defProp(to5, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to5;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+
+// src/main.mjs
+var main_exports = {};
+__export(main_exports, {
+  children: () => children,
+  evaluator: () => lazy_stacks_default,
+  formatter_dag: () => dag_default,
+  formatter_minbin: () => minbin_default,
+  formatter_readable: () => readable_default,
+  formatter_ternary: () => ternary_default,
+  formatters: () => formatters,
+  id: () => id,
+  marshal: () => m
+});
+module.exports = __toCommonJS(main_exports);
 
 // src/common.mjs
 function children(e, x) {
@@ -312,29 +344,43 @@ var formatters_infer = {};
 for (const format in formatters)
   formatters_infer[format] = (s) => [formatters[format].of(s), format];
 formatters_infer["infer"] = parse_infer;
-var args = process.argv.slice(2);
-var input_mode_file = false;
-var current_format = "infer";
-var last_format = "term";
-var current_value = id(lazy_stacks_default);
-for (const raw_arg of args) {
-  if (raw_arg.startsWith("-") && raw_arg.length > 1) {
-    const arg = raw_arg.replace(/^-+/, "");
-    if (arg === "file")
-      input_mode_file = true;
-    else if (arg in formatters_infer)
-      last_format = current_format = arg;
-    else
-      raise(`unrecognized format ${arg}`);
-  } else {
-    const content = raw_arg === "-" ? new Uint8Array((0, import_fs.readFileSync)(0)) : input_mode_file ? new Uint8Array((0, import_fs.readFileSync)(raw_arg)) : text_enc.encode(raw_arg);
-    input_mode_file = false;
-    const [value, format] = formatters_infer[current_format](content);
-    last_format = format;
-    current_value = lazy_stacks_default.apply(current_value, value);
+if (typeof require !== "undefined" && require.main === module) {
+  const args = process.argv.slice(2);
+  let input_mode_file = false;
+  let current_format = "infer";
+  let last_format = "term";
+  let current_value = id(lazy_stacks_default);
+  for (const raw_arg of args) {
+    if (raw_arg.startsWith("-") && raw_arg.length > 1) {
+      const arg = raw_arg.replace(/^-+/, "");
+      if (arg === "file")
+        input_mode_file = true;
+      else if (arg in formatters_infer)
+        last_format = current_format = arg;
+      else
+        raise(`unrecognized format ${arg}`);
+    } else {
+      const content = raw_arg === "-" ? new Uint8Array((0, import_fs.readFileSync)(0)) : input_mode_file ? new Uint8Array((0, import_fs.readFileSync)(raw_arg)) : text_enc.encode(raw_arg);
+      input_mode_file = false;
+      const [value, format] = formatters_infer[current_format](content);
+      last_format = format;
+      current_value = lazy_stacks_default.apply(current_value, value);
+    }
   }
+  if (last_format == "buffer")
+    process.stdout.write(formatters[last_format].to(current_value));
+  else
+    console.log(text_dec.decode(formatters[last_format].to(current_value)));
 }
-if (last_format == "buffer")
-  process.stdout.write(formatters[last_format].to(current_value));
-else
-  console.log(text_dec.decode(formatters[last_format].to(current_value)));
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  children,
+  evaluator,
+  formatter_dag,
+  formatter_minbin,
+  formatter_readable,
+  formatter_ternary,
+  formatters,
+  id,
+  marshal
+});
