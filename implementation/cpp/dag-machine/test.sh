@@ -5,7 +5,7 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 MAIN_JS="$DIR/../../typescript/main.js"
 
 # Compile
-clang++ "$DIR/reduce.cpp" -O3 -std=c++23 -o "$DIR/reduce.exe"
+"$DIR/compile.sh"
 
 pass=0
 fail=0

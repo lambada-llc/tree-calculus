@@ -11,9 +11,19 @@ struct Info {
 };
 
 static std::unordered_map<std::string, Info> env;
+static std::unordered_map<std::string, std::string> alias;
 static int counter = 0;
 
 static std::string fresh() { return "r" + std::to_string(counter++); }
+
+static std::string resolve(const std::string& name) {
+  const std::string* cur = &name;
+  while (true) {
+    auto it = alias.find(*cur);
+    if (it == alias.end()) return *cur;
+    cur = &it->second;
+  }
+}
 
 static Info lookup(const std::string& name) {
   auto it = env.find(name);
@@ -33,7 +43,7 @@ static void reduce(const std::string& target, const std::string& u, const std::s
     case LEAF:
       // apply(fork(leaf, v), c) = v
       env[target] = lookup(v);
-      std::cout << target << " " << v << "\n";
+      alias[target] = resolve(v);
       return;
     case STEM: {
       // apply(fork(stem(u'), v), c) = apply(apply(u', c), apply(v, c))
@@ -51,7 +61,7 @@ static void reduce(const std::string& target, const std::string& u, const std::s
         case LEAF:
           // c = leaf -> u'
           env[target] = lookup(iu.a);
-          std::cout << target << " " << iu.a << "\n";
+          alias[target] = resolve(iu.a);
           return;
         case STEM:
           // c = stem(c') -> apply(v', c')
@@ -70,17 +80,18 @@ static void reduce(const std::string& target, const std::string& u, const std::s
 }
 
 static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
+  alias.erase(target);
   auto info = lookup(func);
   switch (info.type) {
     case LEAF:
       // apply(leaf, x) = stem(x) — construction, no reduction
       env[target] = {STEM, arg, ""};
-      std::cout << target << " " << func << " " << arg << "\n";
+      std::cout << target << " " << resolve(func) << " " << resolve(arg) << "\n";
       return;
     case STEM:
       // apply(stem(u), x) = fork(u, x) — construction, no reduction
       env[target] = {FORK, info.a, arg};
-      std::cout << target << " " << func << " " << arg << "\n";
+      std::cout << target << " " << resolve(func) << " " << resolve(arg) << "\n";
       return;
     case FORK:
       // apply(fork(u, v), x) — reduction!
@@ -97,8 +108,8 @@ int main() {
     std::istringstream iss(line);
     std::string a, b, c, extra;
     if (!(iss >> a)) continue;
-    if (!(iss >> b)) { std::cout << line << "\n"; continue; }        // 1-word: terminal
-    if (!(iss >> c)) { env[a] = lookup(b); std::cout << line << "\n"; continue; } // 2-word: alias
+    if (!(iss >> b)) { std::cout << resolve(a) << "\n"; continue; }  // 1-word: terminal
+    if (!(iss >> c)) { alias.erase(a); env[a] = lookup(b); std::cout << a << " " << resolve(b) << "\n"; continue; } // 2-word: alias
     if (iss >> extra) continue;                                       // 4+ words: drop
     process_apply(a, b, c);                                           // 3-word: application
   }
