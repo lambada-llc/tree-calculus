@@ -1,0 +1,19 @@
+:0 △ △
+:1 :0 △
+t0 △
+t1 :0
+t2 :1
+:2 :1 △
+t3 :2
+:3 :2 △
+t4 :3
+t0_ref t0
+:4 t0_ref t0
+t1_ref :4
+:5 t1_ref t0
+t2_ref :5
+:6 t2_ref t0
+t3_ref :6
+:7 t3_ref t0
+t4_ref :7
+t4_ref

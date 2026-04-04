@@ -12,20 +12,36 @@ fail=0
 
 for dag in "$DIR"/*.dag; do
   [[ "$dag" == *.out.dag ]] && continue
+  [[ "$dag" == *.canon.dag ]] && continue
 
   name=$(basename "$dag")
-  out="${dag%.dag}.out.dag"
 
+  # Test reduce
+  out="${dag%.dag}.out.dag"
   "$DIR/reduce.exe" < "$dag" > "$out"
 
   expected=$(node "$MAIN_JS" --dag --file "$dag" --ternary)
   actual=$(node "$MAIN_JS" --dag --file "$out" --ternary)
 
   if [ "$expected" = "$actual" ]; then
-    echo "PASS $name (ternary: $expected)"
+    echo "PASS reduce $name (ternary: $expected)"
     ((pass++)) || true
   else
-    echo "FAIL $name: expected $expected, got $actual"
+    echo "FAIL reduce $name: expected $expected, got $actual"
+    ((fail++)) || true
+  fi
+
+  # Test canonicalize
+  canon="${dag%.dag}.canon.dag"
+  "$DIR/canonicalize.exe" < "$dag" > "$canon"
+
+  actual=$(node "$MAIN_JS" --dag --file "$canon" --ternary)
+
+  if [ "$expected" = "$actual" ]; then
+    echo "PASS canonicalize $name (ternary: $expected)"
+    ((pass++)) || true
+  else
+    echo "FAIL canonicalize $name: expected $expected, got $actual"
     ((fail++)) || true
   fi
 done
