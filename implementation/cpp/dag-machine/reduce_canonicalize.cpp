@@ -14,6 +14,7 @@ static std::unordered_map<std::string, Info> env;
 static std::unordered_map<std::string, std::string> alias;
 static std::unordered_map<std::string, std::string> canon;
 static std::unordered_map<std::string, std::string> hash_cons;
+static std::unordered_map<std::string, std::string> apply_memo;
 static int canon_counter = 0;
 static int temp_counter = 0;
 
@@ -113,6 +114,22 @@ static void reduce(const std::string& target, const std::string& u, const std::s
 }
 
 static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
+  auto cf = canonical(func);
+  auto ca = canonical(arg);
+  std::string memo_key;
+  memo_key.reserve(cf.size() + 1 + ca.size());
+  memo_key += cf;
+  memo_key += '\0';
+  memo_key += ca;
+
+  auto memo_it = apply_memo.find(memo_key);
+  if (memo_it != apply_memo.end()) {
+    auto& prev = memo_it->second;
+    env[target] = env[prev];
+    alias[target] = prev;
+    return;
+  }
+
   alias.erase(target);
   auto info = lookup(func);
   switch (info.type) {
@@ -120,17 +137,19 @@ static void process_apply(const std::string& target, const std::string& func, co
       // apply(leaf, x) = stem(x) — construction, no reduction
       env[target] = {STEM, arg, ""};
       emit(target, func, arg);
-      return;
+      break;
     case STEM:
       // apply(stem(u), x) = fork(u, x) — construction, no reduction
       env[target] = {FORK, info.a, arg};
       emit(target, func, arg);
-      return;
+      break;
     case FORK:
       // apply(fork(u, v), x) — reduction!
       reduce(target, info.a, info.b, arg);
-      return;
+      break;
   }
+
+  apply_memo[memo_key] = resolve(target);
 }
 
 int main() {
