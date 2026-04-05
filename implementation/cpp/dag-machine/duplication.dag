@@ -5,4 +5,26 @@ const k
 01 △ 1
 i 01 △
 id i
-id
+id2a id id
+id3aa id2a id
+id3ab id id2a
+id2b id id
+id3ba id2b id
+id3bb id id2b
+id6aaaa id3aa id3aa
+id6aaab id3aa id3ab
+id6aaba id3aa id3ba
+id6aabb id3aa id3bb
+id6abaa id3ab id3aa
+id6abab id3ab id3ab
+id6abba id3ab id3ba
+id6abbb id3ab id3bb
+id6baaa id3ba id3aa
+id6baab id3ba id3ab
+id6baba id3ba id3ba
+id6babb id3ba id3bb
+id6bbaa id3bb id3aa
+id6bbab id3bb id3ab
+id6bbba id3bb id3ba
+id6bbbb id3bb id3bb
+id6bbbb
