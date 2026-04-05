@@ -2,6 +2,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 enum Type { LEAF, STEM, FORK };
 
@@ -48,8 +49,6 @@ static Info lookup(const std::string& name) {
   return it->second;
 }
 
-static void process_apply(const std::string& target, const std::string& func, const std::string& arg);
-
 // Emit a construction node, using hash-consing to deduplicate
 static void emit(const std::string& target, const std::string& func, const std::string& arg) {
   auto cf = canonical(func);
@@ -70,86 +69,89 @@ static void emit(const std::string& target, const std::string& func, const std::
   }
 }
 
-// a = fork(u, v) applied to c — tree calculus reduction
-static void reduce(const std::string& target, const std::string& u, const std::string& v, const std::string& c) {
-  auto iu = lookup(u);
-  switch (iu.type) {
-    case LEAF:
-      // apply(fork(leaf, v), c) = v
-      env[target] = lookup(v);
-      alias[target] = resolve(v);
-      return;
-    case STEM: {
-      // apply(fork(stem(u'), v), c) = apply(apply(u', c), apply(v, c))
-      auto t1 = fresh_temp();
-      process_apply(t1, iu.a, c);
-      auto t2 = fresh_temp();
-      process_apply(t2, v, c);
-      process_apply(target, t1, t2);
-      return;
+struct Task {
+  std::string target, func, arg;
+};
+
+static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
+  std::vector<Task> stack;
+  stack.push_back({target, func, arg});
+
+  while (!stack.empty()) {
+    auto task = std::move(stack.back());
+    stack.pop_back();
+
+    auto cf = canonical(task.func);
+    auto ca = canonical(task.arg);
+    std::string memo_key;
+    memo_key.reserve(cf.size() + 1 + ca.size());
+    memo_key += cf;
+    memo_key += '\0';
+    memo_key += ca;
+
+    auto memo_it = apply_memo.find(memo_key);
+    if (memo_it != apply_memo.end()) {
+      auto& prev = memo_it->second;
+      env[task.target] = env[prev];
+      alias[task.target] = prev;
+      continue;
     }
-    case FORK: {
-      // apply(fork(fork(u', v'), v), c) = triage on c
-      auto ic = lookup(c);
-      switch (ic.type) {
-        case LEAF:
-          // c = leaf -> u'
-          env[target] = lookup(iu.a);
-          alias[target] = resolve(iu.a);
-          return;
-        case STEM:
-          // c = stem(c') -> apply(v', c')
-          process_apply(target, iu.b, ic.a);
-          return;
-        case FORK: {
-          // c = fork(cu, cv) -> apply(apply(v, cu), cv)
-          auto t = fresh_temp();
-          process_apply(t, v, ic.a);
-          process_apply(target, t, ic.b);
-          return;
+
+    alias.erase(task.target);
+    auto info = lookup(task.func);
+    switch (info.type) {
+      case LEAF:
+        env[task.target] = {STEM, task.arg, ""};
+        emit(task.target, task.func, task.arg);
+        apply_memo[memo_key] = resolve(task.target);
+        break;
+      case STEM:
+        env[task.target] = {FORK, info.a, task.arg};
+        emit(task.target, task.func, task.arg);
+        apply_memo[memo_key] = resolve(task.target);
+        break;
+      case FORK: {
+        // Inline reduce(target, info.a, info.b, arg)
+        auto iu = lookup(info.a);
+        switch (iu.type) {
+          case LEAF:
+            env[task.target] = lookup(info.b);
+            alias[task.target] = resolve(info.b);
+            apply_memo[memo_key] = resolve(task.target);
+            break;
+          case STEM: {
+            auto t1 = fresh_temp();
+            auto t2 = fresh_temp();
+            stack.push_back({task.target, t1, t2});
+            stack.push_back({t2, info.b, task.arg});
+            stack.push_back({t1, iu.a, task.arg});
+            break;
+          }
+          case FORK: {
+            auto ic = lookup(task.arg);
+            switch (ic.type) {
+              case LEAF:
+                env[task.target] = lookup(iu.a);
+                alias[task.target] = resolve(iu.a);
+                apply_memo[memo_key] = resolve(task.target);
+                break;
+              case STEM:
+                stack.push_back({task.target, iu.b, ic.a});
+                break;
+              case FORK: {
+                auto t = fresh_temp();
+                stack.push_back({task.target, t, ic.b});
+                stack.push_back({t, info.b, ic.a});
+                break;
+              }
+            }
+            break;
+          }
         }
+        break;
       }
     }
   }
-}
-
-static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
-  auto cf = canonical(func);
-  auto ca = canonical(arg);
-  std::string memo_key;
-  memo_key.reserve(cf.size() + 1 + ca.size());
-  memo_key += cf;
-  memo_key += '\0';
-  memo_key += ca;
-
-  auto memo_it = apply_memo.find(memo_key);
-  if (memo_it != apply_memo.end()) {
-    auto& prev = memo_it->second;
-    env[target] = env[prev];
-    alias[target] = prev;
-    return;
-  }
-
-  alias.erase(target);
-  auto info = lookup(func);
-  switch (info.type) {
-    case LEAF:
-      // apply(leaf, x) = stem(x) — construction, no reduction
-      env[target] = {STEM, arg, ""};
-      emit(target, func, arg);
-      break;
-    case STEM:
-      // apply(stem(u), x) = fork(u, x) — construction, no reduction
-      env[target] = {FORK, info.a, arg};
-      emit(target, func, arg);
-      break;
-    case FORK:
-      // apply(fork(u, v), x) — reduction!
-      reduce(target, info.a, info.b, arg);
-      break;
-  }
-
-  apply_memo[memo_key] = resolve(target);
 }
 
 int main() {

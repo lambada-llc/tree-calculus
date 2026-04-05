@@ -2,6 +2,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 enum Type { LEAF, STEM, FORK };
 
@@ -34,69 +35,69 @@ static Info lookup(const std::string& name) {
   return it->second;
 }
 
-static void process_apply(const std::string& target, const std::string& func, const std::string& arg);
-
-// a = fork(u, v) applied to c — this is where tree calculus reduction happens
-static void reduce(const std::string& target, const std::string& u, const std::string& v, const std::string& c) {
-  auto iu = lookup(u);
-  switch (iu.type) {
-    case LEAF:
-      // apply(fork(leaf, v), c) = v
-      env[target] = lookup(v);
-      alias[target] = resolve(v);
-      return;
-    case STEM: {
-      // apply(fork(stem(u'), v), c) = apply(apply(u', c), apply(v, c))
-      auto t1 = fresh();
-      process_apply(t1, iu.a, c);
-      auto t2 = fresh();
-      process_apply(t2, v, c);
-      process_apply(target, t1, t2);
-      return;
-    }
-    case FORK: {
-      // apply(fork(fork(u', v'), v), c) = triage on c
-      auto ic = lookup(c);
-      switch (ic.type) {
-        case LEAF:
-          // c = leaf -> u'
-          env[target] = lookup(iu.a);
-          alias[target] = resolve(iu.a);
-          return;
-        case STEM:
-          // c = stem(c') -> apply(v', c')
-          process_apply(target, iu.b, ic.a);
-          return;
-        case FORK: {
-          // c = fork(cu, cv) -> apply(apply(v, cu), cv)
-          auto t = fresh();
-          process_apply(t, v, ic.a);
-          process_apply(target, t, ic.b);
-          return;
-        }
-      }
-    }
-  }
-}
+struct Task {
+  std::string target, func, arg;
+};
 
 static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
-  alias.erase(target);
-  auto info = lookup(func);
-  switch (info.type) {
-    case LEAF:
-      // apply(leaf, x) = stem(x) — construction, no reduction
-      env[target] = {STEM, arg, ""};
-      std::cout << target << " " << resolve(func) << " " << resolve(arg) << "\n";
-      return;
-    case STEM:
-      // apply(stem(u), x) = fork(u, x) — construction, no reduction
-      env[target] = {FORK, info.a, arg};
-      std::cout << target << " " << resolve(func) << " " << resolve(arg) << "\n";
-      return;
-    case FORK:
-      // apply(fork(u, v), x) — reduction!
-      reduce(target, info.a, info.b, arg);
-      return;
+  std::vector<Task> stack;
+  stack.push_back({target, func, arg});
+
+  while (!stack.empty()) {
+    auto task = std::move(stack.back());
+    stack.pop_back();
+
+    alias.erase(task.target);
+    auto info = lookup(task.func);
+    switch (info.type) {
+      case LEAF:
+        env[task.target] = {STEM, task.arg, ""};
+        std::cout << task.target << " " << resolve(task.func) << " " << resolve(task.arg) << "\n";
+        break;
+      case STEM:
+        env[task.target] = {FORK, info.a, task.arg};
+        std::cout << task.target << " " << resolve(task.func) << " " << resolve(task.arg) << "\n";
+        break;
+      case FORK: {
+        // Inline reduce(target, info.a, info.b, arg)
+        auto iu = lookup(info.a);
+        switch (iu.type) {
+          case LEAF:
+            env[task.target] = lookup(info.b);
+            alias[task.target] = resolve(info.b);
+            break;
+          case STEM: {
+            auto t1 = fresh();
+            auto t2 = fresh();
+            // Push in reverse order so t1 executes first
+            stack.push_back({task.target, t1, t2});
+            stack.push_back({t2, info.b, task.arg});
+            stack.push_back({t1, iu.a, task.arg});
+            break;
+          }
+          case FORK: {
+            auto ic = lookup(task.arg);
+            switch (ic.type) {
+              case LEAF:
+                env[task.target] = lookup(iu.a);
+                alias[task.target] = resolve(iu.a);
+                break;
+              case STEM:
+                stack.push_back({task.target, iu.b, ic.a});
+                break;
+              case FORK: {
+                auto t = fresh();
+                stack.push_back({task.target, t, ic.b});
+                stack.push_back({t, info.b, ic.a});
+                break;
+              }
+            }
+            break;
+          }
+        }
+        break;
+      }
+    }
   }
 }
 
