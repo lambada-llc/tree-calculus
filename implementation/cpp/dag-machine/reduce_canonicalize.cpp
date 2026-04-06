@@ -154,11 +154,14 @@ static void process_apply(const std::string& target, const std::string& func, co
   }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  bool progress = argc > 1 && std::string(argv[1]) == "--progress";
   env["\xe2\x96\xb3"] = {LEAF, "", ""}; // △
 
   std::string line;
+  int lineno = 0;
   while (std::getline(std::cin, line)) {
+    if (progress) std::cerr << ++lineno << " " << line << "\n";
     std::istringstream iss(line);
     std::string a, b, c, extra;
     if (!(iss >> a)) continue;

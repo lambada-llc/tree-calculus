@@ -15,9 +15,13 @@ static std::string resolve(const std::string& name) {
   return name; // undefined symbol — keep as-is
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  bool progress = argc > 1 && std::string(argv[1]) == "--progress";
+
   std::string line;
+  int lineno = 0;
   while (std::getline(std::cin, line)) {
+    if (progress) std::cerr << ++lineno << " " << line << "\n";
     std::istringstream iss(line);
     std::string a, b, c, extra;
     if (!(iss >> a)) continue;
