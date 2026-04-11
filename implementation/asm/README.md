@@ -2,7 +2,7 @@
 
 The smallest working ELF binaries that evaluate [tree calculus](https://treecalcul.us/specification/).
 
-A huge thank you to Justine Tunney, her [Lambda Calculus in 383 Bytes](https://justine.lol/lambda/) post was a big source of inspiration for this code golfing exercise.
+A huge thank you to Justine Tunney, her [Lambda Calculus in 383 Bytes](https://justine.lol/lambda/) post was a big source of inspiration for this code golfing exercise. Note: The smallest binaries here are closer to 300 bytes, which is exciting, but I wanna emphasize that those evaluators **don't implement garbage collection** while Justine's record program does! So this is not an apple-to-apple comparison between tree calculus and lambda calculus. At least for now.
 
 ## Variants
 
