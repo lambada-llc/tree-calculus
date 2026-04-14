@@ -71,11 +71,12 @@ static void emit(const std::string& target, const std::string& func, const std::
 
 struct Task {
   std::string target, func, arg;
+  std::vector<std::string> pending_memo_keys;
 };
 
 static void process_apply(const std::string& target, const std::string& func, const std::string& arg) {
   std::vector<Task> stack;
-  stack.push_back({target, func, arg});
+  stack.push_back({target, func, arg, {}});
 
   while (!stack.empty()) {
     auto task = std::move(stack.back());
@@ -94,54 +95,76 @@ static void process_apply(const std::string& target, const std::string& func, co
       auto& prev = memo_it->second;
       env[task.target] = env[prev];
       alias[task.target] = prev;
+      for (auto& pk : task.pending_memo_keys) {
+        apply_memo[pk] = prev;
+      }
       continue;
     }
 
     alias.erase(task.target);
     auto info = lookup(task.func);
     switch (info.type) {
-      case LEAF:
+      case LEAF: {
         env[task.target] = {STEM, task.arg, ""};
         emit(task.target, task.func, task.arg);
-        apply_memo[memo_key] = resolve(task.target);
+        auto resolved = resolve(task.target);
+        apply_memo[memo_key] = resolved;
+        for (auto& pk : task.pending_memo_keys) apply_memo[pk] = resolved;
         break;
-      case STEM:
+      }
+      case STEM: {
         env[task.target] = {FORK, info.a, task.arg};
         emit(task.target, task.func, task.arg);
-        apply_memo[memo_key] = resolve(task.target);
+        auto resolved = resolve(task.target);
+        apply_memo[memo_key] = resolved;
+        for (auto& pk : task.pending_memo_keys) apply_memo[pk] = resolved;
         break;
+      }
       case FORK: {
         // Inline reduce(target, info.a, info.b, arg)
         auto iu = lookup(info.a);
         switch (iu.type) {
-          case LEAF:
+          case LEAF: {
             env[task.target] = lookup(info.b);
             alias[task.target] = resolve(info.b);
-            apply_memo[memo_key] = resolve(task.target);
+            auto resolved = resolve(task.target);
+            apply_memo[memo_key] = resolved;
+            for (auto& pk : task.pending_memo_keys) apply_memo[pk] = resolved;
             break;
+          }
           case STEM: {
             auto t1 = fresh_temp();
             auto t2 = fresh_temp();
-            stack.push_back({task.target, t1, t2});
-            stack.push_back({t2, info.b, task.arg});
-            stack.push_back({t1, iu.a, task.arg});
+            auto new_pending = std::move(task.pending_memo_keys);
+            new_pending.push_back(std::move(memo_key));
+            stack.push_back({task.target, t1, t2, std::move(new_pending)});
+            stack.push_back({t2, info.b, task.arg, {}});
+            stack.push_back({t1, iu.a, task.arg, {}});
             break;
           }
           case FORK: {
             auto ic = lookup(task.arg);
             switch (ic.type) {
-              case LEAF:
+              case LEAF: {
                 env[task.target] = lookup(iu.a);
                 alias[task.target] = resolve(iu.a);
-                apply_memo[memo_key] = resolve(task.target);
+                auto resolved = resolve(task.target);
+                apply_memo[memo_key] = resolved;
+                for (auto& pk : task.pending_memo_keys) apply_memo[pk] = resolved;
                 break;
-              case STEM:
-                stack.push_back({task.target, iu.b, ic.a});
+              }
+              case STEM: {
+                auto new_pending = std::move(task.pending_memo_keys);
+                new_pending.push_back(std::move(memo_key));
+                stack.push_back({task.target, iu.b, ic.a, std::move(new_pending)});
                 break;
+              }
               case FORK: {
                 auto t = fresh_temp();
-                stack.push_back({task.target, t, ic.b});
-                stack.push_back({t, info.b, ic.a});
+                auto new_pending = std::move(task.pending_memo_keys);
+                new_pending.push_back(std::move(memo_key));
+                stack.push_back({task.target, t, ic.b, std::move(new_pending)});
+                stack.push_back({t, info.b, ic.a, {}});
                 break;
               }
             }
