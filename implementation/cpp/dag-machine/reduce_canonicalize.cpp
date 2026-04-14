@@ -1,3 +1,5 @@
+#include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -18,6 +20,10 @@ static std::unordered_map<std::string, std::string> hash_cons;
 static std::unordered_map<std::string, std::string> apply_memo;
 static int canon_counter = 0;
 static int temp_counter = 0;
+static bool stats_enabled = false;
+static int64_t stat_contractions = 0;
+static int64_t stat_reduction_steps = 0;
+static int64_t stat_output_lines = 0;
 
 static std::string fresh_canon() { return ":" + std::to_string(canon_counter++); }
 static std::string fresh_temp() { return ":t:" + std::to_string(temp_counter++); }
@@ -66,6 +72,7 @@ static void emit(const std::string& target, const std::string& func, const std::
     canon[target] = cn;
     hash_cons[key] = cn;
     std::cout << cn << " " << cf << " " << ca << "\n";
+    if (stats_enabled) ++stat_output_lines;
   }
 }
 
@@ -79,6 +86,7 @@ static void process_apply(const std::string& target, const std::string& func, co
   stack.push_back({target, func, arg, {}});
 
   while (!stack.empty()) {
+    if (stats_enabled) ++stat_reduction_steps;
     auto task = std::move(stack.back());
     stack.pop_back();
 
@@ -121,6 +129,7 @@ static void process_apply(const std::string& target, const std::string& func, co
         break;
       }
       case FORK: {
+        if (stats_enabled) ++stat_contractions;
         // Inline reduce(target, info.a, info.b, arg)
         auto iu = lookup(info.a);
         switch (iu.type) {
@@ -178,7 +187,12 @@ static void process_apply(const std::string& target, const std::string& func, co
 }
 
 int main(int argc, char* argv[]) {
-  bool progress = argc > 1 && std::string(argv[1]) == "--progress";
+  bool progress = false;
+  for (int i = 1; i < argc; ++i) {
+    std::string arg(argv[i]);
+    if (arg == "--progress") progress = true;
+    if (arg == "--stats") stats_enabled = true;
+  }
   env["\xe2\x96\xb3"] = {LEAF, "", ""}; // △
 
   std::string line;
@@ -188,15 +202,26 @@ int main(int argc, char* argv[]) {
     std::istringstream iss(line);
     std::string a, b, c, extra;
     if (!(iss >> a)) continue;
-    if (!(iss >> b)) { std::cout << canonical(a) << "\n"; continue; }  // 1-word: terminal
+    if (!(iss >> b)) {                                                    // 1-word: terminal
+      std::cout << canonical(a) << "\n";
+      if (stats_enabled) ++stat_output_lines;
+      continue;
+    }
     if (!(iss >> c)) {                                                   // 2-word: alias/export — keep LHS name
       alias.erase(a);
       env[a] = lookup(b);
       canon[a] = a;
       std::cout << a << " " << canonical(b) << "\n";
+      if (stats_enabled) ++stat_output_lines;
       continue;
     }
     if (iss >> extra) continue;                                          // 4+ words: drop
     process_apply(a, b, c);                                             // 3-word: application
+  }
+
+  if (stats_enabled) {
+    std::cerr << std::left << std::setw(17) << "Contractions:" << stat_contractions << "\n";
+    std::cerr << std::left << std::setw(17) << "Reduction steps:" << stat_reduction_steps << "\n";
+    std::cerr << std::left << std::setw(17) << "Output lines:" << stat_output_lines << "\n";
   }
 }
