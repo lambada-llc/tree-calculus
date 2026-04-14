@@ -4,6 +4,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 enum Type { LEAF, STEM, FORK };
@@ -24,6 +25,20 @@ static bool stats_enabled = false;
 static int64_t stat_contractions = 0;
 static int64_t stat_reduction_steps = 0;
 static int64_t stat_output_lines = 0;
+
+// Buffered output
+struct OutputEntry {
+  int type; // 0 = node def (:N left right), 1 = two-word, 2 = one-word
+  std::string text;
+  std::string canon_name; // for type 0: the :N canonical name (for reachability filtering)
+};
+static std::vector<OutputEntry> output_buffer;
+
+// For reachability walk: maps :N canonical name -> (left child, right child)
+static std::unordered_map<std::string, std::pair<std::string, std::string>> node_defs;
+
+// Roots for reachability: canonical RHS of 2-word lines and values of 1-word lines
+static std::vector<std::string> reachability_roots;
 
 static std::string fresh_canon() { return ":" + std::to_string(canon_counter++); }
 static std::string fresh_temp() { return ":t:" + std::to_string(temp_counter++); }
@@ -71,8 +86,8 @@ static void emit(const std::string& target, const std::string& func, const std::
     auto cn = fresh_canon();
     canon[target] = cn;
     hash_cons[key] = cn;
-    std::cout << cn << " " << cf << " " << ca << "\n";
-    if (stats_enabled) ++stat_output_lines;
+    node_defs[cn] = {cf, ca};
+    output_buffer.push_back({0, cn + " " + cf + " " + ca, cn});
   }
 }
 
@@ -203,20 +218,49 @@ int main(int argc, char* argv[]) {
     std::string a, b, c, extra;
     if (!(iss >> a)) continue;
     if (!(iss >> b)) {                                                    // 1-word: terminal
-      std::cout << canonical(a) << "\n";
-      if (stats_enabled) ++stat_output_lines;
+      auto ca = canonical(a);
+      reachability_roots.push_back(ca);
+      output_buffer.push_back({2, ca, ""});
       continue;
     }
     if (!(iss >> c)) {                                                   // 2-word: alias/export — keep LHS name
       alias.erase(a);
       env[a] = lookup(b);
       canon[a] = a;
-      std::cout << a << " " << canonical(b) << "\n";
-      if (stats_enabled) ++stat_output_lines;
+      auto cb = canonical(b);
+      reachability_roots.push_back(cb);
+      output_buffer.push_back({1, a + " " + cb, ""});
       continue;
     }
     if (iss >> extra) continue;                                          // 4+ words: drop
     process_apply(a, b, c);                                             // 3-word: application
+  }
+
+  // Reachability walk from named symbols and entry points
+  std::unordered_set<std::string> reachable;
+  {
+    std::vector<std::string> worklist;
+    for (auto& root : reachability_roots) {
+      if (node_defs.count(root)) worklist.push_back(root);
+    }
+    while (!worklist.empty()) {
+      auto name = std::move(worklist.back());
+      worklist.pop_back();
+      if (!reachable.insert(name).second) continue;
+      auto it = node_defs.find(name);
+      if (it == node_defs.end()) continue;
+      auto& left = it->second.first;
+      auto& right = it->second.second;
+      if (node_defs.count(left) && !reachable.count(left)) worklist.push_back(left);
+      if (node_defs.count(right) && !reachable.count(right)) worklist.push_back(right);
+    }
+  }
+
+  // Output in original order, filtering unreachable node definitions
+  for (auto& entry : output_buffer) {
+    if (entry.type == 0 && !reachable.count(entry.canon_name)) continue;
+    std::cout << entry.text << "\n";
+    if (stats_enabled) ++stat_output_lines;
   }
 
   if (stats_enabled) {
