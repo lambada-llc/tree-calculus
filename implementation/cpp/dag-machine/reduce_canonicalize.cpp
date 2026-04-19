@@ -69,6 +69,8 @@ static bool stats_enabled = false;
 static int64_t stat_contractions = 0;
 static int64_t stat_reduction_steps = 0;
 static int64_t stat_output_lines = 0;
+static int64_t fuel_remaining = -1; // -1 = unlimited
+static int32_t current_lineno = 0;
 
 // Buffered output
 struct OutputEntry {
@@ -152,6 +154,15 @@ static void process_apply(int32_t target, int32_t func, int32_t arg) {
 
   while (!stack.empty()) {
     if (stats_enabled) ++stat_reduction_steps;
+    if (fuel_remaining >= 0) {
+      if (fuel_remaining == 0) {
+        std::cerr << "fuel exhausted";
+        if (current_lineno > 0) std::cerr << " at line " << current_lineno;
+        std::cerr << std::endl;
+        std::exit(1);
+      }
+      --fuel_remaining;
+    }
     auto task = std::move(stack.back());
     stack.pop_back();
 
@@ -252,7 +263,9 @@ int main(int argc, char* argv[]) {
   for (int i = 1; i < argc; ++i) {
     std::string arg(argv[i]);
     if (arg == "--progress") progress = true;
-    if (arg == "--stats") stats_enabled = true;
+    else if (arg == "--stats") stats_enabled = true;
+    else if (arg == "--fuel" && i + 1 < argc) fuel_remaining = std::stoll(argv[++i]);
+    else if (arg.rfind("--fuel=", 0) == 0) fuel_remaining = std::stoll(arg.substr(7));
   }
 
   // Pre-allocate for typical workload
@@ -271,7 +284,6 @@ int main(int argc, char* argv[]) {
   const char* p = input.data();
   const char* end = p + input.size();
   std::string words[4];
-  int lineno = 0;
 
   while (p < end) {
     // Skip to start of line content
@@ -291,7 +303,8 @@ int main(int argc, char* argv[]) {
     while (p < end && *p != '\n') ++p;
     if (p < end) ++p;
 
-    if (progress) std::cerr << ++lineno << " " << words[0] << "\n";
+    ++current_lineno;
+    if (progress) std::cerr << current_lineno << " " << words[0] << "\n";
 
     if (nwords == 0) continue;
     int32_t a = intern(words[0]);
