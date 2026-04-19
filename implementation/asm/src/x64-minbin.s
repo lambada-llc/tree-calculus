@@ -1,6 +1,4 @@
 # ============================================================
-# Tree Calculus Evaluator — x86-64 Assembly (minbin I/O)
-#
 # Key insight: in minimalist binary encoding, parsing IS evaluation.
 # Input:  1 = leaf (△), 0 A B = apply(A, B).
 # A single recursive parse_eval() function replaces the identity

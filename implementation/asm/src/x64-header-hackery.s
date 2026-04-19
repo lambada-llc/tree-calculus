@@ -1,3 +1,4 @@
+# ============================================================
 # Code-in-header layout:
 #   e_version [20:24] → _start entry: jmp .Linit2 (2B) + padding (2B)
 #   p_paddr   [64:70] → exit epilogue: movb $60,%al; xorl %edi,%edi; syscall
