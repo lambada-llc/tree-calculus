@@ -58,6 +58,36 @@ printf "os:    %s\n" "$(uname -sr)"
 printf "date:  %s\n" "$(date '+%Y-%m-%d %H:%M')"
 echo
 
+# --- auto-build missing implementations ---
+REPO_ROOT="$BENCH_DIR/.."
+
+CPP_BIN="$REPO_ROOT/implementation/cpp/main.exe"
+if [[ ! -x "$CPP_BIN" ]]; then
+  printf "building C++... "
+  if (cd "$REPO_ROOT/implementation/cpp" && bash compile.sh) 2>/dev/null; then
+    printf "ok\n"
+  else
+    printf "failed (skipping)\n"
+  fi
+fi
+
+if [[ "$(uname -m)" == "x86_64" ]]; then
+  ASM_DIR="$REPO_ROOT/implementation/asm"
+  needs_asm_build=false
+  for variant in x64 x64-jay x64-noid x64-minbin x64-minbin-deep; do
+    [[ ! -x "$ASM_DIR/bin/$variant" ]] && needs_asm_build=true && break
+  done
+  if $needs_asm_build; then
+    printf "building ASM... "
+    if (bash "$ASM_DIR/build.sh") 2>/dev/null; then
+      printf "ok\n"
+    else
+      printf "failed (skipping)\n"
+    fi
+  fi
+fi
+echo
+
 # --- sanity-check (size size) ---
 SIZE_TERNARY='21212120112121100101020212021201120112002121200121100212120212021200010212021200011202120212000101120101121201121211001010200'
 SIZE_EXPECTED='111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111110'
