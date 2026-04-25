@@ -1,0 +1,47 @@
+cpu:   unknown (x86_64, 16 cores)
+os:    Linux 4.4.0
+date:  2026-04-25 17:48
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.073s
+  C++                                 SKIP  not built
+  Python                              PASS  0.055s
+  WASM                                FAIL  exit 139
+  ASM x64                             SKIP  not built
+  ASM x64-jay                         SKIP  not built
+  ASM x64-noid                        SKIP  not built
+  ASM x64-minbin                      SKIP  not built
+  ASM x64-minbin-deep                 SKIP  not built
+
+recursive-fib (n=24)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                FAIL  exit 139
+  ASM x64                             SKIP  not built
+  ASM x64-jay                         SKIP  not built
+  ASM x64-noid                        SKIP  not built
+  ASM x64-minbin                      SKIP  not built
+  ASM x64-minbin-deep                 SKIP  not built
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  1.390s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             SKIP  not built
+  ASM x64-jay                         SKIP  not built
+  ASM x64-noid                        SKIP  not built
+  ASM x64-minbin                      SKIP  not built
+  ASM x64-minbin-deep                 SKIP  not built
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             SKIP  not built
+  ASM x64-jay                         SKIP  not built
+  ASM x64-noid                        SKIP  not built
+  ASM x64-minbin                      SKIP  not built
+  ASM x64-minbin-deep                 SKIP  not built
