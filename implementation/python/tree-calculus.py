@@ -7,7 +7,12 @@ TC        | Python
 △ a b c  | (a, b, c)
 '''
 
-
+# Example usage of "apply": negating booleans
+# _false = ()
+# _true = ((),)
+# _not = ((((),),((),())),())
+# print(apply(_not, _false))  # ((),)
+# print(apply(_not, _true))   # ()
 def apply(a, b):
     match a:
         case ():
@@ -35,10 +40,24 @@ def reduce(t):
     return t
 
 
-# Example: negating booleans
-_false = ()
-_true = ((),)
-_not = ((((),),((),())),())
+def parse_ternary(s):
+    it = iter(s)
+    def parse():
+        match next(it):
+            case '0': return ()
+            case '1': return (parse(),)
+            case '2': return (parse(), parse())
+    return parse()
 
-print(apply(_not, _false))  # ((),)
-print(apply(_not, _true))   # ()
+def format_ternary(t):
+    match t:
+        case ():        return '0'
+        case (x,):      return '1' + format_ternary(x)
+        case (x, y):    return '2' + format_ternary(x) + format_ternary(y)
+
+if __name__ == '__main__':
+    import sys
+    prog_line, arg_line = sys.stdin.read().splitlines()[:2]
+    prog = parse_ternary(prog_line)
+    arg  = parse_ternary(arg_line)
+    print(format_ternary(apply(prog, arg)))
