@@ -1,0 +1,39 @@
+cpu:   Apple M2 (arm64, 8 cores)
+os:    Darwin 24.6.0
+date:  2026-04-25 13:34
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.025s
+  C++ eager-value-mem                 PASS  0.004s
+  C++ eager-ternary-ref               PASS  0.004s
+  C++ eager-ternary-vm                PASS  0.004s
+  Python                              PASS  0.016s
+  WASM                                PASS  0.027s
+  ASM                                 SKIP  x86_64 required
+
+recursive-fib (n=24)
+  JavaScript (reference)              PASS  0.893s
+  C++ eager-value-mem                 PASS  0.137s
+  C++ eager-ternary-ref               PASS  0.192s
+  C++ eager-ternary-vm                PASS  0.195s
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                PASS  0.144s
+  ASM                                 SKIP  x86_64 required
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  0.489s
+  C++ eager-value-mem                 FAIL  exit 139
+  C++ eager-ternary-ref               FAIL  exit 139
+  C++ eager-ternary-vm                PASS  0.069s
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 1
+  ASM                                 SKIP  x86_64 required
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              PASS  1.059s
+  C++ eager-value-mem                 PASS  0.239s
+  C++ eager-ternary-ref               PASS  0.257s
+  C++ eager-ternary-vm                PASS  0.278s
+  Python                              FAIL  exit 1
+  WASM                                PASS  0.273s
+  ASM                                 SKIP  x86_64 required
