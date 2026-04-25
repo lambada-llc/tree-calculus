@@ -188,7 +188,7 @@ fi
 ASM_DIR="$REPO_ROOT/implementation/asm"
 if [[ -f "$ASM_DIR/test.mjs" ]]; then
   if [[ "$(uname -m)" == "x86_64" ]]; then
-    for variant in x64 x64-noid; do
+    for variant in x64 x64-noid x64-vm; do
       BIN_PATH="$ASM_DIR/bin/$variant"
       if [[ -x "$BIN_PATH" ]]; then
         bench "ASM $variant" --stdin "$BIN_PATH"

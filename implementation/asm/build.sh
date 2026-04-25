@@ -19,7 +19,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$SCRIPT_DIR/src"
 BIN="$SCRIPT_DIR/bin"
 
-ALL_VARIANTS="x64 x64-jay x64-noid x64-minbin x64-minbin-deep"
+ALL_VARIANTS="x64 x64-jay x64-noid x64-minbin x64-minbin-deep x64-vm"
 
 mkdir -p "$BIN"
 

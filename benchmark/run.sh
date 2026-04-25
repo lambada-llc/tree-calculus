@@ -74,7 +74,7 @@ fi
 if [[ "$(uname -m)" == "x86_64" ]]; then
   ASM_DIR="$REPO_ROOT/implementation/asm"
   needs_asm_build=false
-  for variant in x64 x64-jay x64-noid x64-minbin x64-minbin-deep; do
+  for variant in x64 x64-jay x64-noid x64-minbin x64-minbin-deep x64-vm; do
     [[ ! -x "$ASM_DIR/bin/$variant" ]] && needs_asm_build=true && break
   done
   if $needs_asm_build; then

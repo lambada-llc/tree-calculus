@@ -5,3 +5,4 @@ x64-jay            345 B            309 B
 x64-noid           352 B            319 B
 x64-minbin         346 B            313 B
 x64-minbin-deep    341 B            308 B
+x64-vm             373 B            339 B
