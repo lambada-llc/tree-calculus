@@ -1,0 +1,45 @@
+cpu:   unknown (x86_64, 16 cores)
+os:    Linux 4.4.0
+date:  2026-04-25 18:08
+
+building C++... failed (skipping)
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.072s
+  C++                                 SKIP  not built
+  Python                              PASS  0.047s
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.015s
+  ASM x64-noid                        PASS  0.014s
+  ASM x64-minbin                      PASS  0.017s
+  ASM x64-minbin-deep                 PASS  0.017s
+
+recursive-fib (n=24)
+  JavaScript (reference)              PASS  1.954s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                FAIL  exit 139
+  ASM x64                             FAIL  exit 139
+  ASM x64-noid                        FAIL  exit 139
+  ASM x64-minbin                      FAIL  exit 139
+  ASM x64-minbin-deep                 FAIL  exit 139
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  1.300s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.107s
+  ASM x64-noid                        PASS  0.108s
+  ASM x64-minbin                      PASS  0.120s
+  ASM x64-minbin-deep                 FAIL  exit 139
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             FAIL  exit 139
+  ASM x64-noid                        FAIL  exit 139
+  ASM x64-minbin                      FAIL  exit 139
+  ASM x64-minbin-deep                 FAIL  exit 139

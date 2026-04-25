@@ -41,14 +41,47 @@ fi
 # Join arguments with newlines for stdin-based implementations
 stdin_args() { printf '%s\n' "$@"; }
 
+# Ternary → minbin: each char maps independently (prefix-free property preserves structure)
+#   0 → 1   (leaf)
+#   1 → 01  (stem prefix)
+#   2 → 001 (fork prefix)
+ternary_to_minbin() {
+  local result="" i c input="$1" len="${#1}"
+  for (( i=0; i<len; i++ )); do
+    c="${input:$i:1}"
+    case "$c" in
+      0) result+="1"   ;;
+      1) result+="01"  ;;
+      2) result+="001" ;;
+    esac
+  done
+  printf '%s' "$result"
+}
+
+# Build a single left-fold minbin expression from an array of ternary args.
+# Mirrors test.mjs buildMinbinInput: expr = mb(args[0]); for i>0: expr = "0" expr mb(args[i])
+build_minbin_input() {
+  local expr
+  expr=$(ternary_to_minbin "$1"); shift
+  local arg
+  for arg in "$@"; do
+    expr="0${expr}$(ternary_to_minbin "$arg")"
+  done
+  printf '%s' "$expr"
+}
+
 # Run CMD BENCH_N times, report best time, assert output each run.
-# Usage: bench LABEL [--stdin] CMD [ARGS...]
-#   --stdin  pipe stdin_args to CMD instead of running it directly
+# Usage: bench LABEL [--stdin] [--stdin-str STR] [--expected STR] CMD [ARGS...]
+#   --stdin          pipe stdin_args(ARGS) to CMD
+#   --stdin-str STR  pipe STR to CMD instead
+#   --expected STR   compare output against STR instead of $EXPECTED
 # Stops early on non-zero exit (crash or timeout); reports "FAIL <exit code>".
 bench() {
   local label="$1"; shift
-  local pipe_stdin=false
-  if [[ "${1-}" == "--stdin" ]]; then pipe_stdin=true; shift; fi
+  local pipe_stdin=false bench_stdin="" bench_expected="$EXPECTED"
+  if [[ "${1-}" == "--stdin" ]]; then pipe_stdin=true; bench_stdin=$(stdin_args "${ARGS[@]}"); shift; fi
+  if [[ "${1-}" == "--stdin-str" ]]; then pipe_stdin=true; bench_stdin="$2"; shift 2; fi
+  if [[ "${1-}" == "--expected" ]]; then bench_expected="$2"; shift 2; fi
 
   local i t output times=() best exit_code fail_exit=0 fail_output="" any_fail=false timed_out=false
 
@@ -56,9 +89,9 @@ bench() {
     exit_code=0
     if $pipe_stdin; then
       if [[ ${#TIMEOUT[@]} -gt 0 ]]; then
-        { time output=$(stdin_args "${ARGS[@]}" | "${TIMEOUT[@]}" "$@" 2>/dev/null); } 2>"$TIMEFILE" || exit_code=$?
+        { time output=$(printf '%s\n' "$bench_stdin" | "${TIMEOUT[@]}" "$@" 2>/dev/null); } 2>"$TIMEFILE" || exit_code=$?
       else
-        { time output=$(stdin_args "${ARGS[@]}" | "$@" 2>/dev/null); } 2>"$TIMEFILE" || exit_code=$?
+        { time output=$(printf '%s\n' "$bench_stdin" | "$@" 2>/dev/null); } 2>"$TIMEFILE" || exit_code=$?
       fi
     else
       if [[ ${#TIMEOUT[@]} -gt 0 ]]; then
@@ -76,7 +109,7 @@ bench() {
     elif [[ $exit_code -eq 124 ]]; then
       any_fail=true
       timed_out=true
-    elif [[ "$output" != "$EXPECTED" ]]; then
+    elif [[ "$output" != "$bench_expected" ]]; then
       any_fail=true
       fail_output="$output"
     fi
@@ -94,7 +127,7 @@ bench() {
     FAILURES=$((FAILURES + 1))
   else
     printf "  %-35s FAIL  %ss\n" "$label" "$best"
-    printf "    expected: %s\n" "$EXPECTED"
+    printf "    expected: %s\n" "$bench_expected"
     printf "    got:      %s\n" "$fail_output"
     FAILURES=$((FAILURES + 1))
   fi
@@ -155,10 +188,21 @@ fi
 ASM_DIR="$REPO_ROOT/implementation/asm"
 if [[ -f "$ASM_DIR/test.mjs" ]]; then
   if [[ "$(uname -m)" == "x86_64" ]]; then
-    for variant in x64 x64-jay x64-noid x64-minbin x64-minbin-deep; do
+    for variant in x64 x64-noid; do
       BIN_PATH="$ASM_DIR/bin/$variant"
       if [[ -x "$BIN_PATH" ]]; then
         bench "ASM $variant" --stdin "$BIN_PATH"
+      else
+        printf "  %-35s SKIP  not built\n" "ASM $variant"
+      fi
+    done
+    for variant in x64-minbin x64-minbin-deep; do
+      BIN_PATH="$ASM_DIR/bin/$variant"
+      if [[ -x "$BIN_PATH" ]]; then
+        bench "ASM $variant" \
+          --stdin-str "$(build_minbin_input "${ARGS[@]}")" \
+          --expected "$(ternary_to_minbin "$EXPECTED")" \
+          "$BIN_PATH"
       else
         printf "  %-35s SKIP  not built\n" "ASM $variant"
       fi
