@@ -39,6 +39,7 @@
   (global $free_from (mut i32) (i32.const 0)) ;; byte offset of last allocated node
                                               ;; (initialized to behind iovec)
   (global $eof       (mut i32) (i32.const 0)) ;; set to 1 when stdin is exhausted
+  (global $mem_limit (mut i32) (i32.const 67108864)) ;; current memory ceiling (1024 pages × 65536)
 
   ;; ============================================================
   ;; Node storage
@@ -49,8 +50,16 @@
   (func $get_v (param $i i32) (result i32) (i32.load offset=0x18 (local.get $i)))
 
   ;; Allocate a node with given type, u, v fields.
+  ;; Grows memory by 64 MB chunks when the arena is exhausted.
   (func $alloc (param $type i32) (param $u i32) (param $v i32) (result i32)
     (global.set $free_from (i32.add (global.get $free_from) (i32.const 12)))
+    (if (i32.ge_u (i32.add (global.get $free_from) (i32.const 28))
+                  (global.get $mem_limit))
+      (then
+        (if (i32.eq (memory.grow (i32.const 1024)) (i32.const -1))
+          (then (unreachable)))
+        (global.set $mem_limit
+          (i32.add (global.get $mem_limit) (i32.const 67108864)))))
     (i32.store offset=0x10 (global.get $free_from) (local.get $type))
     (i32.store offset=0x14 (global.get $free_from) (local.get $u))
     (i32.store offset=0x18 (global.get $free_from) (local.get $v))
