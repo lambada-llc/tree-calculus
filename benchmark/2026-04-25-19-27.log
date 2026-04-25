@@ -1,0 +1,49 @@
+cpu:   VirtualApple @ 2.50GHz (x86_64, 8 cores)
+os:    Linux 6.12.72-linuxkit
+date:  2026-04-25 19:27
+
+building C++... failed (skipping)
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.358s
+  C++                                 SKIP  not built
+  Python                              PASS  0.108s
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.019s
+  ASM x64-noid                        PASS  0.016s
+  ASM x64-vm                          PASS  0.015s
+  ASM x64-minbin                      PASS  0.015s
+  ASM x64-minbin-deep                 PASS  0.017s
+
+recursive-fib (n=24)
+  JavaScript (reference)              PASS  6.519s
+  C++                                 SKIP  not built
+  Python                              PASS  11.573s
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.253s
+  ASM x64-noid                        PASS  0.197s
+  ASM x64-vm                          PASS  0.214s
+  ASM x64-minbin                      PASS  0.151s
+  ASM x64-minbin-deep                 PASS  0.168s
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  3.120s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.069s
+  ASM x64-noid                        PASS  0.079s
+  ASM x64-vm                          PASS  0.063s
+  ASM x64-minbin                      PASS  0.068s
+  ASM x64-minbin-deep                 PASS  0.076s
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              PASS  8.461s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.371s
+  ASM x64-noid                        PASS  0.300s
+  ASM x64-vm                          PASS  0.282s
+  ASM x64-minbin                      PASS  0.581s
+  ASM x64-minbin-deep                 PASS  0.476s

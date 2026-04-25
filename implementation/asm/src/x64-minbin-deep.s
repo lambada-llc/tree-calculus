@@ -249,4 +249,4 @@ do_io:
     ret
 
 .bss
-.lcomm heap, 0x4000000
+.lcomm heap, 0x20000000
