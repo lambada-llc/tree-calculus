@@ -66,11 +66,31 @@ static std::unordered_map<std::pair<int32_t, int32_t>, int32_t, PairHash> apply_
 
 static int32_t canon_counter = 0;
 static bool stats_enabled = false;
+static bool stats_per_symbol = false;
 static int64_t stat_contractions = 0;
 static int64_t stat_reduction_steps = 0;
 static int64_t stat_output_lines = 0;
 static int64_t fuel_remaining = -1; // -1 = unlimited
 static int32_t current_lineno = 0;
+
+struct SymStats {
+  int64_t contractions = 0;
+  int64_t reduction_steps = 0;
+  int64_t output_lines = 0;
+};
+static std::unordered_map<int32_t, SymStats> sym_stats;
+
+struct LineRecord {
+  int8_t kind;       // 0 = 3-word application, 1 = 2-word export
+  int32_t lhs;
+  int32_t rhs1;      // 3-word: func; 2-word: rhs
+  int32_t rhs2;      // 3-word: arg; 2-word: unused
+  size_t buf_start;  // 3-word only: range in output_buffer
+  size_t buf_end;
+  int64_t dc;        // 3-word only: contractions delta
+  int64_t ds;        // 3-word only: reduction steps delta
+};
+static std::vector<LineRecord> line_records;
 
 // Buffered output
 struct OutputEntry {
@@ -264,6 +284,7 @@ int main(int argc, char* argv[]) {
     std::string arg(argv[i]);
     if (arg == "--progress") progress = true;
     else if (arg == "--stats") stats_enabled = true;
+    else if (arg == "--stats-per-symbol") { stats_enabled = true; stats_per_symbol = true; }
     else if (arg == "--fuel" && i + 1 < argc) fuel_remaining = std::stoll(argv[++i]);
     else if (arg.rfind("--fuel=", 0) == 0) fuel_remaining = std::stoll(arg.substr(7));
   }
@@ -324,12 +345,23 @@ int main(int argc, char* argv[]) {
       int32_t cb = canonical(b);
       reachability_roots.push_back(cb);
       output_buffer.push_back({1, -1, a, cb, 0});
+      if (stats_per_symbol) line_records.push_back({1, a, b, 0, 0, 0, 0, 0});
       continue;
     }
     if (nwords > 3) continue;                                             // 4+ words: drop
     int32_t c = intern(words[2]);
     ensure_id(c);
-    process_apply(a, b, c);                                              // 3-word: application
+    if (stats_per_symbol) {
+      size_t buf_start = output_buffer.size();
+      int64_t before_c = stat_contractions;
+      int64_t before_s = stat_reduction_steps;
+      process_apply(a, b, c);                                            // 3-word: application
+      line_records.push_back({0, a, b, c, buf_start, output_buffer.size(),
+                              stat_contractions - before_c,
+                              stat_reduction_steps - before_s});
+    } else {
+      process_apply(a, b, c);                                            // 3-word: application
+    }
   }
 
   // Reachability walk
@@ -377,7 +409,41 @@ int main(int argc, char* argv[]) {
   }
   fwrite(out.data(), 1, out.size(), stdout);
 
-  if (stats_enabled) {
+  if (stats_per_symbol) {
+    auto print_row = [](const std::string& label, int64_t c, int64_t r, int64_t o) {
+      std::cerr << std::left << std::setw(24) << label
+                << std::right << std::setw(15) << c
+                << std::setw(20) << r
+                << std::setw(15) << o << "\n";
+    };
+    std::cerr << std::left << std::setw(24) << "Symbol"
+              << std::right << std::setw(15) << "Contractions"
+              << std::setw(20) << "Reduction steps"
+              << std::setw(15) << "Output lines" << "\n";
+    for (auto& rec : line_records) {
+      if (rec.kind == 0) {
+        // 3-word: accumulate ingredient stats + this line's costs into LHS
+        int64_t out_lines = 0;
+        for (size_t i = rec.buf_start; i < rec.buf_end; ++i) {
+          auto& e = output_buffer[i];
+          if (e.type == 0 && reachable[e.canon_id]) ++out_lines;
+        }
+        SymStats f = sym_stats[rec.rhs1];
+        SymStats g = sym_stats[rec.rhs2];
+        SymStats ns;
+        ns.contractions    = f.contractions    + g.contractions    + rec.dc;
+        ns.reduction_steps = f.reduction_steps + g.reduction_steps + rec.ds;
+        ns.output_lines    = f.output_lines    + g.output_lines    + out_lines;
+        sym_stats[rec.lhs] = ns;
+      } else {
+        // 2-word: report RHS's stats under the LHS name, then zero LHS
+        SymStats s = sym_stats[rec.rhs1];
+        print_row(named_strs[rec.lhs], s.contractions, s.reduction_steps, s.output_lines);
+        sym_stats[rec.lhs] = {0, 0, 0};
+      }
+    }
+    print_row("TOTAL", stat_contractions, stat_reduction_steps, stat_output_lines);
+  } else if (stats_enabled) {
     std::cerr << std::left << std::setw(17) << "Contractions:" << stat_contractions << "\n";
     std::cerr << std::left << std::setw(17) << "Reduction steps:" << stat_reduction_steps << "\n";
     std::cerr << std::left << std::setw(17) << "Output lines:" << stat_output_lines << "\n";
