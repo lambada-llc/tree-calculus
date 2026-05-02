@@ -73,27 +73,14 @@ static int64_t stat_output_lines = 0;
 static int64_t fuel_remaining = -1; // -1 = unlimited
 static int32_t current_lineno = 0;
 
-struct SymStats {
-  int64_t contractions = 0;
-};
-static std::unordered_map<int32_t, SymStats> sym_stats;
+// Per-symbol contraction count. Streamed to stderr inline as exports/terminals
+// are encountered; no buffering needed since output_buffer is unused for stats.
+static std::unordered_map<int32_t, int64_t> sym_contractions;
 
-struct LineRecord {
-  int8_t kind;       // 0 = 3-word application, 1 = 2-word export / 1-word terminal
-  int32_t lhs;
-  int32_t rhs1;      // 3-word: func; 2-word: rhs
-  int32_t rhs2;      // 3-word: arg; 2-word: unused
-  int64_t dc;        // 3-word only: intrinsic contractions delta
-};
-static std::vector<LineRecord> line_records;
-
-// Cache of intrinsic per-line cost keyed by (canonical(func), canonical(arg))
+// Intrinsic per-line contraction delta keyed by (canonical(func), canonical(arg))
 // at the time of the line. Reused on memo-hit lines so identical inputs
 // always produce identical stats.
-struct DeltaCache {
-  int64_t dc;
-};
-static std::unordered_map<std::pair<int32_t, int32_t>, DeltaCache, PairHash> delta_cache;
+static std::unordered_map<std::pair<int32_t, int32_t>, int64_t, PairHash> delta_cache;
 
 // Buffered output
 struct OutputEntry {
@@ -303,6 +290,8 @@ int main(int argc, char* argv[]) {
   ensure_id(leaf_id);
   env[leaf_id] = {LEAF, -1, -1};
 
+  if (stats_per_symbol) std::cerr << "Symbol,steps\n";
+
   // Read all input at once for fast parsing
   std::string input((std::istreambuf_iterator<char>(std::cin)), std::istreambuf_iterator<char>());
   const char* p = input.data();
@@ -337,7 +326,10 @@ int main(int argc, char* argv[]) {
       int32_t ca = canonical(a);
       reachability_roots.push_back(ca);
       output_buffer.push_back({2, -1, ca, 0, 0});
-      if (stats_per_symbol) line_records.push_back({1, a, a, 0, 0});
+      if (stats_per_symbol) {
+        std::cerr << named_strs[a] << ',' << sym_contractions[a] << '\n';
+        sym_contractions[a] = 0;
+      }
       continue;
     }
     int32_t b = intern(words[1]);
@@ -349,7 +341,10 @@ int main(int argc, char* argv[]) {
       int32_t cb = canonical(b);
       reachability_roots.push_back(cb);
       output_buffer.push_back({1, -1, a, cb, 0});
-      if (stats_per_symbol) line_records.push_back({1, a, b, 0, 0});
+      if (stats_per_symbol) {
+        std::cerr << named_strs[a] << ',' << sym_contractions[b] << '\n';
+        sym_contractions[a] = 0;
+      }
       continue;
     }
     if (nwords > 3) continue;                                             // 4+ words: drop
@@ -357,13 +352,10 @@ int main(int argc, char* argv[]) {
     ensure_id(c);
     if (stats_per_symbol) {
       int64_t before_c = stat_contractions;
-      int32_t cf = canonical(b);
-      int32_t ca = canonical(c);
+      auto key = std::make_pair(canonical(b), canonical(c));
       process_apply(a, b, c);                                            // 3-word: application
-      auto [it, inserted] = delta_cache.try_emplace(
-          std::make_pair(cf, ca),
-          DeltaCache{stat_contractions - before_c});
-      line_records.push_back({0, a, b, c, it->second.dc});
+      auto [it, _] = delta_cache.try_emplace(key, stat_contractions - before_c);
+      sym_contractions[a] = sym_contractions[b] + sym_contractions[c] + it->second;
     } else {
       process_apply(a, b, c);                                            // 3-word: application
     }
@@ -415,20 +407,6 @@ int main(int argc, char* argv[]) {
   fwrite(out.data(), 1, out.size(), stdout);
 
   if (stats_per_symbol) {
-    std::cerr << "Symbol,steps\n";
-    for (auto& rec : line_records) {
-      if (rec.kind == 0) {
-        // 3-word: accumulate ingredient stats + this line's intrinsic cost into LHS
-        SymStats f = sym_stats[rec.rhs1];
-        SymStats g = sym_stats[rec.rhs2];
-        sym_stats[rec.lhs] = {f.contractions + g.contractions + rec.dc};
-      } else {
-        // 2-word / 1-word: report RHS's stats under the LHS name, then zero LHS
-        SymStats s = sym_stats[rec.rhs1];
-        std::cerr << named_strs[rec.lhs] << ',' << s.contractions << '\n';
-        sym_stats[rec.lhs] = {0};
-      }
-    }
     std::cerr << "TOTAL," << stat_contractions << '\n';
   } else if (stats_enabled) {
     std::cerr << std::left << std::setw(17) << "Contractions:" << stat_contractions << "\n";
