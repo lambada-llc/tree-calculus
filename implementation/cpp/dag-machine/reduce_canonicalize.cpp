@@ -410,16 +410,7 @@ int main(int argc, char* argv[]) {
   fwrite(out.data(), 1, out.size(), stdout);
 
   if (stats_per_symbol) {
-    auto print_row = [](const std::string& label, int64_t c, int64_t r, int64_t o) {
-      std::cerr << std::left << std::setw(14) << label
-                << std::right << std::setw(8) << c
-                << std::setw(8) << r
-                << std::setw(8) << o << "\n";
-    };
-    std::cerr << std::left << std::setw(14) << "Symbol"
-              << std::right << std::setw(8) << "contr"
-              << std::setw(8) << "steps"
-              << std::setw(8) << "lines" << "\n";
+    std::cerr << "Symbol,contractions,reduction_steps,output_lines\n";
     for (auto& rec : line_records) {
       if (rec.kind == 0) {
         // 3-word: accumulate ingredient stats + this line's costs into LHS
@@ -438,11 +429,13 @@ int main(int argc, char* argv[]) {
       } else {
         // 2-word: report RHS's stats under the LHS name, then zero LHS
         SymStats s = sym_stats[rec.rhs1];
-        print_row(named_strs[rec.lhs], s.contractions, s.reduction_steps, s.output_lines);
+        std::cerr << named_strs[rec.lhs] << ',' << s.contractions << ','
+                  << s.reduction_steps << ',' << s.output_lines << '\n';
         sym_stats[rec.lhs] = {0, 0, 0};
       }
     }
-    print_row("TOTAL", stat_contractions, stat_reduction_steps, stat_output_lines);
+    std::cerr << "TOTAL," << stat_contractions << ',' << stat_reduction_steps
+              << ',' << stat_output_lines << '\n';
   } else if (stats_enabled) {
     std::cerr << std::left << std::setw(17) << "Contractions:" << stat_contractions << "\n";
     std::cerr << std::left << std::setw(17) << "Reduction steps:" << stat_reduction_steps << "\n";
