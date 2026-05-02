@@ -49,7 +49,9 @@ for dag in "$DIR"/*.dag; do
   # Test reduce_canonicalize (also overwrites per-symbol stats expect file)
   combined="${dag%.dag}.combined.dag"
   stats="${dag%.dag}.stats"
-  "$DIR/reduce_canonicalize.exe" --stats-per-symbol < "$dag" > "$combined" 2> "$stats"
+  "$DIR/reduce_canonicalize.exe" --stats-per-symbol < "$dag" > "$combined" 2> "$stats.csv"
+  column -s, -t < "$stats.csv" > "$stats"
+  rm -f "$stats.csv"
 
   actual=$(node "$MAIN_JS" --dag --file "$combined" --ternary)
 
