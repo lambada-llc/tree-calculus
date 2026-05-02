@@ -92,6 +92,17 @@ struct LineRecord {
 };
 static std::vector<LineRecord> line_records;
 
+// Cache of intrinsic per-line cost keyed by (canonical(func), canonical(arg))
+// at the time of the line. Reused on memo-hit lines so identical inputs
+// always produce identical stats.
+struct DeltaCache {
+  size_t buf_start;
+  size_t buf_end;
+  int64_t dc;
+  int64_t ds;
+};
+static std::unordered_map<std::pair<int32_t, int32_t>, DeltaCache, PairHash> delta_cache;
+
 // Buffered output
 struct OutputEntry {
   int8_t type; // 0 = node def, 1 = two-word, 2 = one-word
@@ -356,10 +367,16 @@ int main(int argc, char* argv[]) {
       size_t buf_start = output_buffer.size();
       int64_t before_c = stat_contractions;
       int64_t before_s = stat_reduction_steps;
+      int32_t cf = canonical(b);
+      int32_t ca = canonical(c);
       process_apply(a, b, c);                                            // 3-word: application
-      line_records.push_back({0, a, b, c, buf_start, output_buffer.size(),
-                              stat_contractions - before_c,
-                              stat_reduction_steps - before_s});
+      auto [it, inserted] = delta_cache.try_emplace(
+          std::make_pair(cf, ca),
+          DeltaCache{buf_start, output_buffer.size(),
+                     stat_contractions - before_c,
+                     stat_reduction_steps - before_s});
+      line_records.push_back({0, a, b, c, it->second.buf_start, it->second.buf_end,
+                              it->second.dc, it->second.ds});
     } else {
       process_apply(a, b, c);                                            // 3-word: application
     }
