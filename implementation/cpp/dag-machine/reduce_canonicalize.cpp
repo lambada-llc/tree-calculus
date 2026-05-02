@@ -330,10 +330,11 @@ int main(int argc, char* argv[]) {
     if (nwords == 0) continue;
     int32_t a = intern(words[0]);
     ensure_id(a);
-    if (nwords == 1) {                                                     // 1-word: terminal
+    if (nwords == 1) {                                                     // 1-word: terminal (treat as `a a` for stats)
       int32_t ca = canonical(a);
       reachability_roots.push_back(ca);
       output_buffer.push_back({2, -1, ca, 0, 0});
+      if (stats_per_symbol) line_records.push_back({1, a, a, 0, 0, 0, 0, 0});
       continue;
     }
     int32_t b = intern(words[1]);
