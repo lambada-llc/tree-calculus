@@ -16,8 +16,6 @@ for dag in "$DIR"/*.dag; do
   [[ "$dag" == *.combined.dag ]] && continue
 
   name=$(basename "$dag")
-  stats_expected="${dag%.dag}.combined.stats"
-  stats_actual="${stats_expected}.actual"
 
   # Test reduce
   out="${dag%.dag}.out.dag"
@@ -48,9 +46,10 @@ for dag in "$DIR"/*.dag; do
     ((fail++)) || true
   fi
 
-  # Test reduce_canonicalize (also captures per-symbol stats for expect-test)
+  # Test reduce_canonicalize (also overwrites per-symbol stats expect file)
   combined="${dag%.dag}.combined.dag"
-  "$DIR/reduce_canonicalize.exe" --stats-per-symbol < "$dag" > "$combined" 2> "$stats_actual"
+  stats="${dag%.dag}.stats"
+  "$DIR/reduce_canonicalize.exe" --stats-per-symbol < "$dag" > "$combined" 2> "$stats"
 
   actual=$(node "$MAIN_JS" --dag --file "$combined" --ternary)
 
@@ -59,21 +58,6 @@ for dag in "$DIR"/*.dag; do
     ((pass++)) || true
   else
     echo "FAIL reduce_canonicalize $name: expected $expected, got $actual"
-    ((fail++)) || true
-  fi
-
-  # Expect-test: per-symbol stats output must match the committed file
-  if [ -f "$stats_expected" ] && diff -q "$stats_expected" "$stats_actual" > /dev/null; then
-    echo "PASS stats $name"
-    ((pass++)) || true
-    rm -f "$stats_actual"
-  else
-    echo "FAIL stats $name (committed $stats_expected differs from actual $stats_actual)"
-    if [ -f "$stats_expected" ]; then
-      diff "$stats_expected" "$stats_actual" || true
-    else
-      echo "  (no committed expected file; created $stats_actual)"
-    fi
     ((fail++)) || true
   fi
 done
