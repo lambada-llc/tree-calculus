@@ -1,4 +1,4 @@
-Symbol                     Contractions     Reduction steps   Output lines
-const                                 0                   1              1
-id                                    0                   4              3
-TOTAL                                 2                  30              7
+Symbol           contr   steps   lines
+const                0       1       1
+id                   0       4       3
+TOTAL                2      30       7

@@ -411,15 +411,15 @@ int main(int argc, char* argv[]) {
 
   if (stats_per_symbol) {
     auto print_row = [](const std::string& label, int64_t c, int64_t r, int64_t o) {
-      std::cerr << std::left << std::setw(24) << label
-                << std::right << std::setw(15) << c
-                << std::setw(20) << r
-                << std::setw(15) << o << "\n";
+      std::cerr << std::left << std::setw(14) << label
+                << std::right << std::setw(8) << c
+                << std::setw(8) << r
+                << std::setw(8) << o << "\n";
     };
-    std::cerr << std::left << std::setw(24) << "Symbol"
-              << std::right << std::setw(15) << "Contractions"
-              << std::setw(20) << "Reduction steps"
-              << std::setw(15) << "Output lines" << "\n";
+    std::cerr << std::left << std::setw(14) << "Symbol"
+              << std::right << std::setw(8) << "contr"
+              << std::setw(8) << "steps"
+              << std::setw(8) << "lines" << "\n";
     for (auto& rec : line_records) {
       if (rec.kind == 0) {
         // 3-word: accumulate ingredient stats + this line's costs into LHS

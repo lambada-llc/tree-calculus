@@ -1,6 +1,6 @@
-Symbol                     Contractions     Reduction steps   Output lines
-x2                                    0                   0              0
-_tmp                                  0                   1              1
-x1                                    0                   0              0
-x2                                    0                   0              0
-TOTAL                                 0                   1              6
+Symbol           contr   steps   lines
+x2                   0       0       0
+_tmp                 0       1       1
+x1                   0       0       0
+x2                   0       0       0
+TOTAL                0       1       6
