@@ -1,0 +1,958 @@
+// tc.cpp — minimal fast tree-calculus runner
+//
+// Port of submodules/tree-calculus/bin/main.js, restricted to the
+// invocation patterns Forest actually uses.
+//
+// One-shot mode (replaces the JS CLI used by lamb-to-dag.sh):
+//
+//   tc <dag-file> <string>
+//
+// reads the DAG from <dag-file>, applies it to <string> (marshalled
+// as a TC list-of-bytes), reduces, and prints the result as a string
+// (with a trailing newline, matching `console.log`).
+//
+// Server mode (replaces the per-test in-process JS calls in
+// build/rules/dag-test.js — a single C++ process loads the bundle
+// once and answers many requests, so reductions of shared sub-terms
+// are amortised across tests, the way dag-test.js naturally does):
+//
+//   tc -s
+//
+// reads commands from stdin, writes responses to stdout. Commands are
+// newline-terminated. Some commands carry a length-prefixed payload.
+//
+//   load <path>\n
+//     -> ok\n                                (replaces env)
+//   eval <symbol>\n
+//     -> data <len>\n<bytes>                 (to_string of env[symbol])
+//   eval-dag <symbol>\n
+//     -> data <len>\n<bytes>                 (reduced env[symbol] as hash-consed DAG text)
+//   apply <symbol> <byte-len>\n<bytes>
+//     -> data <len>\n<bytes>                 (to_string of apply(env[sym], of_string(bytes)))
+//   reset\n
+//     -> ok\n                                (drop arena, re-parse the loaded bundle)
+//   quit\n
+//     -> ok\n                                (and exits)
+//
+// On any failure: err <message>\n. <bytes> in responses is exactly
+// <len> raw bytes (no trailing newline, since the length is exact).
+//
+// Memory management
+//
+// Trees are intrusively reference-counted and recycled through a
+// free-list pool. This mirrors what the JS `lazy-stacks` evaluator
+// gets for free from V8's GC: temporaries spawned during reduction
+// (the new spine slots created by S, application results, etc.)
+// become unreachable as the head moves toward HNF, and freeing them
+// keeps RSS bounded by the live working set rather than cumulative
+// allocation. Without this, a single test like
+// `:test.Import.Atlas.Demo_led_matrix.0` peaked at >8 GiB on Cloudflare
+// CI and was OOM-killed; with it, the same eval matches JS at <100 MiB.
+//
+// The auto-recycle watermark (TC_RSS_THRESHOLD_MB) and `reset`
+// command are kept as a belt-and-suspenders guard, but should rarely
+// trigger now.
+//
+// Build:
+//   c++ -O3 -std=c++17 -o tc tc.cpp
+//
+// The intent is to drop this into submodules/tree-calculus/bin/ once
+// promoted out of the Forest repo.
+
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <pthread.h>
+#if __has_include(<malloc.h>)
+#include <malloc.h>
+#endif
+#include <fstream>
+#include <iostream>
+#include <memory>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <vector>
+
+// ─── core data types ──────────────────────────────────────────────────────
+//
+// Each TC value carries a small vector of child pointers, mirroring the JS
+// `lazy-stacks` evaluator:
+//   size 0 → leaf  △
+//   size 1 → stem  (△ a)            elems = [a]
+//   size 2 → fork  (△ a b)          elems = [b, a]
+//   size ≥3 → unreduced application; rightmost element is the head, and
+//             elements before it are the args in reverse application order
+//             (so popping from the back peels off head, then arg₁, arg₂…)
+//
+// Reduction mutates these vectors in place to drive the head toward HNF.
+//
+// Trees are intrusively reference-counted. Every Tree* slot stored in a
+// container (env map, another Tree's elems, the worker-local one-shot
+// holders) holds one ref. Local Tree* variables in functions borrow from
+// the slot that holds them; helpers like apply()/stem()/fork_node() take
+// borrows and return a fresh ref the caller is expected to release.
+//
+// `g_leaf` is pinned: it's the unique leaf instance, shared by every value
+// tree, so its refcount is initialised to a large sentinel and re-pinned
+// in release() if it would ever otherwise hit zero. That keeps the hot
+// acquire/release path branch-free for non-leaf nodes.
+
+struct Tree;
+
+// Inline-buffered vector of Tree*. Pure storage — no ownership semantics.
+// Acquire/release of slot contents is the responsibility of whoever
+// pushes/pops via this container.
+template <size_t N>
+struct SmallVec {
+  uint32_t size_ = 0;
+  uint32_t cap_  = N;
+  Tree*    inl_[N];
+  Tree**   data_ = inl_;
+
+  size_t size() const { return size_; }
+  bool empty() const { return size_ == 0; }
+  Tree* operator[](size_t i) const { return data_[i]; }
+  Tree* back() const { return data_[size_ - 1]; }
+  Tree* const* begin() const { return data_; }
+  Tree* const* end() const { return data_ + size_; }
+
+  void pop_back() { --size_; }
+
+  void grow(size_t need) {
+    uint32_t newcap = cap_ ? cap_ * 2 : 4;
+    while (newcap < need) newcap *= 2;
+    Tree** nb = new Tree*[newcap];
+    std::memcpy(nb, data_, size_ * sizeof(Tree*));
+    if (data_ != inl_) delete[] data_;
+    data_ = nb;
+    cap_ = newcap;
+  }
+
+  void reserve(size_t n) { if (n > cap_) grow(n); }
+
+  void push_back(Tree* p) {
+    if (size_ == cap_) grow(size_ + 1);
+    data_[size_++] = p;
+  }
+
+  void append(Tree* const* src, size_t n) {
+    if (size_ + n > cap_) grow(size_ + n);
+    std::memcpy(data_ + size_, src, n * sizeof(Tree*));
+    size_ += n;
+  }
+
+  // Drop the heap buffer (if any), reset to inline, capacity N.
+  void reset_to_inline() {
+    if (data_ != inl_) { delete[] data_; data_ = inl_; cap_ = N; }
+    size_ = 0;
+  }
+};
+
+struct Tree {
+  uint32_t refcount = 0;
+  SmallVec<6> elems;
+};
+
+// ─── pool ─────────────────────────────────────────────────────────────────
+//
+// Trees are allocated in chunks for cache locality, but individually
+// recycled through a singly-linked free list. Freed Trees keep their
+// (possibly grown) heap buffer released and chain through inl_[0]; on
+// re-allocation we restore them to the empty inline state.
+
+struct Pool {
+  static constexpr size_t kChunkSize = 4096;
+  std::vector<std::unique_ptr<Tree[]>> chunks;
+  Tree* free_head = nullptr;
+  size_t pos = kChunkSize; // forces a fresh chunk on first allocation
+
+  Tree* allocate() {
+    Tree* t;
+    if (free_head) {
+      t = free_head;
+      free_head = t->elems.inl_[0];
+      // SmallVec was already reset on free; nothing more to do.
+    } else {
+      if (pos >= kChunkSize) {
+        chunks.emplace_back(new Tree[kChunkSize]);
+        pos = 0;
+      }
+      t = &chunks.back()[pos++];
+    }
+    t->refcount = 1;
+    return t;
+  }
+
+  void deallocate(Tree* t) {
+    t->elems.reset_to_inline();
+    t->elems.inl_[0] = free_head;
+    free_head = t;
+  }
+};
+
+static Pool g_pool;
+static Tree* g_leaf = nullptr;
+
+// Sentinel for the leaf's refcount. Picked well above any plausible
+// imbalance during a single eval (Forest's heaviest workloads do tens of
+// millions of leaf acquire/release pairs); release() re-pins on hitting
+// zero anyway, so this is just an optimisation.
+static constexpr uint32_t kLeafRefcountPin = 1u << 30;
+
+static inline Tree* leaf() { return g_leaf; }
+
+static inline void acquire(Tree* t) {
+  ++t->refcount;
+}
+
+// Iterative — recursive walk would blow the worker stack on long cons
+// lists. The thread_local working stack is reused across calls; it grows
+// to peak walk depth and stays there.
+static thread_local std::vector<Tree*> g_release_stack;
+
+static void release(Tree* t) {
+  g_release_stack.push_back(t);
+  do {
+    Tree* cur = g_release_stack.back();
+    g_release_stack.pop_back();
+    if (--cur->refcount > 0) continue;
+    if (cur == g_leaf) { cur->refcount = kLeafRefcountPin; continue; }
+    for (uint32_t i = 0; i < cur->elems.size_; ++i) {
+      g_release_stack.push_back(cur->elems[i]);
+    }
+    g_pool.deallocate(cur);
+  } while (!g_release_stack.empty());
+}
+
+// ─── tree constructors ────────────────────────────────────────────────────
+//
+// All take borrowed children and return a fresh ref the caller owns.
+
+static inline Tree* stem(Tree* a) {
+  Tree* t = g_pool.allocate();
+  acquire(a);
+  t->elems.push_back(a);
+  return t;
+}
+
+static inline Tree* fork_node(Tree* a, Tree* b) {
+  Tree* t = g_pool.allocate();
+  acquire(b);
+  t->elems.push_back(b);
+  acquire(a);
+  t->elems.push_back(a);
+  return t;
+}
+
+// apply(a, b): if a has elems [..., head], result has elems [b, ..., head].
+// Mirrors `apply: (a, b) => [b, ...a]` in the JS evaluator.
+static inline Tree* apply(Tree* a, Tree* b) {
+  Tree* t = g_pool.allocate();
+  t->elems.reserve(a->elems.size_ + 1);
+  acquire(b);
+  t->elems.push_back(b);
+  for (uint32_t i = 0; i < a->elems.size_; ++i) {
+    acquire(a->elems[i]);
+    t->elems.push_back(a->elems[i]);
+  }
+  return t;
+}
+
+// ─── reduction ────────────────────────────────────────────────────────────
+//
+// Reduce s in place until s->elems.size() < 3 (i.e. s is in head normal
+// form: leaf, stem, or fork). Sub-reductions are done by recursive calls;
+// only the head and a few helper trees ever need forcing along the way.
+//
+// The three rules (with x = head, y, z = next two args after popping):
+//   K  : △ y z          → y
+//   S  : △(△a) y z      → (y z)(a z)
+//   F  : △(△a b) y z    → triage on z:
+//          z = △        → b
+//          z = △u       → a u
+//          z = △u v     → y u v
+//
+// Refcounting in the loop: popping from `e` transfers a ref to the local
+// (x, y, z); pushing into `e` consumes a ref. New refs to children of x
+// or y (that we want in `e` independently of x/y staying alive) are
+// minted by acquire() at the push site, so subsequent release(x)/etc.
+// cleanly drops the old structure.
+
+static void reduce(Tree* s) {
+  while (s->elems.size_ >= 3) {
+    auto& e = s->elems;
+    Tree* x = e.back(); e.pop_back();
+    Tree* y = e.back(); e.pop_back();
+    Tree* z = e.back(); e.pop_back();
+
+    if (x->elems.size_ > 2) reduce(x);
+
+    switch (x->elems.size_) {
+      case 0: { // K
+        if (y->elems.size_ > 2) reduce(y);
+        for (uint32_t i = 0; i < y->elems.size_; ++i) {
+          acquire(y->elems[i]);
+          e.push_back(y->elems[i]);
+        }
+        release(x);
+        release(y);
+        release(z);
+        break;
+      }
+      case 1: { // S
+        Tree* a = x->elems[0]; // borrow
+        Tree* yz = g_pool.allocate(); // refcount 1
+        yz->elems.reserve(1 + y->elems.size_);
+        acquire(z); yz->elems.push_back(z);
+        for (uint32_t i = 0; i < y->elems.size_; ++i) {
+          acquire(y->elems[i]);
+          yz->elems.push_back(y->elems[i]);
+        }
+        e.push_back(yz);                // transfer yz's ref to e
+        acquire(z); e.push_back(z);
+        for (uint32_t i = 0; i < a->elems.size_; ++i) {
+          acquire(a->elems[i]);
+          e.push_back(a->elems[i]);
+        }
+        release(x);
+        release(y);
+        release(z);
+        break;
+      }
+      case 2: { // F: triage on z
+        Tree* xa = x->elems[0]; // borrow (was `x` arg in JS)
+        Tree* xw = x->elems[1]; // borrow (was `w` arg in JS)
+        if (z->elems.size_ > 2) reduce(z);
+        switch (z->elems.size_) {
+          case 0: {
+            if (xw->elems.size_ > 2) reduce(xw);
+            for (uint32_t i = 0; i < xw->elems.size_; ++i) {
+              acquire(xw->elems[i]);
+              e.push_back(xw->elems[i]);
+            }
+            break;
+          }
+          case 1: {
+            Tree* u = z->elems[0]; // borrow
+            if (xa->elems.size_ > 2) reduce(xa);
+            acquire(u); e.push_back(u);
+            for (uint32_t i = 0; i < xa->elems.size_; ++i) {
+              acquire(xa->elems[i]);
+              e.push_back(xa->elems[i]);
+            }
+            break;
+          }
+          case 2: {
+            Tree* v = z->elems[0]; // borrow
+            Tree* u = z->elems[1]; // borrow
+            if (y->elems.size_ > 2) reduce(y);
+            acquire(v); e.push_back(v);
+            acquire(u); e.push_back(u);
+            for (uint32_t i = 0; i < y->elems.size_; ++i) {
+              acquire(y->elems[i]);
+              e.push_back(y->elems[i]);
+            }
+            break;
+          }
+        }
+        release(x);
+        release(y);
+        release(z);
+        break;
+      }
+    }
+  }
+}
+
+// ─── marshalling ──────────────────────────────────────────────────────────
+
+// die() throws so server-mode commands can recover; main() catches and exits.
+[[noreturn]] static void die(const char* msg) {
+  throw std::runtime_error(msg);
+}
+
+static bool to_bool(Tree* t) {
+  reduce(t);
+  switch (t->elems.size_) {
+    case 0: return false;
+    case 1: return true;
+    default: die("tree is not a bool");
+  }
+}
+
+// Render a tree as hash-consed DAG text, mirroring formatter_dag.to in
+// submodules/tree-calculus/bin/main.js. Forces full reduction along the
+// way (each node is reduced before its children are walked), so the
+// output is the *reduced* DAG — same byte-for-byte representation the
+// JS path produces, suitable for parsing back via Dag.parse.
+static std::string to_dag(Tree* root) {
+  std::vector<std::pair<Tree*, bool>> stack; // (node, exit_phase)
+  std::unordered_map<Tree*, std::string> keys;
+  std::unordered_map<std::string, std::string> app_keys;
+  std::vector<std::string> lines;
+  size_t counter = 0;
+
+  auto getOrAlloc = [&](const std::string& app_key) -> std::string {
+    auto it = app_keys.find(app_key);
+    if (it != app_keys.end()) return it->second;
+    std::string id = std::to_string(counter++);
+    app_keys.emplace(app_key, id);
+    lines.push_back(id + " " + app_key);
+    return id;
+  };
+
+  stack.push_back({root, false});
+  while (!stack.empty()) {
+    auto frame = stack.back(); stack.pop_back();
+    Tree* node = frame.first;
+    bool exit_phase = frame.second;
+    if (keys.count(node)) continue;
+
+    if (!exit_phase) {
+      reduce(node);
+      stack.push_back({node, true});
+      // Children in source order: stem [u]=elems[0]; fork [u,v]=[elems[1],elems[0]].
+      // Push left child first, right child on top so it's popped (and processed) first —
+      // mirrors `for (const c of children) todo.push(c)` in the JS implementation.
+      if (node->elems.size_ == 1) {
+        stack.push_back({node->elems[0], false});
+      } else if (node->elems.size_ == 2) {
+        stack.push_back({node->elems[1], false}); // u (left in source)
+        stack.push_back({node->elems[0], false}); // v (right in source)
+      }
+    } else {
+      std::string current = "\xe2\x96\xb3"; // △
+      if (node->elems.size_ == 1) {
+        current = getOrAlloc(current + " " + keys[node->elems[0]]);
+      } else if (node->elems.size_ == 2) {
+        current = getOrAlloc(current + " " + keys[node->elems[1]]);
+        current = getOrAlloc(current + " " + keys[node->elems[0]]);
+      }
+      keys[node] = current;
+    }
+  }
+
+  std::string result;
+  for (const auto& line : lines) { result += line; result += '\n'; }
+  result += keys[root];
+  return result;
+}
+
+// Walk the cons-list spine, accumulating heads (borrowed pointers — caller
+// already holds a ref to the spine, which keeps the heads alive).
+static std::vector<Tree*> to_list(Tree* t) {
+  std::vector<Tree*> out;
+  for (;;) {
+    reduce(t);
+    if (t->elems.empty()) return out;
+    if (t->elems.size_ == 1) die("tree is not a list");
+    out.push_back(t->elems[1]); // head
+    t = t->elems[0];            // tail
+  }
+}
+
+// to_nat as 64-bit (chars only need 8 bits; if any test ever needs >64-bit
+// nats this should be widened, but Forest's _to_string outputs char codes).
+static uint64_t to_nat_u64(Tree* t) {
+  auto bits = to_list(t);
+  uint64_t n = 0;
+  for (size_t i = bits.size(); i > 0; --i) {
+    n = (n << 1) | (to_bool(bits[i - 1]) ? 1u : 0u);
+  }
+  return n;
+}
+
+// Encode one Unicode code point as UTF-8.
+static void utf8_encode(uint32_t cp, std::string& out) {
+  if (cp < 0x80) {
+    out.push_back(static_cast<char>(cp));
+  } else if (cp < 0x800) {
+    out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else if (cp < 0x10000) {
+    out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  } else {
+    out.push_back(static_cast<char>(0xF0 | (cp >> 18)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+    out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+  }
+}
+
+// JS treats string nats as UTF-16 code units (`String.fromCharCode`). For the
+// range Forest actually uses (ASCII + a few BMP symbols like △) we get the
+// same result by treating each nat as a Unicode code point.
+static std::string to_string_marshal(Tree* t) {
+  auto chars = to_list(t);
+  std::string s;
+  s.reserve(chars.size());
+  for (Tree* c : chars) utf8_encode(static_cast<uint32_t>(to_nat_u64(c)), s);
+  return s;
+}
+
+// Returns a fresh owned ref.
+static Tree* of_bool(bool b) {
+  if (b) return stem(g_leaf);
+  acquire(g_leaf);
+  return g_leaf;
+}
+
+// Returns a fresh owned ref.
+static Tree* of_nat(uint64_t n) {
+  // Bits are stored LSB-first as a list of bools.
+  std::vector<Tree*> bits;
+  while (n) {
+    bits.push_back(of_bool(n & 1u));
+    n >>= 1;
+  }
+  Tree* f = g_leaf;
+  acquire(f);
+  for (size_t i = bits.size(); i > 0; --i) {
+    Tree* nf = fork_node(bits[i - 1], f);
+    release(f);
+    f = nf;
+  }
+  for (Tree* b : bits) release(b);
+  return f;
+}
+
+// Decode UTF-8 input bytes into Unicode code points, mirroring how the JS CLI
+// effectively maps a JS string into a list of code-unit-valued nats. Forest
+// inputs stay within the BMP, so a code point per nat round-trips byte-for-byte
+// with the JS implementation.
+static std::vector<uint32_t> utf8_decode(std::string_view s) {
+  std::vector<uint32_t> out;
+  out.reserve(s.size());
+  size_t i = 0;
+  while (i < s.size()) {
+    uint8_t b = static_cast<uint8_t>(s[i]);
+    uint32_t cp;
+    int len;
+    if (b < 0x80)            { cp = b;          len = 1; }
+    else if ((b & 0xE0) == 0xC0) { cp = b & 0x1F; len = 2; }
+    else if ((b & 0xF0) == 0xE0) { cp = b & 0x0F; len = 3; }
+    else if ((b & 0xF8) == 0xF0) { cp = b & 0x07; len = 4; }
+    else die("invalid utf-8 in input");
+    if (i + len > s.size()) die("truncated utf-8 in input");
+    for (int k = 1; k < len; ++k) {
+      uint8_t cb = static_cast<uint8_t>(s[i + k]);
+      if ((cb & 0xC0) != 0x80) die("invalid utf-8 continuation");
+      cp = (cp << 6) | (cb & 0x3F);
+    }
+    out.push_back(cp);
+    i += len;
+  }
+  return out;
+}
+
+// Returns a fresh owned ref.
+static Tree* of_string(std::string_view s) {
+  auto cps = utf8_decode(s);
+  Tree* f = g_leaf;
+  acquire(f);
+  for (size_t i = cps.size(); i > 0; --i) {
+    Tree* nat = of_nat(cps[i - 1]);
+    Tree* nf = fork_node(nat, f);
+    release(nat);
+    release(f);
+    f = nf;
+  }
+  return f;
+}
+
+// ─── DAG parser ───────────────────────────────────────────────────────────
+//
+// Format (3-word | 2-word | 1-word lines, see Forest CLAUDE.md):
+//   "id left right"   →  env[id] = apply(env[left], env[right])
+//   "symbol id"       →  env[symbol] = env[id]   (alias)
+//   "id"              →  return env[id]          (terminator)
+//
+// "△" (UTF-8 E2 96 B3) is bound to the leaf in the initial environment.
+
+// Reference-counting wrapper around the env map. Each slot owns a ref to
+// its value; replacing a slot releases the old value, clear() releases
+// everything, and the destructor cleans up on scope exit.
+struct TreeEnv {
+  std::unordered_map<std::string, Tree*> m;
+
+  TreeEnv() = default;
+  TreeEnv(const TreeEnv&) = delete;
+  TreeEnv& operator=(const TreeEnv&) = delete;
+  ~TreeEnv() { clear(); }
+
+  void reserve(size_t n) { m.reserve(n); }
+  bool empty() const { return m.empty(); }
+
+  // Caller transfers ownership of `val` (it must already hold a fresh ref).
+  void set_owning(const std::string& key, Tree* val) {
+    auto it = m.find(key);
+    if (it != m.end()) { release(it->second); it->second = val; }
+    else m.emplace(key, val);
+  }
+
+  // Returns borrowed Tree*, or nullptr if not present.
+  Tree* get(const std::string& key) const {
+    auto it = m.find(key);
+    return it == m.end() ? nullptr : it->second;
+  }
+
+  // Clear and release every slot.
+  void clear() {
+    for (auto& p : m) release(p.second);
+    m.clear();
+  }
+};
+
+// Returns the value of any 1-word (terminator) line if present, else nullptr.
+// Bundles used in server mode typically have no terminator; one-shot mode
+// expects one. The returned pointer is borrowed from `env`.
+static Tree* parse_dag_into(std::string_view text, TreeEnv& env) {
+  if (env.empty()) {
+    acquire(g_leaf);
+    env.set_owning("\xe2\x96\xb3", g_leaf); // △
+  }
+
+  auto get = [&](std::string_view name) -> Tree* {
+    Tree* t = env.get(std::string(name));
+    if (!t) {
+      std::string msg = "unbound variable: ";
+      msg.append(name);
+      die(msg.c_str());
+    }
+    return t;
+  };
+
+  size_t i = 0, n = text.size();
+  while (i < n) {
+    size_t lineEnd = i;
+    while (lineEnd < n && text[lineEnd] != '\n') ++lineEnd;
+    size_t end = lineEnd;
+    if (end > i && text[end - 1] == '\r') --end;
+
+    std::string_view tok[3];
+    int nt = 0;
+    size_t j = i;
+    while (j < end && nt < 3) {
+      while (j < end && text[j] == ' ') ++j;
+      if (j >= end) break;
+      size_t k = j;
+      while (k < end && text[k] != ' ') ++k;
+      tok[nt++] = std::string_view(text.data() + j, k - j);
+      j = k;
+    }
+
+    if (nt == 3) {
+      // apply() returns a fresh owned ref; env takes ownership.
+      env.set_owning(std::string(tok[0]), apply(get(tok[1]), get(tok[2])));
+    } else if (nt == 2) {
+      Tree* v = get(tok[1]);
+      acquire(v);
+      env.set_owning(std::string(tok[0]), v);
+    } else if (nt == 1) {
+      return get(tok[0]);
+    }
+
+    i = lineEnd + 1;
+  }
+  return nullptr;
+}
+
+// One-shot helper: returns a fresh owned ref (acquired before env teardown).
+static Tree* parse_dag_terminated(std::string_view text) {
+  TreeEnv env;
+  env.reserve(text.size() / 16);
+  Tree* result = parse_dag_into(text, env);
+  if (!result) die("dag representation was not terminated by a value");
+  acquire(result);
+  return result; // env destructs here, releasing its slots; we kept one ref.
+}
+
+// ─── main ─────────────────────────────────────────────────────────────────
+
+static std::string read_file(const char* path) {
+  std::ifstream f(path, std::ios::binary);
+  if (!f) {
+    std::string msg = "could not open ";
+    msg += path;
+    die(msg.c_str());
+  }
+  std::ostringstream buf;
+  buf << f.rdbuf();
+  return buf.str();
+}
+
+// ─── server mode ──────────────────────────────────────────────────────────
+
+static void write_data(const std::string& s) {
+  std::fprintf(stdout, "data %zu\n", s.size());
+  std::fwrite(s.data(), 1, s.size(), stdout);
+  std::fflush(stdout);
+}
+
+static void write_err(const std::string& msg) {
+  std::fprintf(stdout, "err %s\n", msg.c_str());
+  std::fflush(stdout);
+}
+
+// Read exactly n bytes from stdin into out (resized).
+static bool read_exact(std::string& out, size_t n) {
+  out.resize(n);
+  size_t got = 0;
+  while (got < n) {
+    size_t r = std::fread(out.data() + got, 1, n - got, stdin);
+    if (r == 0) return false;
+    got += r;
+  }
+  return true;
+}
+
+// Read /proc/self/status VmRSS. Returns 0 if unavailable (e.g. non-Linux).
+static size_t read_rss_bytes() {
+  std::FILE* f = std::fopen("/proc/self/status", "r");
+  if (!f) return 0;
+  char line[256];
+  size_t kb = 0;
+  while (std::fgets(line, sizeof(line), f)) {
+    if (std::strncmp(line, "VmRSS:", 6) == 0) {
+      std::sscanf(line + 6, "%zu", &kb);
+      break;
+    }
+  }
+  std::fclose(f);
+  return kb * 1024;
+}
+
+// Drop every Tree we own and rebuild env from the bundle on disk.
+//
+// With per-Tree refcounting the eval-time leak is gone, but a recycle is
+// still a useful belt-and-suspenders: if an eval ever does drift RSS up
+// (a bug, or pool/heap fragmentation accumulated over many invocations),
+// this path resets to a clean slate without restarting the process.
+static void recycle_state(TreeEnv& env, const std::string& bundle_path) {
+  env.clear();
+  g_pool = Pool{};
+  g_leaf = g_pool.allocate();
+  g_leaf->refcount = kLeafRefcountPin;
+  parse_dag_into(read_file(bundle_path.c_str()), env);
+#if defined(__GLIBC__)
+  // glibc holds onto freed pages by default; ask it to give them back so
+  // the watermark check sees the real working set after a recycle.
+  malloc_trim(0);
+#endif
+}
+
+// 0 disables auto-recycling. Default 512 MiB keeps peak RSS below the
+// hard limits typical hosted CI builders impose (Cloudflare Pages, etc.)
+// while still amortising bundle parse across many evals. Bump this on a
+// roomy local machine (e.g. TC_RSS_THRESHOLD_MB=4096) to recycle less
+// often and squeeze out more cross-eval reduction sharing.
+static size_t rss_threshold_bytes() {
+  static const size_t v = []() -> size_t {
+    const char* env = std::getenv("TC_RSS_THRESHOLD_MB");
+    size_t mb = env ? std::strtoull(env, nullptr, 10) : 512;
+    return mb * 1024 * 1024;
+  }();
+  return v;
+}
+
+// Catch errors raised by die() during a command without tearing down the
+// process. We can't unwind from die() (it calls exit()), so eval/apply have
+// to validate before reducing — but most user-visible failures (missing
+// symbol, malformed payload) are caught here in the dispatch layer.
+static int run_server() {
+  TreeEnv env;
+  std::string bundle_path; // remembered for auto-recycle and `reset`
+  bool loaded = false;
+
+  auto maybe_recycle = [&]() {
+    size_t th = rss_threshold_bytes();
+    if (th == 0 || bundle_path.empty()) return;
+    if (read_rss_bytes() < th) return;
+    recycle_state(env, bundle_path);
+  };
+
+  std::string line;
+  while (true) {
+    // Read one command line.
+    line.clear();
+    int c;
+    while ((c = std::fgetc(stdin)) != EOF && c != '\n') line.push_back((char)c);
+    if (line.empty() && c == EOF) return 0;
+
+    // Tokenize: first word = verb, remainder = args.
+    size_t sp = line.find(' ');
+    std::string_view verb(line.data(), sp == std::string::npos ? line.size() : sp);
+    std::string_view rest = sp == std::string::npos
+        ? std::string_view{}
+        : std::string_view(line.data() + sp + 1, line.size() - sp - 1);
+
+    if (verb == "quit") {
+      std::fputs("ok\n", stdout);
+      std::fflush(stdout);
+      return 0;
+    }
+
+    try {
+      if (verb == "load") {
+        bundle_path = std::string(rest);
+        env.clear();
+        g_pool = Pool{};
+        g_leaf = g_pool.allocate();
+        g_leaf->refcount = kLeafRefcountPin;
+        parse_dag_into(read_file(bundle_path.c_str()), env);
+        loaded = true;
+        std::fputs("ok\n", stdout);
+        std::fflush(stdout);
+        continue;
+      }
+
+      if (verb == "reset") {
+        if (bundle_path.empty()) { write_err("no bundle loaded"); continue; }
+        recycle_state(env, bundle_path);
+        std::fputs("ok\n", stdout);
+        std::fflush(stdout);
+        continue;
+      }
+
+      if (!loaded) { write_err("no bundle loaded"); continue; }
+
+      if (verb == "eval") {
+        std::string sym(rest);
+        Tree* t = env.get(sym);
+        if (!t) { write_err("unbound: " + sym); continue; }
+        write_data(to_string_marshal(t));
+        maybe_recycle();
+        continue;
+      }
+
+      if (verb == "eval-dag") {
+        std::string sym(rest);
+        Tree* t = env.get(sym);
+        if (!t) { write_err("unbound: " + sym); continue; }
+        write_data(to_dag(t));
+        maybe_recycle();
+        continue;
+      }
+
+      if (verb == "apply") {
+        size_t sep = rest.rfind(' ');
+        if (sep == std::string_view::npos) { write_err("apply: expected <symbol> <len>"); continue; }
+        std::string sym(rest.substr(0, sep));
+        std::string_view lenstr = rest.substr(sep + 1);
+        size_t len = 0;
+        bool bad = false;
+        for (char ch : lenstr) {
+          if (ch < '0' || ch > '9') { bad = true; break; }
+          len = len * 10 + (ch - '0');
+        }
+        if (bad) { write_err("apply: bad length"); continue; }
+
+        std::string payload;
+        if (!read_exact(payload, len)) { write_err("apply: short read"); return 1; }
+
+        Tree* t = env.get(sym);
+        if (!t) { write_err("unbound: " + sym); continue; }
+        Tree* arg = of_string(payload);
+        Tree* result = apply(t, arg);
+        std::string out = to_string_marshal(result);
+        release(result);
+        release(arg);
+        write_data(out);
+        maybe_recycle();
+        continue;
+      }
+
+      write_err("unknown command: " + std::string(verb));
+    } catch (const std::exception& e) {
+      write_err(e.what());
+    }
+  }
+}
+
+// ─── main ─────────────────────────────────────────────────────────────────
+
+// Real entry point — runs on a worker thread that has a large stack.
+// `reduce` is recursive and can chain dozens of thousands of frames deep on
+// number-crunching benchmark suites; the main thread's 8 MiB stack isn't
+// enough. Converting reduce to iterative would work too but is invasive.
+struct WorkerArgs { int argc; char** argv; int result; };
+
+static void* worker_main(void* p) {
+  auto* w = static_cast<WorkerArgs*>(p);
+  int argc = w->argc;
+  char** argv = w->argv;
+  g_leaf = g_pool.allocate();
+  g_leaf->refcount = kLeafRefcountPin;
+
+  if (argc == 2 && (std::strcmp(argv[1], "-s") == 0 ||
+                    std::strcmp(argv[1], "--server") == 0)) {
+    w->result = run_server();
+    return nullptr;
+  }
+
+  if (argc != 3) {
+    std::fprintf(stderr,
+                 "Usage:\n"
+                 "  %s <dag-file> <string>     one-shot apply\n"
+                 "  %s -s | --server           stdin/stdout server mode\n",
+                 argv[0], argv[0]);
+    w->result = 1;
+    return nullptr;
+  }
+
+  try {
+    std::string dag_text = read_file(argv[1]);
+    Tree* dag = parse_dag_terminated(dag_text);
+    Tree* arg = of_string(argv[2]);
+    Tree* result = apply(dag, arg);
+
+    std::string out = to_string_marshal(result);
+    std::fwrite(out.data(), 1, out.size(), stdout);
+    std::fputc('\n', stdout);
+    release(result);
+    release(arg);
+    release(dag);
+    w->result = 0;
+  } catch (const std::exception& e) {
+    std::fprintf(stderr, "%s\n", e.what());
+    w->result = 1;
+  }
+  return nullptr;
+}
+
+int main(int argc, char** argv) {
+  // Worker stack: 64 MiB by default — enough for the deepest reduction
+  // chains we've observed in Forest (Poly.Bench, Nat.Bench) while staying
+  // friendly to constrained hosted-CI builders. Override with
+  // TC_WORKER_STACK_MB if you hit a stack overflow.
+  size_t stack_mb = 64;
+  if (const char* s = std::getenv("TC_WORKER_STACK_MB")) {
+    size_t v = std::strtoull(s, nullptr, 10);
+    if (v > 0) stack_mb = v;
+  }
+
+  pthread_attr_t attr;
+  pthread_attr_init(&attr);
+  if (int rc = pthread_attr_setstacksize(&attr, stack_mb * 1024 * 1024)) {
+    std::fprintf(stderr, "tc: pthread_attr_setstacksize(%zu MiB): %s\n",
+                 stack_mb, std::strerror(rc));
+    return 1;
+  }
+
+  WorkerArgs args{argc, argv, 1};
+  pthread_t tid;
+  if (int rc = pthread_create(&tid, &attr, worker_main, &args)) {
+    std::fprintf(stderr, "tc: pthread_create(stack=%zu MiB): %s\n",
+                 stack_mb, std::strerror(rc));
+    return 1;
+  }
+  pthread_attr_destroy(&attr);
+  pthread_join(tid, nullptr);
+  return args.result;
+}
