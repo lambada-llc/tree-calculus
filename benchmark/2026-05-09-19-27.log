@@ -1,0 +1,69 @@
+cpu:   VirtualApple @ 2.50GHz (x86_64, 8 cores)
+os:    Linux 6.12.72-linuxkit
+date:  2026-05-09 19:27
+
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.267s
+  C++ eager-value-mem                 PASS  0.035s
+  C++ eager-ternary-ref               PASS  0.033s
+  C++ eager-ternary-vm                PASS  0.034s
+  Python                              PASS  0.097s
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.017s
+  ASM x64-noid                        PASS  0.016s
+  ASM x64-vm                          PASS  0.017s
+  ASM x64-minbin                      PASS  0.017s
+  ASM x64-minbin-deep                 PASS  0.017s
+
+recursive-fib (n=24)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.251s
+  C++ eager-ternary-ref               PASS  0.229s
+  C++ eager-ternary-vm                PASS  0.228s
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.131s
+  ASM x64-noid                        PASS  0.134s
+  ASM x64-vm                          PASS  0.119s
+  ASM x64-minbin                      PASS  0.132s
+  ASM x64-minbin-deep                 PASS  0.136s
+
+silly-exp (n=16)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 FAIL  exit 139
+  C++ eager-ternary-ref               FAIL  exit 139
+  C++ eager-ternary-vm                PASS  0.109s
+  Python                              FAIL  exit 1
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.064s
+  ASM x64-noid                        PASS  0.060s
+  ASM x64-vm                          PASS  0.054s
+  ASM x64-minbin                      PASS  0.060s
+  ASM x64-minbin-deep                 PASS  0.061s
+
+exercise-rules (n=200000)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 FAIL  exit 139
+  C++ eager-ternary-ref               FAIL  exit 139
+  C++ eager-ternary-vm                PASS  0.179s
+  Python                              FAIL  exit 1
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.092s
+  ASM x64-noid                        PASS  0.091s
+  ASM x64-vm                          PASS  0.080s
+  ASM x64-minbin                      PASS  0.091s
+  ASM x64-minbin-deep                 PASS  0.093s
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.375s
+  C++ eager-ternary-ref               PASS  0.344s
+  C++ eager-ternary-vm                PASS  0.333s
+  Python                              FAIL  exit 1
+  WASM                                SKIP  node >= v21 required
+  ASM x64                             PASS  0.234s
+  ASM x64-noid                        PASS  0.235s
+  ASM x64-vm                          PASS  0.204s
+  ASM x64-minbin                      PASS  0.270s
+  ASM x64-minbin-deep                 PASS  0.277s
