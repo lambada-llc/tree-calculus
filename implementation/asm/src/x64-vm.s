@@ -38,12 +38,12 @@ start:
 
 _start:
     leaq    heap(%rip), %rbx    # rbx = heap base = leaf address
-    leaq    8(%rbx), %rdi
+    leal    8(%rbx), %edi
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined
     push    $2
     pop     %rax                # eax = 2
-    movl    %edi, %ebp          # ebp = inner fork addr
+    movl    %edi, %edx          # edx = inner fork addr
     stosl                       # inner.tag = 2
     xchg    %ebx, %eax          # eax = leaf, ebx = 2 (temp)
     stosl                       # inner.left = leaf
@@ -51,11 +51,10 @@ _start:
     pushq   %rdi                # push outer fork addr (= result)
     xchg    %ebx, %eax          # eax = 2, ebx = leaf (restored)
     stosl                       # outer.tag = 2
-    xchg    %ebp, %eax          # eax = inner fork addr
+    xchg    %edx, %eax          # eax = inner fork addr
     stosl                       # outer.left = inner
     movl    %ebx, %eax
     stosl                       # outer.right = leaf
-
 1:  call    parse_tree
     js      2f
     popq    %rdx
@@ -191,7 +190,8 @@ do_io:
     pushq   %rdi                # save free pointer
     movl    %eax, %edi          # fd = eax (0=stdin, 1=stdout)
     push    %rcx                # byte on stack (write: cl=data; read: overwritten)
-    mov     %rsp, %rsi          # buffer = stack
+    push    %rsp
+    pop     %rsi                # buffer = stack
     push    $1
     pop     %rdx
     syscall
@@ -201,7 +201,6 @@ do_io:
 
 ## ---- parse_tree -> eax ----
 parse_tree:
-    pushq   %rbp
 .Lp_read:
     xorl    %eax, %eax          # eax=0=SYS_READ
     call    do_io
@@ -211,24 +210,25 @@ parse_tree:
     subb    $'0', %al           # ZF if '0', SF if < '0'
     jz      .Lp_leaf            # leaf: return heap base
     js      .Lp_read            # skip non-digit
-    movl    %edi, %ebp
+    movl    %edi, %edx
     stosl                       # store tag=d, rdi += 4 (eax preserved)
-    pushq   %rbp                # save base
+    pushq   %rdx                # save base
     leaq    (%rdi,%rax,4), %rdi # pre-bump free pointer past children
     xchg    %eax, %ecx          # ecx = loop counter (1 byte vs 2)
 .Lp_loop:
     pushq   %rcx                # save counter across recursive call
+    pushq   %rdx
     call    parse_tree          # eax = child offset
+    popq    %rdx
     popq    %rcx                # restore counter
-    addl    $4, %ebp            # advance to next child slot
-    movl    %eax, 0(%rbp)       # store child
+    addl    $4, %edx            # advance to next child slot
+    movl    %eax, (%rdx)        # store child
     loop    .Lp_loop            # dec ecx; jnz
     popq    %rax                # return base address
-    jmp     .Lp_ret
+    ret
 .Lp_leaf:
     movl    %ebx, %eax          # leaf = heap base
 .Lp_ret:
-    popq    %rbp
     ret
 
 ## ---- emit_tree(edx=tree) ----

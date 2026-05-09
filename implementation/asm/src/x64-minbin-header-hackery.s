@@ -171,7 +171,8 @@ do_io:
     pushq   %rdi                         # save free pointer
     movl    %eax, %edi                   # fd
     push    %rcx                         # byte on stack
-    mov     %rsp, %rsi                   # buffer = stack
+    push    %rsp
+    pop     %rsi                         # buffer = stack
     push    $1
     pop     %rdx                         # count = 1
     syscall

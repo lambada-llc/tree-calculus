@@ -21,6 +21,7 @@ const VARIANTS = {
   "x64-noid":         { format: "ternary", rules: "triage" },
   "x64-minbin":       { format: "minbin",  rules: "triage" },
   "x64-minbin-deep":  { format: "minbin",  rules: "triage" },
+  "x64-vm":           { format: "ternary", rules: "triage" },
 };
 
 // ─── Binary execution ───────────────────────────────────────────────

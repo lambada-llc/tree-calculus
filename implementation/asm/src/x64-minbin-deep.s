@@ -51,7 +51,7 @@ start:
 # No identity bootstrap. No apply-loop.
 _start:
     leaq    heap(%rip), %rbx    # rbx = heap base = leaf address
-    leaq    4(%rbx), %rdi       # rdi = free pointer, skip 4-byte leaf@0
+    leal    4(%rbx), %edi       # rdi = free pointer, skip 4-byte leaf@0
     leaq    apply(%rip), %rbp   # rbp = &apply (call *%rbp = 2B vs 5B)
 
     call    parse_eval          # parse + eval entire stdin → eax
@@ -240,7 +240,8 @@ do_io:
     pushq   %rdi                # save free pointer
     movl    %eax, %edi          # fd
     push    %rcx                # byte on stack (write: cl=data; read: overwritten)
-    mov     %rsp, %rsi          # buffer = stack
+    push    %rsp
+    pop     %rsi                # buffer = stack
     push    $1
     pop     %rdx                # count = 1
     syscall

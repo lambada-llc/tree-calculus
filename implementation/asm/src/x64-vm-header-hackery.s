@@ -73,7 +73,7 @@ phdr:
     ## eax = 2 (from p_memsz trampoline)
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined
-    movl    %edi, %ebp                   # ebp = inner fork addr
+    movl    %edi, %edx                   # edx = inner fork addr
     stosl                                # inner.tag = 2
     xchg    %ebx, %eax                   # eax = leaf, ebx = 2 (temp)
     stosl                                # inner.left = leaf
@@ -81,12 +81,13 @@ phdr:
     pushq   %rdi                         # push outer fork addr (= result)
     xchg    %ebx, %eax                   # eax = 2, ebx = leaf (restored)
     stosl                                # outer.tag = 2
-    xchg    %ebp, %eax                   # eax = inner fork addr
+    xchg    %edx, %eax                   # eax = inner fork addr
     stosl                                # outer.left = inner
     movl    %ebx, %eax
     stosl                                # outer.right = leaf
+    movl    $parse_tree, %ebp            # rbp = &parse_tree (call *%rbp = 2B)
 
-1:  call    parse_tree
+1:  call    *%rbp                        # parse_tree
     js      2f
     popq    %rdx
     xchg    %eax, %esi                   # 1 byte instead of 2
@@ -198,7 +199,8 @@ do_io:
     pushq   %rdi                         # save free pointer
     movl    %eax, %edi                   # fd = eax
     push    %rcx                         # byte on stack
-    mov     %rsp, %rsi                   # buffer = stack
+    push    %rsp
+    pop     %rsi                         # buffer = stack
     push    $1
     pop     %rdx
     syscall
@@ -208,7 +210,6 @@ do_io:
 
 ## ---- parse_tree -> eax ----
 parse_tree:
-    pushq   %rbp
 .Lp_read:
     xorl    %eax, %eax                   # eax=0=SYS_READ
     call    do_io
@@ -218,24 +219,25 @@ parse_tree:
     subb    $'0', %al                    # ZF if '0', SF if < '0'
     jz      .Lp_leaf                     # leaf: return .Lend
     js      .Lp_read                     # skip non-digit
-    movl    %edi, %ebp
+    movl    %edi, %edx
     stosl                                # store tag
-    pushq   %rbp
+    pushq   %rdx
     leaq    (%rdi,%rax,4), %rdi          # pre-bump free pointer past children
     xchg    %eax, %ecx                   # ecx = loop counter
 .Lp_loop:
     pushq   %rcx
-    call    parse_tree
+    pushq   %rdx
+    call    *%rbp                        # parse_tree
+    popq    %rdx
     popq    %rcx
-    addl    $4, %ebp
-    movl    %eax, 0(%rbp)
+    addl    $4, %edx
+    movl    %eax, (%rdx)
     loop    .Lp_loop
     popq    %rax                         # return base address
-    jmp     .Lp_ret
+    ret
 .Lp_leaf:
     movl    %ebx, %eax                   # leaf = .Lend
 .Lp_ret:
-    popq    %rbp
     ret
 
 ## ---- emit_tree(edx=tree) ----
