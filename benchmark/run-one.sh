@@ -157,7 +157,7 @@ fi
 # --- C++ ---
 CPP_BIN="$REPO_ROOT/implementation/cpp/main.exe"
 if [[ -x "$CPP_BIN" ]]; then
-  for eval in eager-value-mem eager-ternary-ref eager-ternary-vm; do
+  for eval in eager-value-mem eager-ternary-ref eager-ternary-vm eager-rc lazy-rc; do
     bench "C++ $eval" --stdin "$CPP_BIN" --evaluator "$eval"
   done
 else

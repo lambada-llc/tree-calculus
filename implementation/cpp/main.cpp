@@ -3,7 +3,9 @@
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
 #include "eager-ternary-vm.hpp"
+#include "eager-rc.hpp"
 #include "lazy-app-stream.hpp"
+#include "lazy-rc.hpp"
 #include "evaluator.hpp"
 #include <iostream>
 
@@ -44,8 +46,12 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryLen>();
   } else if (evaluator == "eager-ternary-vm") {
     return run<EagerTernaryVM>();
+  } else if (evaluator == "eager-rc") {
+    return run<EagerRC>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
+  } else if (evaluator == "lazy-rc") {
+    return run<LazyRC>();
   } else {
     std::cerr << "Unknown evaluator: " << evaluator << std::endl;
     return 1;

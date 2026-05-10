@@ -208,7 +208,9 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryRef>("EagerTernaryRef");
   sanity_checks<EagerTernaryLen>("EagerTernaryLen");
   sanity_checks<EagerTernaryVM>("EagerTernaryVM");
+  sanity_checks<EagerRC>("EagerRC");
   sanity_checks<LazyAppStream>("LazyAppStream");
+  sanity_checks<LazyRC>("LazyRC");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
@@ -219,7 +221,9 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerTernaryLen>("EagerTernaryLen", 55, 14);
     bench_evaluator<EagerTernaryRef>("EagerTernaryRef", 90, 24);
     bench_evaluator<EagerTernaryVM>("EagerTernaryVM", 90, 24);
+    bench_evaluator<EagerRC>("EagerRC", 90, 24);
     bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
+    bench_evaluator<LazyRC>("LazyRC", 90, 20);
   }
 
   std::cout << std::endl << "All tests passed." << std::endl;
