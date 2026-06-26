@@ -115,7 +115,7 @@ let%expect_test "stepper agrees with Tree.apply" =
      applied to a spread of arguments. *)
   let not_tree = Tree.Fork (Tree.Fork (Tree.Stem Tree.Leaf, Tree.Fork (Tree.Leaf, Tree.Leaf)), Tree.Leaf) in
   let id = "x" ^ Ref "x" |> to_tree in
-  let k = k (Ref "u") |> star_abstraction "u" |> to_tree in
+  let k = "u" ^ "v" ^ Ref "u" |> to_tree in
   let funcs = [ Tree.Leaf; Tree.Stem Tree.Leaf; not_tree; id; k ] in
   let args =
     [ Tree.Leaf; Tree.Stem Tree.Leaf; Tree.Fork (Tree.Leaf, Tree.Leaf); not_tree ]
