@@ -115,13 +115,14 @@ parse_tree:
     decl    %eax                # 1 → 0 (byte read), else → eof
     jnz     .Lp_ret
     movb    %cl, %al
-    subb    $'0', %al           # ZF if '0', SF if < '0'
-    jz      .Lp_leaf            # leaf: return heap base
+    subb    $'0', %al           # '0'->0, '1'->1, '2'->2, whitespace->negative
     js      .Lp_read            # skip non-digit
-    xchg    %eax, %ecx          # ecx = child count (1 or 2)
+    movl    %eax, %ecx          # ecx = child count (0, 1 or 2); eax stays 0/1/2 so
+                                # scasq below leaves SF clear (caller's EOF test is `js`)
     movl    %edi, %edx          # edx = node base
     pushq   %rdx
     scasq                       # reserve two words (u, v): rdi += 8 in 2 bytes
+    jrcxz   .Lp_done            # count 0 -> leaf: the reserved [0][0] node is it
 .Lp_loop:
     pushq   %rcx
     pushq   %rdx
@@ -131,10 +132,8 @@ parse_tree:
     movl    %eax, (%rdx)        # store child
     addl    $4, %edx            # next slot
     loop    .Lp_loop
+.Lp_done:
     popq    %rax                # return base address
-    ret
-.Lp_leaf:
-    movl    %ebx, %eax          # leaf = heap base
 .Lp_ret:
     ret
 
