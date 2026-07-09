@@ -10,7 +10,7 @@ The variants differ along three axes:
 
 ### By I/O format
 
-**Ternary** (`x64`, `x64-jay`, `x64-noid`): Reads one ternary-encoded tree per stdin line (`0`=leaf, `1X`=stem, `2XY`=fork). Left-folds application across all inputs (starting from the identity tree). Writes the result to stdout in the same encoding.
+**Ternary** (`x64`, `x64-ternary`, `x64-jay`, `x64-noid`, `x64-vm`): Reads one ternary-encoded tree per stdin line (`0`=leaf, `1X`=stem, `2XY`=fork). Left-folds application across all inputs (starting from the identity tree). Writes the result to stdout in the same encoding.
 
 ```sh
 # 21100 is the identity tree; applying it to 10 returns 10
@@ -44,19 +44,21 @@ There is actually not just one tree calculus, it is a family of calculi. See [Ba
 
 ### By internal representation
 
-**Ternary nodes** (all except `x64` and `x64-minbin-deep`): Heap nodes are `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork (4/8/12 bytes).
-
-**Two-word tagless nodes** (`x64`): Every node is exactly two i32 words, `[u][v]` (8 bytes), with the shape implicit in whether the child pointers are null:
+**Two-word tagless nodes** (default — all except `x64-ternary` and `x64-minbin-deep`): Every node is exactly two i32 words, `[u][v]` (8 bytes), with the shape implicit in whether the child pointers are null:
 
 - `u == 0` → **leaf** (`v` ignored; the canonical leaf is `[0][0]` at the heap base)
 - `u != 0, v == 0` → **stem**(`u`)
 - `u != 0, v != 0` → **fork**(`u`, `v`)
 
-Heap addresses are always non-zero, so `0` unambiguously means "no child" — there is no tag word. Forks shrink from 12 to 8 bytes, and construction is just a pair of stores with no tag write. `apply`'s leaf/stem/fork and triage cases fall out of `jrcxz` null-checks with `jmp *%rbp` tail calls (no per-child loop, no tag arithmetic), and the ternary tag (0/1/2) is only reconstructed where genuinely needed — in `emit` — branchlessly. Because every non-null child is `>=` the heap base held in `rbx`, `cmpl %ebx, word` sets the carry flag exactly when `word == 0`, so the tag is `sbb %ecx,%ecx; sbb $-2,%ecx` = `2 - (u==0) - (v==0)` in four instructions. Net effect vs. the tagged layout: ~15–20% faster on reduction-heavy workloads *and* meaningfully smaller (340 vs. 359 B) — the tighter nodes, branchless dispatch, and tail-call triage outweigh `emit` rebuilding the tag.
+Heap addresses are always non-zero, so `0` unambiguously means "no child" — there is no tag word. Forks shrink from 12 to 8 bytes, and construction is just a pair of stores with no tag write. `apply`'s leaf/stem/fork and triage cases fall out of `jrcxz` null-checks with `jmp *%rbp` tail calls (no per-child loop, no tag arithmetic), and the ternary tag (0/1/2) is only reconstructed where genuinely needed — in `emit` — branchlessly. Because every non-null child is `>=` the heap base held in `rbx`, `cmpl %ebx, word` sets the carry flag exactly when `word == 0`, so the tag is `sbb %ecx,%ecx; sbb $-2,%ecx` = `2 - (u==0) - (v==0)` in four instructions. Net effect vs. the tagged layout: ~15–20% faster on reduction-heavy workloads *and* smaller across the board — the tighter nodes, branchless dispatch, and tail-call reduction outweigh `emit` rebuilding the tag. It is the default across the family; only the two variants whose whole point is a different layout keep theirs.
 
-**Deep app-trees** (`x64-minbin-deep`): Only two node types — `leaf [tag=0]` and `app [tag=1][left][right]`. Ternary forms are nested apps: `stem(x)` = `app(leaf,x)`, `fork(x,y)` = `app(app(leaf,x),y)`. Simpler allocation and emission; deeper pattern matching in `apply()`.
+**Tagged-ternary nodes** (`x64-ternary`): the original `x64` layout, preserved for comparison — `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork (4/8/12 bytes). Same reduction rules and I/O as `x64`; only the node representation differs (359 B vs. 340 B).
+
+**Deep app-trees** (`x64-minbin-deep`): Only two node types — `leaf [tag=0]` and `app [tag=1][left][right]`. Ternary forms are nested apps: `stem(x)` = `app(leaf,x)`, `fork(x,y)` = `app(app(leaf,x),y)`. Simpler allocation and emission; deeper pattern matching in `apply()`. This layout *is* the point of the variant, so it keeps its tagged app-nodes rather than switching to the two-word form.
 
 ### Other differences
+
+**x64-ternary**: `x64` with the original tagged-ternary node layout instead of the two-word tagless one (see *By internal representation*). Kept as the head-to-head baseline for the representation change.
 
 **x64-noid**: Omits the identity tree builder at startup. The first input becomes the accumulator directly instead of being applied to the identity. Undefined behavior for fewer than 2 inputs. Saves ~11 bytes.
 

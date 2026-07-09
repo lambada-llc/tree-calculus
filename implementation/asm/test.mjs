@@ -17,6 +17,7 @@ const asmDir = dirname(fileURLToPath(import.meta.url));
 
 const VARIANTS = {
   "x64":              { format: "ternary", rules: "triage" },
+  "x64-ternary":      { format: "ternary", rules: "triage" },
   "x64-jay":          { format: "ternary", rules: "jay"    },
   "x64-noid":         { format: "ternary", rules: "triage" },
   "x64-minbin":       { format: "minbin",  rules: "triage" },
