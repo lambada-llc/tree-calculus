@@ -13,9 +13,10 @@
 #
 # This packs forks into 8 bytes (vs 12 for the tagged [tag][l][r]
 # layout) and makes construction a pair of stores with no tag write.
-# The cost is reconstructing the ternary tag (0/1/2) when we need it
-# for emit and for triage dispatch, done branchlessly as
-#   tag = 2 - (u==0) - (v==0).
+# apply's leaf/stem/fork split and the triage dispatch fall out of
+# null-checks (jrcxz) with jmp *%rbp tail calls; the ternary tag
+# (0/1/2) is reconstructed branchlessly (2 - (u==0) - (v==0)) only
+# where genuinely needed — in emit.
 #
 # Node pointers are absolute addresses (no base register needed for access).
 # rbx = pointer to the canonical leaf node = heap base.
@@ -47,21 +48,26 @@ start:
 #endif
 
 _start:
-    leaq    heap(%rip), %rbx    # rbx = heap base = leaf address ([0][0] from BSS)
+    ## rbp = &apply, loaded first so the leaf/heap base can be derived
+    ## from it. `apply` is the last function, so `leaf` sits just past it
+    ## and `leaf-apply` is a small intra-.text displacement (disp8) — this
+    ## keeps everything PC-relative (no absolute relocations) yet compact.
+    leaq    apply(%rip), %rbp   # rbp = &apply
+    leal    leaf-apply(%rbp), %ebx  # rbx = leaf address = heap base ([0][0] from BSS)
     leal    8(%rbx), %edi       # rdi = heap free pointer (past the leaf node)
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined.
-    ## In the two-word layout a fork is just [left][right].
+    ## In the two-word layout a fork is just [left][right]. Uses esi (not
+    ## ebp) as scratch so rbp keeps pointing at apply — no reload needed.
     movl    %ebx, %eax          # eax = leaf
-    movl    %edi, %ebp          # ebp = inner fork addr
+    movl    %edi, %esi          # esi = inner fork addr
     stosl                       # inner.u = leaf
     stosl                       # inner.v = leaf
     pushq   %rdi                # push outer fork addr (= result)
-    xchg    %ebp, %eax          # eax = inner fork addr, ebp = leaf
+    xchg    %esi, %eax          # eax = inner fork addr, esi = leaf
     stosl                       # outer.u = inner
-    xchg    %ebp, %eax          # eax = leaf, ebp = inner
+    xchg    %esi, %eax          # eax = leaf, esi = inner
     stosl                       # outer.v = leaf
-    leaq    apply(%rip), %rbp   # rbp = &apply
 
 1:  call    parse_tree
     js      2f
@@ -76,77 +82,6 @@ _start:
     movb    $60, %al            # SYS_EXIT
     xorl    %edi, %edi
     syscall
-
-## ---- apply(edx=a, esi=b) -> eax ----
-apply:
-    movl    (%rdx), %eax               # eax = a.u
-    movl    4(%rdx), %ecx              # ecx = a.v
-    testl   %eax, %eax
-    jnz     1f
-    xchg    %eax, %esi                 # a=leaf: eax=b, esi=0 (old a.u)
-1:  testl   %ecx, %ecx
-    jnz     .La_fork                   # a.v != 0 -> a is a fork
-    ## a=leaf -> build stem(b)=[b][0]; a=stem(x) -> build fork(x,b)=[x][b].
-    ## Either way the node is [eax][esi].
-    pushq   %rdi                       # save result addr
-    stosl                              # write u = eax
-    xchg    %eax, %esi                 # eax = v
-    stosl                              # write v
-    popq    %rax                       # result = start of node
-    ret
-
-.La_fork:
-    ## a = fork(u, y): u = a.u (eax), y = a.v.
-    movl    (%rax), %ecx               # u.u
-    jrcxz   .Lu_leaf
-    movl    4(%rax), %ecx              # u.v
-    jrcxz   .Lu_stem
-
-    ## u = fork(w, x): triage on b. w=u.u, x=u.v; y=a.v.
-    ## Dispatch directly on b's shape — no tag arithmetic needed:
-    ##   b=leaf     -> w
-    ##   b=stem(z)  -> x·z
-    ##   b=fork(p,q)-> y·p·q
-    movl    (%rsi), %ecx               # b.u
-    jrcxz   .Lb_leaf
-    cmpl    $0, 4(%rsi)                # b.v
-    jz      .Lb_stem
-.Lb_fork:
-    movl    4(%rsi), %eax              # q = b.v
-    pushq   %rax                       # save q
-    movl    (%rsi), %esi               # p = b.u
-    movl    4(%rdx), %edx              # y = a.v
-    call    *%rbp                      # apply(y, p) -> eax
-    popq    %rsi                       # esi = q
-    xchg    %eax, %edx                 # edx = y·p
-    jmp     *%rbp                      # tail apply(y·p, q)
-.Lb_stem:
-    movl    4(%rax), %edx              # x = u.v
-    movl    (%rsi), %esi               # z = b.u
-    jmp     *%rbp                      # tail apply(x, z)
-.Lb_leaf:
-    movl    (%rax), %eax               # w = u.u
-    ret
-
-.Lu_stem:
-    ## rule 2: (x.b).(y.b) where u=stem(x), a=fork(u,y)
-    pushq   %rdx                       # save a       [a]
-    pushq   %rsi                       # save b       [b][a]
-    movl    (%rax), %edx               # x = u.u
-    call    *%rbp                      # apply(x, b) -> eax
-    popq    %rsi                       # restore b
-    popq    %rdx                       # restore a
-    pushq   %rax                       # save x·b     [x·b]
-    movl    4(%rdx), %edx              # y = a.v
-    call    *%rbp                      # apply(y, b) -> eax
-    xchg    %eax, %esi                 # esi = y·b (1B)
-    popq    %rdx                       # edx = x·b
-    jmp     *%rbp                      # tail apply(x·b, y·b)
-
-.Lu_leaf:
-    ## rule 1: a.v
-    movl    4(%rdx), %eax
-    ret
 
 ## ---- I/O: shared syscall stub ----
 write_byte:
@@ -182,7 +117,7 @@ parse_tree:
     xchg    %eax, %ecx          # ecx = child count (1 or 2)
     movl    %edi, %edx          # edx = node base
     pushq   %rdx
-    addl    $8, %edi            # reserve two words (u, v)
+    scasq                       # reserve two words (u, v): rdi += 8 in 2 bytes
 .Lp_loop:
     pushq   %rcx
     pushq   %rdx
@@ -225,6 +160,85 @@ emit_tree:
     addl    $4, %edx                   # next slot
     loop    .Lemit_loop
 1:  ret
+
+## ---- apply(edx=a, esi=b) -> eax ----
+## Placed last so `leaf` (the label just below) is a short intra-.text
+## displacement from `apply`, letting _start derive the heap base from rbp.
+apply:
+    movl    (%rdx), %eax               # eax = a.u
+    movl    4(%rdx), %ecx              # ecx = a.v
+    jrcxz   .La_build                  # a.v == 0 -> a is leaf or stem
+
+    ## a = fork(u, y): u = a.u (eax), y = a.v.
+    ## (any node with a.v != 0 has a.u != 0, so eax is a valid pointer.)
+    movl    (%rax), %ecx               # u.u
+    jrcxz   .Lu_leaf
+    movl    4(%rax), %ecx              # u.v
+    jrcxz   .Lu_stem
+
+    ## u = fork(w, x): triage on b. w=u.u, x=u.v; y=a.v.
+    ## Dispatch directly on b's shape — no tag arithmetic needed:
+    ##   b=leaf     -> w
+    ##   b=stem(z)  -> x·z
+    ##   b=fork(p,q)-> y·p·q
+    movl    (%rsi), %ecx               # b.u
+    jrcxz   .Lb_leaf
+    movl    4(%rsi), %ecx              # b.v
+    jrcxz   .Lb_stem
+.Lb_fork:
+    movl    4(%rsi), %eax              # q = b.v
+    pushq   %rax                       # save q
+    movl    (%rsi), %esi               # p = b.u
+    movl    4(%rdx), %edx              # y = a.v
+    call    *%rbp                      # apply(y, p) -> eax
+    popq    %rsi                       # esi = q
+    xchg    %eax, %edx                 # edx = y·p
+    jmp     *%rbp                      # tail apply(y·p, q)
+.Lb_stem:
+    movl    4(%rax), %edx              # x = u.v
+    movl    (%rsi), %esi               # z = b.u
+    jmp     *%rbp                      # tail apply(x, z)
+.Lb_leaf:
+    movl    (%rax), %eax               # w = u.u
+    ret
+
+.Lu_stem:
+    ## rule 2: (x.b).(y.b) where u=stem(x), a=fork(u,y)
+    pushq   %rdx                       # save a       [a]
+    pushq   %rsi                       # save b       [b][a]
+    movl    (%rax), %edx               # x = u.u
+    call    *%rbp                      # apply(x, b) -> eax
+    popq    %rsi                       # restore b
+    popq    %rdx                       # restore a
+    pushq   %rax                       # save x·b     [x·b]
+    movl    4(%rdx), %edx              # y = a.v
+    call    *%rbp                      # apply(y, b) -> eax
+    xchg    %eax, %esi                 # esi = y·b (1B)
+    popq    %rdx                       # edx = x·b
+    jmp     *%rbp                      # tail apply(x·b, y·b)
+
+.Lu_leaf:
+    ## rule 1: a.v
+    movl    4(%rdx), %eax
+    ret
+
+.La_build:
+    ## a=leaf -> build stem(b)=[b][0]; a=stem(x) -> build fork(x,b)=[x][b].
+    testl   %eax, %eax                 # a.u == 0 -> leaf
+    jnz     1f
+    xchg    %eax, %esi                 # leaf: eax=b, esi=0 (old a.u)
+1:  pushq   %rdi                       # save result addr
+    stosl                              # write u = eax
+    xchg    %eax, %esi                 # eax = v
+    stosl                              # write v
+    popq    %rax                       # result = start of node
+    ret
+
+## The canonical leaf lives here at the end of .text: its address is the
+## first byte past the loaded image, so [leaf] = [0][0] via BSS zero-fill,
+## and the bump allocator grows upward from leaf+8. The .lcomm below only
+## exists to enlarge p_memsz so the kernel maps a big zero heap.
+leaf:
 
 .bss
 .lcomm heap, 0x20000000
