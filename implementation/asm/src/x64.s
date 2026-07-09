@@ -53,7 +53,12 @@ _start:
     ## and `leaf-apply` is a small intra-.text displacement (disp8) — this
     ## keeps everything PC-relative (no absolute relocations) yet compact.
     leaq    apply(%rip), %rbp   # rbp = &apply
-    leal    leaf-apply(%rbp), %ebx  # rbx = leaf address = heap base ([0][0] from BSS)
+    ## rbx = leaf address = heap base ([0][0] from BSS) = apply + sizeof(apply).
+    ## Hand-encoded `leal (leaf-apply)(%rbp), %ebx`: leaf-apply is a forward
+    ## reference so the assembler would pick the 6-byte disp32 form, but it
+    ## fits in a signed byte (guarded at end of file), so force disp8 = 3B.
+    .byte   0x8d, 0x5d          # leal disp8(%rbp), %ebx  (ModRM 5d: mod=01, reg=ebx, base=rbp)
+    .byte   leaf-apply          # disp8 = sizeof(apply)
     leal    8(%rbx), %edi       # rdi = heap free pointer (past the leaf node)
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined.
@@ -70,15 +75,14 @@ _start:
     stosl                       # outer.v = leaf
 
 1:  call    parse_tree
+    popq    %rdx                # accumulator (pop before the EOF test; pop leaves flags)
     js      2f
-    popq    %rdx
     xchg    %eax, %esi          # 1 byte instead of 2
     call    *%rbp               # apply(edx, esi) -> eax
     pushq   %rax
     jmp     1b
 
-2:  popq    %rdx
-    call    emit_tree
+2:  call    emit_tree
     movb    $60, %al            # SYS_EXIT
     xorl    %edi, %edi
     syscall
@@ -136,13 +140,14 @@ parse_tree:
 
 ## ---- emit_tree(edx=tree) — recursive, byte-at-a-time output ----
 emit_tree:
-    ## tag = 2 - (u==0) - (v==0), branchless.
-    push    $2
-    pop     %rcx
-    cmpl    $1, (%rdx)                 # CF = (u == 0)
-    sbbl    $0, %ecx
-    cmpl    $1, 4(%rdx)                # CF = (v == 0)
-    sbbl    $0, %ecx                   # ecx = tag in {0,1,2} = child count
+    ## tag = 2 - (u==0) - (v==0), branchless. Every non-null child pointer
+    ## is >= the heap base (rbx), so `cmpl %ebx, word` sets CF iff word==0.
+    ##   sbb %ecx,%ecx  -> ecx = -CF = -(u==0)          {0 or -1}
+    ##   sbb $-2,%ecx   -> ecx = ecx + 2 - CF = tag     {leaf 0, stem 1, fork 2}
+    cmpl    %ebx, (%rdx)               # CF = (u == 0)
+    sbbl    %ecx, %ecx                 # ecx = -(u == 0)
+    cmpl    %ebx, 4(%rdx)              # CF = (v == 0)
+    sbbl    $-2, %ecx                  # ecx = tag in {0,1,2} = child count
     pushq   %rcx
     pushq   %rdx
     addb    $'0', %cl
@@ -183,11 +188,10 @@ apply:
     ##   b=fork(p,q)-> y·p·q
     movl    (%rsi), %ecx               # b.u
     jrcxz   .Lb_leaf
-    movl    4(%rsi), %ecx              # b.v
+    movl    4(%rsi), %ecx              # b.v  (== q, kept in ecx for .Lb_fork)
     jrcxz   .Lb_stem
 .Lb_fork:
-    movl    4(%rsi), %eax              # q = b.v
-    pushq   %rax                       # save q
+    pushq   %rcx                       # save q = b.v (already in ecx)
     movl    (%rsi), %esi               # p = b.u
     movl    4(%rdx), %edx              # y = a.v
     call    *%rbp                      # apply(y, p) -> eax
@@ -239,6 +243,9 @@ apply:
 ## and the bump allocator grows upward from leaf+8. The .lcomm below only
 ## exists to enlarge p_memsz so the kernel maps a big zero heap.
 leaf:
+## NOTE: _start hand-encodes (leaf-apply) as a disp8, so `apply` must stay
+## within 127 bytes of `leaf` (it is currently ~83). If apply grows past
+## that, the leaf pointer silently wraps — keep apply the last function.
 
 .bss
 .lcomm heap, 0x20000000

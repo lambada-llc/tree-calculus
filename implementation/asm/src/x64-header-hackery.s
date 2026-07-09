@@ -84,15 +84,14 @@ phdr:
     movl    $apply, %ebp                 # rbp = &apply (call *%rbp = 2B vs 5B)
 
 1:  call    parse_tree
+    popq    %rdx                         # accumulator (pop before EOF test; pop leaves flags)
     js      2f
-    popq    %rdx
     xchg    %eax, %esi                   # 1 byte instead of 2
     call    *%rbp
     pushq   %rax
     jmp     1b
 
-2:  popq    %rdx
-    call    emit_tree
+2:  call    emit_tree
     jmp     .Lexit                       # exit via p_paddr
 
 ## ---- apply(edx=a, esi=b) -> eax ----
@@ -111,11 +110,10 @@ apply:
     ##   b=leaf -> w ; b=stem(z) -> x·z ; b=fork(p,q) -> y·p·q
     movl    (%rsi), %ecx               # b.u
     jrcxz   .Lb_leaf
-    movl    4(%rsi), %ecx              # b.v
+    movl    4(%rsi), %ecx              # b.v  (== q, kept in ecx for .Lb_fork)
     jrcxz   .Lb_stem
 .Lb_fork:
-    movl    4(%rsi), %eax              # q = b.v
-    pushq   %rax                       # save q
+    pushq   %rcx                       # save q = b.v (already in ecx)
     movl    (%rsi), %esi               # p = b.u
     movl    4(%rdx), %edx              # y = a.v
     call    *%rbp                      # apply(y, p) -> eax
@@ -212,13 +210,13 @@ parse_tree:
 
 ## ---- emit_tree(edx=tree) — recursive, byte-at-a-time output ----
 emit_tree:
-    ## tag = 2 - (u==0) - (v==0), branchless.
-    push    $2
-    pop     %rcx
-    cmpl    $1, (%rdx)                         # CF = (u == 0)
-    sbbl    $0, %ecx
-    cmpl    $1, 4(%rdx)                        # CF = (v == 0)
-    sbbl    $0, %ecx                           # ecx = tag in {0,1,2} = child count
+    ## tag = 2 - (u==0) - (v==0), branchless. Non-null pointers are >= the
+    ## heap base (rbx), so `cmpl %ebx, word` sets CF iff word==0.
+    ##   sbb %ecx,%ecx -> ecx = -(u==0); sbb $-2,%ecx -> ecx = tag {0,1,2}
+    cmpl    %ebx, (%rdx)                       # CF = (u == 0)
+    sbbl    %ecx, %ecx                         # ecx = -(u == 0)
+    cmpl    %ebx, 4(%rdx)                      # CF = (v == 0)
+    sbbl    $-2, %ecx                          # ecx = tag in {0,1,2} = child count
     pushq   %rcx
     pushq   %rdx                               # save tree ptr
     addb    $'0', %cl
