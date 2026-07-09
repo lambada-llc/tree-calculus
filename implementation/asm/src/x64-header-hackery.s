@@ -99,21 +99,8 @@ phdr:
 apply:
     movl    (%rdx), %eax               # eax = a.u
     movl    4(%rdx), %ecx              # ecx = a.v
-    testl   %eax, %eax
-    jnz     1f
-    xchg    %eax, %esi                 # a=leaf: eax=b, esi=0 (old a.u)
-1:  testl   %ecx, %ecx
-    jnz     .La_fork                   # a.v != 0 -> a is a fork
-    ## a=leaf -> build stem(b)=[b][0]; a=stem(x) -> build fork(x,b)=[x][b].
-    ## Either way the node is [eax][esi].
-    pushq   %rdi                       # save result addr
-    stosl                              # write u = eax
-    xchg    %eax, %esi                 # eax = v
-    stosl                              # write v
-    popq    %rax                       # result = start of node
-    ret
+    jrcxz   .La_build                  # a.v == 0 -> a is leaf or stem
 
-.La_fork:
     ## a = fork(u, y): u = a.u (eax), y = a.v.
     movl    (%rax), %ecx               # u.u
     jrcxz   .Lu_leaf
@@ -124,8 +111,8 @@ apply:
     ##   b=leaf -> w ; b=stem(z) -> x·z ; b=fork(p,q) -> y·p·q
     movl    (%rsi), %ecx               # b.u
     jrcxz   .Lb_leaf
-    cmpl    $0, 4(%rsi)                # b.v
-    jz      .Lb_stem
+    movl    4(%rsi), %ecx              # b.v
+    jrcxz   .Lb_stem
 .Lb_fork:
     movl    4(%rsi), %eax              # q = b.v
     pushq   %rax                       # save q
@@ -163,7 +150,17 @@ apply:
     movl    4(%rdx), %eax
     ret
 
-## (alloc_fork/alloc_stem removed — unified into apply body + inlined _start)
+.La_build:
+    ## a=leaf -> build stem(b)=[b][0]; a=stem(x) -> build fork(x,b)=[x][b].
+    testl   %eax, %eax                 # a.u == 0 -> leaf
+    jnz     1f
+    xchg    %eax, %esi                 # leaf: eax=b, esi=0 (old a.u)
+1:  pushq   %rdi                       # save result addr
+    stosl                              # write u = eax
+    xchg    %eax, %esi                 # eax = v
+    stosl                              # write v
+    popq    %rax                       # result = start of node
+    ret
 
 ## ---- I/O: shared syscall stub ----
 write_byte:
@@ -196,7 +193,7 @@ parse_tree:
     xchg    %eax, %ecx                   # ecx = child count (1 or 2)
     movl    %edi, %edx                   # edx = node base
     pushq   %rdx
-    addl    $8, %edi                     # reserve two words (u, v)
+    scasq                                # reserve two words (u, v): rdi += 8 in 2 bytes
 .Lp_loop:
     pushq   %rcx
     pushq   %rdx
