@@ -144,6 +144,24 @@ Disclaimer: These binaries were developed on [Apple silicon via Rosetta](https:/
 
 **Avoid 0x67 address-size override prefix** — using a 32-bit register as an address base in 64-bit mode (e.g., `(%ebp)`) adds a 1-byte prefix. Use 64-bit register forms (`(%rbp)`) to avoid this.
 
+**Retarget `%rbp` after the fold loop (`x64`).** `%rbp` holds `&apply` for the reduction loop, but once EOF ends the loop nothing calls `apply` again, so the epilogue points `%rbp` at `emit_tree` instead. The retarget `lea` is paid for by the top-level emit call (`call rel32` 5B → `lea` 3B + `call *%rbp` 2B), and `emit`'s self-recursion then drops from 5 bytes to 2. Net −3.
+
+### Tagless two-word representation (`x64`)
+
+The tagless `[u][v]` layout (see *By internal representation*) enables a few tricks of its own:
+
+**Heap base as a null threshold.** Every non-null child pointer is `>=` the leaf/heap-base address kept in `%rbx`, and `0` is the only value below it. So `cmpl %ebx, word` sets CF exactly when `word == 0` — a 2-byte null test (3 bytes at `disp8`) that is shorter than `cmpl $1, word` (3/4 bytes) and needs no scratch register.
+
+**Reconstruct the ternary tag with two `sbb`s.** `emit` needs `tag = 2 - (u==0) - (v==0)`. Using the threshold test above: `sbb %ecx,%ecx` turns the first carry into `-(u==0)` (0 or −1), then `sbb $-2,%ecx` computes `ecx + 2 - CF` for the second — yielding `{0,1,2}` in four instructions, no `push $2` and no immediate compare.
+
+**`scasq` to reserve a node.** A node is always two i32 words, so `scasq` (2 bytes) bumps the bump-allocator `%rdi` by 8 — one byte shorter than `addl $8,%edi`. (It also does a dead compare against `[rdi]`, whose flags are irrelevant.)
+
+**A leaf is just a count-0 node.** Because *any* `u==0` node is a leaf, parsing `'0'` needs no special case: it flows through the normal allocation path with child count 0, and a `jrcxz` skips the fill loop over the freshly `scasq`-reserved (BSS-zero) `[0][0]` node.
+
+**Reuse the classification load.** In `apply`'s triage, the fork case wants `b`'s right child `q`, which the immediately-preceding `movl 4(%rsi),%ecx; jrcxz` already left in `%ecx` — so `pushq %rcx` replaces a reload.
+
+**Hand-encode a `disp8` past a forward reference.** `_start` derives the leaf/heap base as `apply + sizeof(apply)`, and retargets `%rbp` to `emit_tree` as `apply + (emit_tree-apply)`. Both offsets fit a signed byte, but as forward references the assembler picks the 6-byte `disp32` `lea`. Emitting the opcode + ModRM + `.byte (label-label)` by hand forces the 3-byte `disp8` form; the displacement stays a same-section constant, so it survives the phdr-overlap file shift and needs no relocation.
+
 ### Absolute addressing (no SIB bytes)
 
 Heap base `.Lend` is a link-time constant, and all addresses fit in 32 bits. Node pointers are stored as absolute addresses, so every heap access like `movl 4(%rbx,%rdx),%ecx` (4 bytes: opcode + ModR/M + SIB + disp8) becomes `movl 4(%rdx),%ecx` (3 bytes: no SIB). With ~14 heap accesses in `apply` alone, this saves 13+ bytes per variant.
