@@ -82,7 +82,13 @@ _start:
     pushq   %rax
     jmp     1b
 
-2:  call    emit_tree
+2:  ## The fold loop is done, so rbp (= &apply) is dead. Retarget it to
+    ## emit_tree so the call here AND emit's self-recursion are both the
+    ## 2-byte `call *%rbp`. Hand-encoded disp8 (emit_tree-apply is a small
+    ## backward distance; as a forward reference it would force disp32).
+    .byte   0x8d, 0x6d          # leal disp8(%rbp), %ebp  (ModRM 6d: reg=ebp, base=rbp)
+    .byte   emit_tree-apply     # disp8 = emit_tree - apply
+    call    *%rbp               # emit_tree(edx = accumulator)
     movb    $60, %al            # SYS_EXIT
     xorl    %edi, %edi
     syscall
@@ -158,7 +164,7 @@ emit_tree:
     pushq   %rcx
     pushq   %rdx
     movl    (%rdx), %edx               # child = *slot (offset 0 then 4)
-    call    emit_tree
+    call    *%rbp                      # emit_tree (rbp retargeted to it in _start)
     popq    %rdx
     popq    %rcx
     addl    $4, %edx                   # next slot
