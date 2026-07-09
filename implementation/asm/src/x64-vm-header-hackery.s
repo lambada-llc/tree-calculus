@@ -72,73 +72,53 @@ phdr:
     ## rbx = .Lend (leaf addr); rdi = free pointer past leaf node
     ## eax = 2 (from p_memsz trampoline)
 
-    ## Build identity: fork(fork(leaf, leaf), leaf) — inlined
+    ## Build identity: fork(fork(leaf, leaf), leaf) — tagless two-word forks.
+    ## eax = 2 from the p_memsz trampoline is dead here; overwritten below.
+    movl    %ebx, %eax                   # eax = leaf
     movl    %edi, %edx                   # edx = inner fork addr
-    stosl                                # inner.tag = 2
-    xchg    %ebx, %eax                   # eax = leaf, ebx = 2 (temp)
-    stosl                                # inner.left = leaf
-    stosl                                # inner.right = leaf
+    stosl                                # inner.u = leaf
+    stosl                                # inner.v = leaf
     pushq   %rdi                         # push outer fork addr (= result)
-    xchg    %ebx, %eax                   # eax = 2, ebx = leaf (restored)
-    stosl                                # outer.tag = 2
-    xchg    %edx, %eax                   # eax = inner fork addr
-    stosl                                # outer.left = inner
-    movl    %ebx, %eax
-    stosl                                # outer.right = leaf
+    xchg    %edx, %eax                   # eax = inner (edx = leaf)
+    stosl                                # outer.u = inner
+    xchg    %edx, %eax                   # eax = leaf (edx = inner)
+    stosl                                # outer.v = leaf
     movl    $parse_tree, %ebp            # rbp = &parse_tree (call *%rbp = 2B)
 
 1:  call    *%rbp                        # parse_tree
+    popq    %rdx                         # accumulator (pop before EOF test; leaves flags)
     js      2f
-    popq    %rdx
     xchg    %eax, %esi                   # 1 byte instead of 2
     call    apply
     pushq   %rax
     jmp     1b
 
-2:  popq    %rdx
-    call    emit_tree
+2:  call    emit_tree
     jmp     .Lexit                       # exit via p_paddr
 
-## (alloc_fork/alloc_stem removed — unified into .Lreduce body + inlined _start)
-
-## ---- apply(edx=a, esi=b) -> eax ----
+## ---- apply(edx=a, esi=b) -> eax ----  (tagless two-word, VM continuation stack)
 apply:
     pushq   $-1                          # sentinel
-
 .Lreduce:
-    movl    (%rdx), %ecx
-    cmpl    $2, %ecx
-    jae     .Lvm_a_fork
+    movl    (%rdx), %eax                 # a.u
+    movl    4(%rdx), %ecx                # a.v
+    jrcxz   .Lvm_a_build                 # a.v == 0 -> a is leaf or stem
 
-    ## a=leaf (ecx=0) or a=stem (ecx=1): build [tag+1, ...a.children, b]
-    pushq   %rdi                         # save result addr
-    leal    1(%rcx), %eax                # tag = a.tag + 1
-    stosl                                # write tag
-    jrcxz   1f                           # leaf: no children to copy
-    movl    4(%rdx), %eax                # a.child (stem case)
-    stosl                                # write it
-1:  xchg    %esi, %eax                   # eax = b
-    stosl                                # append b
-    popq    %rax                         # result
-    jmp     .Ldispatch
-
-.Lvm_a_fork:
-    movl    4(%rdx), %eax                # eax = u = a.left
-    movl    (%rax), %ecx                 # u.tag
+    movl    (%rax), %ecx                 # u.u
     jrcxz   .Lvm_u_leaf
-    decl    %ecx
-    jz      .Lvm_u_stem
+    movl    4(%rax), %ecx                # u.v
+    jrcxz   .Lvm_u_stem
 
-    ## ---- u = fork(w, x): triage on b ----
-    movl    (%rsi), %ecx
+    ## u = fork(w, x): triage on b
+    movl    (%rsi), %ecx                 # b.u
     jrcxz   .Lvm_b_leaf
-    decl    %ecx
-    jz      .Lvm_b_stem
+    movl    4(%rsi), %ecx                # b.v
+    jrcxz   .Lvm_b_stem
 
     ## b = fork(d, e):  apply(apply(y, d), e)
-    movl    8(%rsi), %eax                # eax = e = b.right
-    movl    8(%rdx), %edx                # edx = y = a.right
-    movl    4(%rsi), %esi                # esi = d = b.left
+    movl    4(%rsi), %eax                # e = b.v
+    movl    4(%rdx), %edx                # y = a.v
+    movl    (%rsi), %esi                 # d = b.u
 .Lpush_at_reduce:
     pushq   %rax                         # push e (or result)
     pushq   $0                           # tag = APPLY_TO
@@ -146,29 +126,27 @@ apply:
 
 .Lvm_u_stem:
     ## u = stem(u'):  apply(apply(u', b), apply(y, b))
-    movl    4(%rax), %eax                # eax = u' = u.child
+    movl    (%rax), %eax                 # u' = u.u
     pushq   %rsi                         # arg2 = b
     pushq   %rax                         # arg1 = u'
     pushq   $1                           # tag = COMPUTE_AND_APPLY
-    movl    8(%rdx), %edx                # a = y = a.right
+    movl    4(%rdx), %edx                # a = y = a.v
     jmp     .Lreduce
 
 .Lvm_b_stem:
     ## b = stem(d):  apply(x, d)
-    movl    8(%rax), %edx                # a = x = u.right
-    movl    4(%rsi), %esi                # b = d = b.child
+    movl    4(%rax), %edx                # a = x = u.v
+    movl    (%rsi), %esi                 # b = d = b.u
     jmp     .Lreduce
 
-    ## (Lvm_a_leaf/Lvm_a_stem removed — unified above)
-
 .Lvm_u_leaf:
-    ## apply(fork(leaf, y), b) = y
-    movl    8(%rdx), %eax
+    ## apply(fork(leaf, y), b) = y = a.v
+    movl    4(%rdx), %eax
     jmp     .Ldispatch
 
 .Lvm_b_leaf:
-    ## b = leaf:  result = w = u.left
-    movl    4(%rax), %eax
+    ## b = leaf:  result = w = u.u
+    movl    (%rax), %eax
     ## fall through
 
 .Ldispatch:
@@ -190,6 +168,18 @@ apply:
 
 .Lvm_done:
     ret
+
+.Lvm_a_build:
+    ## a=leaf -> stem(b)=[b][0]; a=stem(x) -> fork(x,b)=[x][b].  Then dispatch.
+    testl   %eax, %eax
+    jnz     1f
+    xchg    %eax, %esi                   # leaf: eax=b, esi=0
+1:  pushq   %rdi
+    stosl                                # write u
+    xchg    %eax, %esi
+    stosl                                # write v
+    popq    %rax
+    jmp     .Ldispatch
 
 ## ---- I/O: shared syscall ----
 write_byte:
@@ -216,33 +206,34 @@ parse_tree:
     decl    %eax                         # 1 → 0 (byte read), else → eof
     jnz     .Lp_ret
     movb    %cl, %al
-    subb    $'0', %al                    # ZF if '0', SF if < '0'
-    jz      .Lp_leaf                     # leaf: return .Lend
+    subb    $'0', %al                    # '0'->0, '1'->1, '2'->2, whitespace->negative
     js      .Lp_read                     # skip non-digit
-    movl    %edi, %edx
-    stosl                                # store tag
+    movl    %eax, %ecx                   # ecx = child count (0,1,2); eax stays 0/1/2 so
+                                         # scasq leaves SF clear (caller's EOF test is js)
+    movl    %edi, %edx                   # edx = node base
     pushq   %rdx
-    leaq    (%rdi,%rax,4), %rdi          # pre-bump free pointer past children
-    xchg    %eax, %ecx                   # ecx = loop counter
+    scasq                                # reserve two words (u, v)
+    jrcxz   .Lp_done                     # count 0 -> leaf: the reserved [0][0] node is it
 .Lp_loop:
     pushq   %rcx
     pushq   %rdx
     call    *%rbp                        # parse_tree
     popq    %rdx
     popq    %rcx
-    addl    $4, %edx
-    movl    %eax, (%rdx)
+    movl    %eax, (%rdx)                 # store child
+    addl    $4, %edx                     # next slot
     loop    .Lp_loop
+.Lp_done:
     popq    %rax                         # return base address
-    ret
-.Lp_leaf:
-    movl    %ebx, %eax                   # leaf = .Lend
 .Lp_ret:
     ret
 
 ## ---- emit_tree(edx=tree) ----
 emit_tree:
-    movl    (%rdx), %ecx
+    cmpl    %ebx, (%rdx)                       # CF = (u == 0)
+    sbbl    %ecx, %ecx                         # ecx = -(u == 0)
+    cmpl    %ebx, 4(%rdx)                      # CF = (v == 0)
+    sbbl    $-2, %ecx                          # ecx = tag in {0,1,2} = child count
     pushq   %rcx
     pushq   %rdx                               # save tree ptr
     addb    $'0', %cl
@@ -251,13 +242,13 @@ emit_tree:
     popq    %rcx
     jrcxz   1f
 .Lemit_loop:
-    addl    $4, %edx
     pushq   %rcx
     pushq   %rdx                               # save walker position
-    movl    (%rdx), %edx                       # load child pointer
+    movl    (%rdx), %edx                       # child = *slot (offset 0 then 4)
     call    emit_tree
     popq    %rdx                               # restore walker
     popq    %rcx
+    addl    $4, %edx                           # next slot
     loop    .Lemit_loop
 1:  ret
 
