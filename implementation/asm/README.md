@@ -44,7 +44,15 @@ There is actually not just one tree calculus, it is a family of calculi. See [Ba
 
 ### By internal representation
 
-**Ternary nodes** (all except `x64-minbin-deep`): Heap nodes are `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork.
+**Ternary nodes** (all except `x64` and `x64-minbin-deep`): Heap nodes are `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork (4/8/12 bytes).
+
+**Two-word tagless nodes** (`x64`): Every node is exactly two i32 words, `[u][v]` (8 bytes), with the shape implicit in whether the child pointers are null:
+
+- `u == 0` → **leaf** (`v` ignored; the canonical leaf is `[0][0]` at the heap base)
+- `u != 0, v == 0` → **stem**(`u`)
+- `u != 0, v != 0` → **fork**(`u`, `v`)
+
+Heap addresses are always non-zero, so `0` unambiguously means "no child" — there is no tag word. Forks shrink from 12 to 8 bytes, and construction is just a pair of stores with no tag write. `apply`'s leaf/stem/fork and triage cases fall out of null-checks (with `jmp *%rbp` tail calls), and the ternary tag (0/1/2) is only reconstructed where genuinely needed — in `emit` — branchlessly as `2 - (u==0) - (v==0)`. Net effect vs. the tagged layout: ~10–15% faster on reduction-heavy workloads (smaller nodes, branchless dispatch, no per-child loop) for a handful of extra code bytes.
 
 **Deep app-trees** (`x64-minbin-deep`): Only two node types — `leaf [tag=0]` and `app [tag=1][left][right]`. Ternary forms are nested apps: `stem(x)` = `app(leaf,x)`, `fork(x,y)` = `app(app(leaf,x),y)`. Simpler allocation and emission; deeper pattern matching in `apply()`.
 
