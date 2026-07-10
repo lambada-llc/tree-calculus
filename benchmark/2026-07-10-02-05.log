@@ -1,0 +1,65 @@
+cpu:   Intel(R) Xeon(R) Processor @ 2.80GHz (x86_64, 4 cores)
+os:    Linux 6.18.5
+date:  2026-07-10 02:05
+
+building C++... failed (skipping)
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.045s
+  C++                                 SKIP  not built
+  Python                              PASS  0.015s
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.003s
+  ASM x64-ternary                     PASS  0.003s
+  ASM x64-noid                        PASS  0.003s
+  ASM x64-vm                          PASS  0.003s
+  ASM x64-minbin                      PASS  0.003s
+  ASM x64-minbin-deep                 PASS  0.003s
+
+recursive-fib (n=24)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.152s
+  ASM x64-ternary                     PASS  0.181s
+  ASM x64-noid                        PASS  0.167s
+  ASM x64-vm                          PASS  0.157s
+  ASM x64-minbin                      PASS  0.158s
+  ASM x64-minbin-deep                 PASS  0.193s
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  1.216s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.058s
+  ASM x64-ternary                     PASS  0.070s
+  ASM x64-noid                        PASS  0.066s
+  ASM x64-vm                          PASS  0.061s
+  ASM x64-minbin                      PASS  0.063s
+  ASM x64-minbin-deep                 PASS  0.074s
+
+exercise-rules (n=200000)
+  JavaScript (reference)              PASS  1.527s
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.099s
+  ASM x64-ternary                     PASS  0.122s
+  ASM x64-noid                        PASS  0.116s
+  ASM x64-vm                          PASS  0.107s
+  ASM x64-minbin                      PASS  0.108s
+  ASM x64-minbin-deep                 PASS  0.129s
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++                                 SKIP  not built
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.281s
+  ASM x64-ternary                     PASS  0.324s
+  ASM x64-noid                        PASS  0.296s
+  ASM x64-vm                          PASS  0.280s
+  ASM x64-minbin                      PASS  0.332s
+  ASM x64-minbin-deep                 PASS  0.395s
