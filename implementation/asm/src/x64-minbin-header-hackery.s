@@ -1,99 +1,154 @@
 # ============================================================
-# Code-in-header layout:
-#   e_version [20:24] → _start entry: jmp .Linit2 (2B) + padding (2B)
-#   p_paddr   [64:70] → exit epilogue: movb $60,%al; xorl %edi,%edi; syscall
-#   p_align   [88:96] → init: movl $.Lend,%ebx (5B) + leal 8(%rbx),%edi (3B) — fits exactly
+# Hand-crafted, *Linux-valid* ELF (tagless two-word nodes, minbin I/O).
+#
+# Same layout as x64-header-hackery.s: phdr at offset 48 overlapping the
+# ehdr tail (e_phentsize=56 doubled by p_flags' high half, e_phnum=1 by
+# p_offset=1), p_offset=1/p_vaddr=0x400001 so file offset F maps to
+# 0x400000+F, and code in every kernel-ignored hole: write_byte + do_io
+# head in e_shoff [40:48] and p_paddr [72:80], _start's first 8 bytes in
+# p_memsz [88:96] (their LE value ~2.2 GB doubles as the heap size), and
+# everything after flowing from p_align [96:...].
 #
 # Build:
-#   as main_elf.s -o main.o
-#   ld -Ttext=0x400000 main.o -o main.elf
-#   objcopy -O binary -j .text main.elf main
-#   chmod +x main
+#   as x64-minbin-header-hackery.s -o x.o && ld -Ttext=0x400000 x.o -o x.elf
+#   objcopy -O binary -j .text x.elf x && chmod +x x
 # ============================================================
 
 .text
 .globl _start
 
-# ================================================================
-# ELF64 Header (64 bytes, file offset 0)
-# ================================================================
 ehdr:
-    .byte   0x7f, 'E', 'L', 'F'        # [0:4]   e_ident: magic
-    .byte   2, 1, 1, 0                  # [4:8]   64-bit, LE, v1, OSABI=0
-    .quad   0                            # [8:16]  EI_PAD (must be 0 for Rosetta)
-    .word   2                            # [16:18] e_type  = ET_EXEC
+    .byte   0x7f, 'E', 'L', 'F'          # [0:4]   magic
+    .byte   2, 1, 1, 0                   # [4:8]   64-bit, LE, v1, OSABI=0
+    .quad   0                            # [8:16]  EI_PAD (0 for Rosetta)
+    .word   2                            # [16:18] e_type    = ET_EXEC
     .word   62                           # [18:20] e_machine = EM_X86_64
+    .int    1                            # [20:24] e_version
+    .quad   _start                       # [24:32] e_entry (= 0x400058)
+    .quad   48                           # [32:40] e_phoff
 
-# ---- e_version [20:24]: ENTRY POINT — first init instructions ----
+# ---- e_shoff [40:48] (kernel-ignored): write_byte + do_io head ----
+write_byte:
+    push    $1
+    pop     %rax                         # rax = 1 = SYS_WRITE
+do_io:
+    pushq   %rdi                         # save free pointer
+    movl    %eax, %edi                   # fd = eax (0 read / 1 write)
+    jmp     .Ldo_io2                     # continue in p_paddr
+
+.org 48
+    .int    1                            # [48:52] p_type  = PT_LOAD (= e_flags, ignored)
+    .int    0x00380007                   # [52:56] p_flags = RWX; high half = e_phentsize = 56
+    .quad   1                            # [56:64] p_offset = 1; low bytes = e_phnum = 1
+    .quad   0x400001                     # [64:72] p_vaddr (== p_offset mod page)
+
+# ---- p_paddr [72:80] (kernel-ignored): do_io argument setup ----
+.Ldo_io2:
+    push    %rcx                         # byte on stack (write: cl=data; read: overwritten)
+    push    %rsp
+    pop     %rsi                         # buffer = stack
+    push    $1
+    pop     %rdx                         # count = 1
+    jmp     .Ldo_io3                     # continue in the main stream
+
+.org 80
+    .quad   .Lend - ehdr - 1             # [80:88] p_filesz
+
+# ---- p_memsz [88:96]: _start's first 8 bytes double as the value ----
+.org 88
 _start:
-    jmp     .Linit2                      # → p_align for heap init (2 bytes)
-    .skip   2                            # [22:24] padding
+    leaq    apply(%rip), %rbp   # rbp = &apply
+    ## Filler completing the build script's p_memsz window: the first 8
+    ## .text bytes become [lea][00] whose LE value (~2.3 GB) is a valid
+    ## p_memsz. 00 c9 = addb %cl,%cl, harmless here. (See x64.s.)
+    .byte   0x00, 0xc9          # addb %cl, %cl
+    .byte   0x8d, 0x5d          # leal disp8(%rbp), %ebx  (ModRM 5d: reg=ebx, base=rbp)
+    .byte   leaf-apply          # rbx = leaf = heap base (disp8 = sizeof(apply))
+    leal    8(%rbx), %edi       # rdi = free pointer, skip leaf node
 
-    .quad   _start                       # [24:32] e_entry (linker resolves vaddr)
-    .quad   phdr - ehdr                  # [32:40] e_phoff = 40
+    call    parse_eval          # parse + eval entire stdin -> eax
+    xchg    %eax, %edx          # edx = result (1 byte vs 2)
+    ## parse/eval done; retarget the dead rbp (= &apply) to emit_tree.
+    .byte   0x8d, 0x6d          # leal disp8(%rbp), %ebp  (ModRM 6d: reg=ebp, base=rbp)
+    .byte   emit_tree-apply     # disp8 = emit_tree - apply
+    call    *%rbp               # emit_tree(edx = result)
+    movb    $60, %al
+    xorl    %edi, %edi
+    syscall
 
-# ================================================================
-# ELF64 Program Header (56 bytes at offset 40, overlaps ehdr[40:64])
-# ================================================================
-phdr:
-    .int    1                            # [40:44] p_type  = PT_LOAD
-    .int    7                            # [44:48] p_flags = PF_R | PF_W | PF_X
-    .quad   1                            # [48:56] p_offset = 1
-    .quad   0x400001                     # [56:64] p_vaddr  (low 2 bytes → e_phnum=1)
-
-# ---- p_paddr [64:72]: EXIT EPILOGUE ----
-.Lexit:
-    movb    $60, %al                     # SYS_EXIT (2 bytes)
-    xorl    %edi, %edi                   # status = 0 (2 bytes)
-    syscall                              # exit (2 bytes)
-    .skip   2                            # [70:72] pad to 8 bytes
-
-    .quad   .Lend - ehdr - 1            # [72:80] p_filesz = file_size - p_offset
-    .quad   0x4000000                    # [80:88] p_memsz  = 64 MB (BSS heap)
-
-# ---- p_align [88:96]: INIT CONTINUATION ----
-.Linit2:
-    movl    $.Lend, %ebx                 # rbx = heap base (BSS start) — 5 bytes
-    leal    8(%rbx), %edi                # rdi = free pointer past leaf — 3 bytes
-
-# ================================================================
-# Main Code Blob (file offset 96)
-# ================================================================
-
-    ## rbx = .Lend (leaf addr); rdi = free pointer past leaf node
-    movl    $apply, %ebp                 # rbp = &apply (call *%rbp = 2B vs 5B)
-
-    call    parse_eval                   # parse + eval entire stdin → eax
-    xchg    %eax, %edx                   # edx = result (1 byte vs 2)
-    call    emit_tree                    # emit result in minbin
-    jmp     .Lexit                       # exit via p_paddr
-
-# ==== parse_eval -> eax (tree offset) ====
-parse_eval:
-.Lpe_read:
-    xorl    %eax, %eax                   # eax=0=SYS_READ, fd=stdin
-    call    do_io
-    decl    %eax                         # 1 → 0 (byte read), else → eof/error
-    jnz     .Lpe_leaf                    # EOF: return leaf
-    subb    $'0', %cl                    # cl = char - '0'; CF if < '0'
-    jb      .Lpe_read                    # < '0': skip whitespace
-    je      .Lpe_apply                   # '0': application
-    decb    %cl                          # was '1'? (cl → 0)
-    jnz     .Lpe_read                    # > '1': skip
-                                         # fallthrough: '1' → leaf
-.Lpe_leaf:
-    movl    %ebx, %eax                   # leaf = .Lend
+## ---- do_io tail (head lives in the e_shoff/p_paddr islands) ----
+.Ldo_io3:
+    syscall
+    pop     %rcx
+    popq    %rdi                         # restore free pointer
     ret
 
-.Lpe_apply:
-    call    parse_eval                   # a = parse first subexpr
-    pushq   %rax                         # save a
-    call    parse_eval                   # b = parse second subexpr
-    xchg    %eax, %esi                   # esi = b
-    popq    %rdx                         # edx = a
-    jmp     *%rbp                        # tail apply(a, b)  (rbp = &apply)
 
-# ==== apply(edx=a, esi=b) -> eax ====  (tagless two-word triage)
+## ---- parse_eval -> eax (tree pointer) ----
+## '1' -> leaf ; '0' -> apply(parse_eval, parse_eval) ; EOF -> leaf.
+parse_eval:
+.Lpe_read:
+    xorl    %eax, %eax          # eax=0=SYS_READ
+    call    do_io
+    decl    %eax                # 1 → 0 (byte read), else → eof
+    jnz     .Lpe_leaf           # EOF: return leaf
+    subb    $'0', %cl           # cl = char - '0'; CF if < '0'
+    jb      .Lpe_read           # < '0': skip whitespace
+    je      .Lpe_apply          # '0': application
+    decb    %cl                 # was '1'?
+    jnz     .Lpe_read           # > '1': skip
+.Lpe_leaf:
+    movl    %ebx, %eax          # leaf = heap base
+    ret
+.Lpe_apply:
+    call    parse_eval          # a = first subexpr
+    pushq   %rax
+    call    parse_eval          # b = second subexpr
+    xchg    %eax, %esi          # esi = b
+    popq    %rdx                # edx = a
+    jmp     *%rbp               # tail apply(a, b)   (rbp = &apply here)
+
+## ---- emit_tree(edx=tree) -> minbin on stdout ----
+## leaf -> '1' ; stem(c) -> '0' '1' <c> ; fork(l,r) -> '0' '0' '1' <l> <r>.
+## i.e. emit (tag) zeros, then '1', then recurse on children.
+emit_tree:
+    ## tag = 2 - (u==0) - (v==0), branchless via the heap-base threshold (rbx).
+    cmpl    %ebx, (%rdx)
+    sbbl    %ecx, %ecx
+    cmpl    %ebx, 4(%rdx)
+    sbbl    $-2, %ecx                  # ecx = tag in {0,1,2}
+    pushq   %rdx                       # save node for the function lifetime
+    jrcxz   .Le_one                    # tag 0 (leaf): no leading zeros
+    pushq   %rcx
+.Le_zero_loop:
+    pushq   %rcx
+    movb    $'0', %cl
+    call    write_byte
+    popq    %rcx
+    loop    .Le_zero_loop
+    popq    %rcx
+.Le_one:
+    pushq   %rcx
+    movb    $'1', %cl
+    call    write_byte
+    popq    %rcx
+    jrcxz   .Le_done                   # leaf: no children
+    popq    %rdx                       # restore node
+    decl    %ecx                       # tag-1
+    pushq   %rcx
+    pushq   %rdx
+    movl    (%rdx), %edx               # first child (offset 0)
+    call    *%rbp                      # emit_tree (rbp retargeted to it)
+    popq    %rdx
+    popq    %rcx
+    jrcxz   1f                         # stem: done after one child
+    movl    4(%rdx), %edx              # fork right child (offset 4)
+    jmp     *%rbp                      # tail emit_tree
+.Le_done:
+    popq    %rdx                       # clean up entry push
+1:  ret
+
+## ---- apply(edx=a, esi=b) -> eax ----  (placed last; see leaf note below)
 apply:
     movl    (%rdx), %eax               # eax = a.u
     movl    4(%rdx), %ecx              # ecx = a.v
@@ -129,16 +184,16 @@ apply:
     ## rule 2: (x.b).(y.b) where u=stem(x), a=fork(u,y)
     pushq   %rdx
     pushq   %rsi
-    movl    (%rax), %edx                 # x = u.u
-    call    *%rbp                        # apply(x, b)
+    movl    (%rax), %edx               # x = u.u
+    call    *%rbp                      # apply(x, b)
     popq    %rsi
     popq    %rdx
-    pushq   %rax                         # save x·b
-    movl    4(%rdx), %edx                # y = a.v
-    call    *%rbp                        # apply(y, b)
-    xchg    %eax, %esi                   # esi = y·b
-    popq    %rdx                         # edx = x·b
-    jmp     *%rbp                        # tail apply(x·b, y·b)
+    pushq   %rax                       # save x·b
+    movl    4(%rdx), %edx              # y = a.v
+    call    *%rbp                      # apply(y, b)
+    xchg    %eax, %esi                 # esi = y·b
+    popq    %rdx                       # edx = x·b
+    jmp     *%rbp                      # tail apply(x·b, y·b)
 
 .Lu_leaf:
     ## rule 1: a.v
@@ -149,76 +204,15 @@ apply:
     ## a=leaf -> stem(b)=[b][0]; a=stem(x) -> fork(x,b)=[x][b].
     testl   %eax, %eax
     jnz     1f
-    xchg    %eax, %esi
+    xchg    %eax, %esi                 # leaf: eax=b, esi=0
 1:  pushq   %rdi
-    stosl                                # write u
+    stosl                              # write u
     xchg    %eax, %esi
-    stosl                                # write v
+    stosl                              # write v
     popq    %rax
     ret
 
-## (alloc_fork/alloc_stem removed — unified into apply body)
-
-# ==== I/O ====
-write_byte:
-    push    $1
-    pop     %rax                         # rax=1=SYS_WRITE
-do_io:
-    pushq   %rdi                         # save free pointer
-    movl    %eax, %edi                   # fd
-    push    %rcx                         # byte on stack
-    push    %rsp
-    pop     %rsi                         # buffer = stack
-    push    $1
-    pop     %rdx                         # count = 1
-    syscall
-    pop     %rcx                         # read result in cl / clean up
-    popq    %rdi                         # restore free pointer
-    ret
-
-# ==== emit_tree(edx=tree) → minbin on stdout ====
-emit_tree:
-    ## tag = 2 - (u==0) - (v==0), branchless via the heap-base threshold (rbx).
-    cmpl    %ebx, (%rdx)
-    sbbl    %ecx, %ecx
-    cmpl    %ebx, 4(%rdx)
-    sbbl    $-2, %ecx                    # ecx = tag (0, 1, or 2)
-    pushq   %rdx                         # save node for function lifetime
-
-    ## Emit ecx zeros
-    jrcxz   .Le_one
-    pushq   %rcx
-.Le_zero_loop:
-    pushq   %rcx
-    movb    $'0', %cl
-    call    write_byte
-    popq    %rcx
-    loop    .Le_zero_loop
-    popq    %rcx
-
-.Le_one:
-    ## Emit '1'
-    pushq   %rcx
-    movb    $'1', %cl
-    call    write_byte
-    popq    %rcx
-
-    ## Recurse on children
-    jrcxz   .Le_done                     # leaf: no children
-    popq    %rdx                         # restore node from entry
-    decl    %ecx
-    pushq   %rcx                         # save (tag-1)
-    pushq   %rdx                         # save node for right child
-    movl    (%rdx), %edx                 # first child (offset 0)
-    call    emit_tree
-    popq    %rdx                         # restore node
-    popq    %rcx
-    jrcxz   1f                           # stem: done after one child
-    movl    4(%rdx), %edx                # fork right child (offset 4)
-    jmp     emit_tree                    # tail call
-
-.Le_done:
-    popq    %rdx                         # clean up entry push
-1:  ret
-
+## Canonical leaf at end of .text ([0][0] via BSS zero-fill). apply must
+## stay within 127 bytes of leaf (disp8 for leaf-apply / emit_tree-apply).
+leaf:
 .Lend:
