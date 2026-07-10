@@ -86,7 +86,7 @@ A collection of techniques used across the variants.
 
 Again I want to thank Justine Tunney! I have little experience in machine code golfing, learnt a lot of tricks from [Lambda Calculus in 383 Bytes](https://justine.lol/lambda/) and bet that she'd find more bytes to squeeze out of these implementations.
 
-Disclaimer: These binaries were developed on [Apple silicon via Rosetta](https://support.apple.com/en-us/102527), which prevents _some_ cursed ELF header tricks.
+Disclaimer: These binaries were originally developed on [Apple silicon via Rosetta](https://support.apple.com/en-us/102527), which prevents _some_ cursed ELF header tricks (e.g. `EI_PAD` must stay zero — 8 more bytes of island space forgone). Both build flavors now produce ELFs that a stock Linux kernel loads, so the whole family is covered by the test suite.
 
 ### ELF structure
 
@@ -100,14 +100,16 @@ Disclaimer: These binaries were developed on [Apple silicon via Rosetta](https:/
 
 **Phdr-at-48 overlap + code-in-phdr (standard build).** A Python post-processing script rebuilds the toolchain ELF with the program header at offset 48, overlapping the ELF header's tail. The only ehdr fields the kernel still reads in [48:64] are `e_phentsize` (=56, doubled by `p_flags`' high half — the kernel only looks at the low PF_R/W/X bits) and `e_phnum` (=1, doubled by `p_offset=1`'s low bytes). The script then stores the first 16 bytes of `.text` inside the phdr itself: `p_align` [96:104] is ignored for `ET_EXEC`, and `p_memsz` [88:96] only has to be "big enough but mappable" — sources start with `lea` + a 2-byte `addb %cl,%cl` filler so their first 8 bytes end in `00 00`, reading as a ~2.3 GB memsz (the earlier 512 MB heap now rides along for free; a 64-bit value assembled from arbitrary code bytes would exceed the user address-space limit and make `exec` fail, which is why the filler matters). Headers shrink from 120 to 88 bytes — and unlike the header-hackery ELFs (whose `e_phentsize=0` only loads under Rosetta), these still exec on a stock Linux kernel. Sources whose leading bytes don't form a valid memsz automatically fall back to code-at-96 (headers cost 96 bytes).
 
-**Phdr-at-40 overlap (header-hackery build).** The hand-crafted ELF starts the program header at offset 40, overlapping the last 24 bytes of the ELF header with the first 24 bytes of the program header. Fields are chosen so both interpretations are valid: `e_shoff` doubles as `p_type`, `e_flags` as `p_flags`, etc.
+**Phdr-at-48 overlap (header-hackery build).** The hand-crafted ELF starts the program header at offset 48, overlapping the last 16 bytes of the ELF header. Fields are chosen so both interpretations are valid — crucially including the two the kernel actually checks: `p_flags`' high half doubles as `e_phentsize=56` and `p_offset=1`'s low bytes double as `e_phnum=1`. (The previous layout put the phdr at 40 with `e_phentsize=0`, which only Rosetta's lax loader accepted; these binaries now exec on a stock Linux kernel and are covered by the test suite.) Offset 40 is impossible on real Linux: there `p_offset` would overlap `e_phentsize`, forcing a ~2^51 file offset.
 
 **Code in don't-care header fields.** The header-hackery builds weave executable instructions into ELF/Phdr fields the kernel doesn't validate:
 
-- `e_version` [20:24] — `_start` entry: a `jmp` to the init sequence.
-- `p_paddr` [64:72] — exit epilogue: `mov $60,%al; xor %edi,%edi; syscall`.
-- `p_align` [88:96] — init code: `movl $.Lend,%ebx` (5B) + `leal 8(%rbx),%edi` (3B), fitting exactly in 8 bytes.
-- `p_memsz` [80:88] — an 8-byte little-endian value that only needs to be "large enough." The trampoline encodes a 3-byte instruction + a 2-byte `jmp` + 3 bytes of padding, and the resulting integer (~16.8 GB) is plenty for the BSS heap. Used in ternary variants to hold `push $N; pop %rax` for the identity builder.
+- `e_shoff` [40:48] — `write_byte` + the head of `do_io` (8 bytes exactly), ending in a `jmp` to the continuation in `p_paddr`. Calls land here directly — a function head in an island needs no entry glue.
+- `p_paddr` [72:80] — `do_io`'s argument setup (8 bytes exactly), ending in a `jmp` to the `syscall`/cleanup tail in the main stream.
+- `p_memsz` [88:96] — `_start`'s first 8 bytes: a 7-byte `lea` whose disp32 high bytes are `00 00 00`, plus a filler `00` closing the window. Read as a number this is ~2.2 GB — big enough for the heap, small enough to map (an arbitrary 8-byte code window would exceed the user address-space limit and abort `exec`).
+- `p_align` [96:104] — ignored for `ET_EXEC`; the rest of the code simply flows from offset 96 with no boundary at all.
+
+`x64-minbin-deep` additionally places `emit_tree` early in the stream so its leaf case can tail-call `write_byte` in the `e_shoff` island with a 2-byte `jmp` (the island is within rel8 range only from the first ~170 bytes).
 
 **`p_offset=1` for Rosetta compatibility.** (Used by both builds.) macOS's Rosetta requires `p_offset % page_size == p_vaddr % page_size`. Setting `p_offset=1` (with `p_vaddr=0x400001`) satisfies this while `e_phnum=1` is encoded in the low 2 bytes of `p_vaddr`.
 

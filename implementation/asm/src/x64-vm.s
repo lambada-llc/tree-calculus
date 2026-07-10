@@ -11,7 +11,6 @@
 # Registers:
 #   rbx = leaf address (= heap base, permanent)
 #   rdi = free pointer (permanent, absolute)
-#   rbp = &apply (call *%rbp in the fold loop)
 #
 # Build (Linux):   gcc -nostdlib -static main.s -o main
 # Build (macOS):   clang -nostdlib main.s -o main
@@ -35,13 +34,13 @@ start:
 #endif
 
 _start:
-    leaq    apply(%rip), %rbp   # rbp = &apply (first: apply is nearby, so the
-                                # lea's disp32 high bytes are 00 00 — see below)
+    leaq    leaf(%rip), %rbx    # rbx = leaf address = heap base ([0][0] from BSS);
+                                # leaf (end of .text) keeps the lea disp small — the
+                                # page-aligned .bss symbol would blow up the window value
     ## Filler completing the build script's p_memsz window: the first 8
-    ## .text bytes become [lea][00] whose LE value (~2.3 GB) is a valid
+    ## .text bytes become [lea][00] whose LE value (~5 GB) is a valid
     ## p_memsz. 00 c9 = addb %cl,%cl, harmless here. (See x64.s.)
     .byte   0x00, 0xc9          # addb %cl, %cl
-    leaq    heap(%rip), %rbx    # rbx = heap base = leaf address ([0][0] from BSS)
     leal    8(%rbx), %edi       # rdi = free pointer, past the leaf node
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — two-word forks.
@@ -59,7 +58,7 @@ _start:
     popq    %rdx                # accumulator (pop before EOF test; pop leaves flags)
     js      2f
     xchg    %eax, %esi          # 1 byte instead of 2
-    call    *%rbp               # apply(edx, esi) -> eax
+    call    apply               # apply(edx, esi) -> eax
     pushq   %rax
     jmp     1b
 
@@ -231,6 +230,9 @@ emit_tree:
     addl    $4, %edx            # next slot
     loop    .Lemit_loop
 1:  ret
+
+## Canonical leaf at end of .text ([0][0] via BSS zero-fill).
+leaf:
 
 .bss
 .lcomm heap, 0x20000000

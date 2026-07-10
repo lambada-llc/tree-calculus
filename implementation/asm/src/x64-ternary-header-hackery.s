@@ -1,105 +1,124 @@
 # ============================================================
-# Tagged-ternary node representation (original x64 layout), header-hackery
-# build. `x64` now uses the tagless two-word layout; this preserves the
-# explicit [tag][children] nodes for comparison.
+# Hand-crafted, *Linux-valid* ELF (the original tagged-ternary representation).
 #
-# Code-in-header layout:
-#   e_version [20:24] → _start entry: jmp .Linit2 (2B) + padding (2B)
-#   p_paddr   [64:70] → exit epilogue: movb $60,%al; xorl %edi,%edi; syscall
-#   p_memsz   [80:88] → trampoline: push $2; pop %rax (3B) + jmp .Linit2 (2B) + pad (3B)
-#   p_align   [88:96] → init: movl $.Lend,%ebx (5B) + leal 8(%rbx),%edi (3B) — fits exactly
+# Unlike the old header-hackery layout (phdr at 40, e_phentsize=0 — loadable
+# only under Rosetta), every field the Linux kernel actually validates holds
+# its required value here, so this binary execs on a stock kernel:
+#
+#   - phdr at offset 48, overlapping the ehdr tail. The kernel-read fields
+#     there are e_phentsize (=56, doubled by p_flags' high half; the loader
+#     only inspects the PF_R/W/X bits) and e_phnum (=1, doubled by
+#     p_offset=1's low bytes). e_flags/e_ehsize/e_sh* absorb the rest.
+#   - p_offset=1 with p_vaddr=0x400001: file offset F maps to 0x400000+F,
+#     and offset ≡ vaddr (mod page) keeps Rosetta happy too.
+#
+# Code lives in every hole the kernel ignores:
+#   e_shoff  [40:48] — write_byte + do_io head        (jmp → p_paddr)
+#   p_paddr  [72:80] — do_io argument setup           (jmp → do_io tail)
+#   p_memsz  [88:96] — _start's first 8 bytes: lea+00, whose LE value
+#                      (~2.2 GB) doubles as a valid "big enough" memsz
+#   p_align  [96:..] — ignored for ET_EXEC; code flows contiguously from 96
 #
 # Build:
-#   as main_elf.s -o main.o
-#   ld -Ttext=0x400000 main.o -o main.elf
-#   objcopy -O binary -j .text main.elf main
-#   chmod +x main
+#   as x64-ternary-header-hackery.s -o x.o && ld -Ttext=0x400000 x.o -o x.elf
+#   objcopy -O binary -j .text x.elf x && chmod +x x
 # ============================================================
 
 .text
 .globl _start
 
 # ================================================================
-# ELF64 Header (64 bytes, file offset 0)
+# ELF64 Header
 # ================================================================
 ehdr:
-    .byte   0x7f, 'E', 'L', 'F'        # [0:4]   e_ident: magic
-    .byte   2, 1, 1, 0                  # [4:8]   64-bit, LE, v1, OSABI=0
-    .quad   0                            # [8:16]  EI_PAD (must be 0 for Rosetta)
-    .word   2                            # [16:18] e_type  = ET_EXEC
+    .byte   0x7f, 'E', 'L', 'F'          # [0:4]   magic
+    .byte   2, 1, 1, 0                   # [4:8]   64-bit, LE, v1, OSABI=0
+    .quad   0                            # [8:16]  EI_PAD (0 for Rosetta)
+    .word   2                            # [16:18] e_type    = ET_EXEC
     .word   62                           # [18:20] e_machine = EM_X86_64
+    .int    1                            # [20:24] e_version
+    .quad   _start                       # [24:32] e_entry (= 0x400058)
+    .quad   48                           # [32:40] e_phoff
 
-# ---- e_version [20:24]: ENTRY POINT — first init instructions ----
+# ---- e_shoff [40:48] (kernel-ignored): write_byte + do_io head ----
+write_byte:
+    push    $1
+    pop     %rax                         # rax = 1 = SYS_WRITE
+do_io:
+    pushq   %rdi                         # save free pointer
+    movl    %eax, %edi                   # fd = eax (0 read / 1 write)
+    jmp     .Ldo_io2                     # continue in p_paddr
+
+# ================================================================
+# Program Header (offset 48, overlapping ehdr[48:64])
+# ================================================================
+.org 48
+    .int    1                            # [48:52] p_type  = PT_LOAD (= e_flags, ignored)
+    .int    0x00380007                   # [52:56] p_flags = RWX; high half = e_phentsize = 56
+    .quad   1                            # [56:64] p_offset = 1; low bytes = e_phnum = 1
+    .quad   0x400001                     # [64:72] p_vaddr (≡ p_offset mod page)
+
+# ---- p_paddr [72:80] (kernel-ignored): do_io argument setup ----
+.Ldo_io2:
+    push    %rcx                         # byte on stack (write: cl=data; read: overwritten)
+    push    %rsp
+    pop     %rsi                         # buffer = stack
+    push    $1
+    pop     %rdx                         # count = 1
+    jmp     .Ldo_io3                     # continue in the main stream
+
+.org 80
+    .quad   .Lend - ehdr - 1             # [80:88] p_filesz
+
+# ---- p_memsz [88:96]: _start's first 8 bytes double as the value ----
+# lea's disp32 high bytes are 00 00 00 and the filler byte closes the
+# window: value = 0x__2d8d48 | disp<<24 ≈ 2.2 GB — big enough for the
+# heap, small enough to map.
+.org 88
 _start:
-    jmp     .Lpmem                       # → p_memsz trampoline (2 bytes)
-    .skip   2                            # [22:24] padding
-
-    .quad   _start                       # [24:32] e_entry (linker resolves vaddr)
-    .quad   phdr - ehdr                  # [32:40] e_phoff = 40
-
-# ================================================================
-# ELF64 Program Header (56 bytes at offset 40, overlaps ehdr[40:64])
-# ================================================================
-phdr:
-    .int    1                            # [40:44] p_type  = PT_LOAD
-    .int    7                            # [44:48] p_flags = PF_R | PF_W | PF_X
-    .quad   1                            # [48:56] p_offset = 1
-    .quad   0x400001                     # [56:64] p_vaddr  (low 2 bytes → e_phnum=1)
-
-# ---- p_paddr [64:72]: EXIT EPILOGUE ----
-.Lexit:
-    movb    $60, %al                     # SYS_EXIT (2 bytes)
-    xorl    %edi, %edi                   # status = 0 (2 bytes)
-    syscall                              # exit (2 bytes)
-    .skip   2                            # [70:72] pad to 8 bytes
-
-    .quad   .Lend - ehdr - 1            # [72:80] p_filesz = file_size - p_offset
-
-# ---- p_memsz [80:88]: CODE IN HEADER — identity setup preamble ----
-.Lpmem:
-    push    $2
-    pop     %rax                         # eax = 2 (for stosl tag) — 3 bytes
-    jmp     .Linit2                      # → p_align for heap init — 2 bytes
-    .skip   3                            # [85:88] pad (high bytes of p_memsz)
-
-# ---- p_align [88:96]: INIT CONTINUATION ----
-.Linit2:
-    movl    $.Lend, %ebx                 # rbx = heap base (BSS start) — 5 bytes
-    leal    8(%rbx), %edi                # rdi = free pointer past leaf — 3 bytes
-
-# ================================================================
-# Main Code Blob (file offset 96)
-# ================================================================
-
-    ## rbx = .Lend (leaf addr); rdi = free pointer past leaf node
-    ## eax = 2 (from p_memsz trampoline)
+    leaq    .Lend(%rip), %rbx    # rbx = heap base = leaf address
+    ## Filler: the first 8 .text bytes become [lea][00], whose LE value
+    ## (~2.2 GB) doubles as p_memsz. 00 c9 = addb %cl,%cl, harmless here.
+    .byte   0x00, 0xc9          # addb %cl, %cl
+    leal    8(%rbx), %edi       # rdi = heap free pointer
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined
-    movl    %edi, %ebp                   # ebp = inner fork addr
-    stosl                                # inner.tag = 2
-    xchg    %ebx, %eax                   # eax = leaf, ebx = 2 (temp)
-    stosl                                # inner.left = leaf
-    stosl                                # inner.right = leaf
-    pushq   %rdi                         # push outer fork addr (= result)
-    xchg    %ebx, %eax                   # eax = 2, ebx = leaf (restored)
-    stosl                                # outer.tag = 2
-    xchg    %ebp, %eax                   # eax = inner fork addr
-    stosl                                # outer.left = inner
+    push    $2
+    pop     %rax                # eax = 2
+    movl    %edi, %ebp          # ebp = inner fork addr
+    stosl                       # inner.tag = 2
+    xchg    %ebx, %eax          # eax = leaf, ebx = 2 (temp)
+    stosl                       # inner.left = leaf
+    stosl                       # inner.right = leaf
+    pushq   %rdi                # push outer fork addr (= result)
+    xchg    %ebx, %eax          # eax = 2, ebx = leaf (restored)
+    stosl                       # outer.tag = 2
+    xchg    %ebp, %eax          # eax = inner fork addr
+    stosl                       # outer.left = inner
     movl    %ebx, %eax
-    stosl                                # outer.right = leaf
-    movl    $apply, %ebp                 # rbp = &apply (call *%rbp = 2B vs 5B)
+    stosl                       # outer.right = leaf
+    movl    $apply, %ebp        # rbp = &apply (5B absolute: ld -Ttext resolves it)
 
 1:  call    parse_tree
     js      2f
     popq    %rdx
-    xchg    %eax, %esi                   # 1 byte instead of 2
-    call    *%rbp
+    xchg    %eax, %esi          # 1 byte instead of 2
+    call    *%rbp               # apply(edx, esi) -> eax
     pushq   %rax
     jmp     1b
 
 2:  popq    %rdx
     call    emit_tree
-    jmp     .Lexit                       # exit via p_paddr
+    movb    $60, %al            # SYS_EXIT
+    xorl    %edi, %edi
+    syscall
+
+## ---- do_io tail (head lives in the e_shoff/p_paddr islands) ----
+.Ldo_io3:
+    syscall
+    pop     %rcx
+    popq    %rdi                         # restore free pointer
+    ret
 
 ## ---- apply(edx=a, esi=b) -> eax ----
 apply:
@@ -108,20 +127,20 @@ apply:
     jae     .La_fork
 
     ## a=leaf (ecx=0) or a=stem (ecx=1): build [tag+1, ...a.children, b]
-    pushq   %rdi                         # save result addr
-    leal    1(%rcx), %eax                # tag = a.tag + 1
-    stosl                                # write tag
-    jrcxz   1f                           # leaf: no children to copy
-    movl    4(%rdx), %eax                # a.child (stem case)
-    stosl                                # write it
-1:  xchg    %esi, %eax                   # eax = b
-    stosl                                # append b
-    popq    %rax                         # result = start of node
+    pushq   %rdi                       # save result addr
+    leal    1(%rcx), %eax              # tag = a.tag + 1
+    stosl                              # write tag
+    jrcxz   1f                         # leaf: no children to copy
+    movl    4(%rdx), %eax              # a.child (stem case)
+    stosl                              # write it
+1:  xchg    %esi, %eax                 # eax = b
+    stosl                              # append b
+    popq    %rax                       # result = start of node
     ret
 
 .La_fork:
-    movl    4(%rdx), %eax                # u (eax = u addr)
-    movl    (%rax), %ecx                 # u.tag
+    movl    4(%rdx), %eax              # u (eax = u addr)
+    movl    (%rax), %ecx               # u.tag
     jrcxz   .Lu_leaf
     decl    %ecx
     jz      .Lu_stem
@@ -151,18 +170,18 @@ apply:
 
 .Lu_stem:
     ## rule 2: (x.b).(y.b) where u=stem(x), a=fork(u,y)
-    pushq   %rdx                         # save a       [a]
-    pushq   %rsi                         # save b       [b][a]
-    movl    4(%rax), %edx                # x = u.child
-    call    *%rbp                        # apply(x, b) -> eax
-    popq    %rsi                         # restore b
-    popq    %rdx                         # restore a
-    pushq   %rax                         # save x·b     [x·b]
-    movl    8(%rdx), %edx                # y = a.right
-    call    *%rbp                        # apply(y, b) -> eax
-    xchg    %eax, %esi                   # esi = y·b (1B)
-    popq    %rdx                         # edx = x·b
-    jmp     apply                        # tail call apply(x·b, y·b)
+    pushq   %rdx                       # save a       [a]
+    pushq   %rsi                       # save b       [b][a]
+    movl    4(%rax), %edx              # x = u.child
+    call    *%rbp                      # apply(x, b) -> eax
+    popq    %rsi                       # restore b
+    popq    %rdx                       # restore a
+    pushq   %rax                       # save x·b     [x·b]
+    movl    8(%rdx), %edx              # y = a.right
+    call    *%rbp                      # apply(y, b) -> eax
+    xchg    %eax, %esi                 # esi = y·b (1B)
+    popq    %rdx                       # edx = x·b
+    jmp     apply                      # tail call apply(x·b, y·b)
 
 .Lu_leaf:
     ## rule 1: a.right
@@ -171,39 +190,24 @@ apply:
 
 ## (alloc_fork/alloc_stem removed — unified into apply body + inlined _start)
 
-## ---- I/O: shared syscall stub ----
-write_byte:
-    push    $1
-    pop     %rax                         # rax=1=SYS_WRITE
-do_io:
-    pushq   %rdi                         # save free pointer
-    movl    %eax, %edi                   # fd = eax
-    push    %rcx                         # byte on stack
-    push    %rsp
-    pop     %rsi                         # buffer = stack
-    push    $1
-    pop     %rdx
-    syscall
-    pop     %rcx
-    popq    %rdi                         # restore free pointer
-    ret
-
 ## ---- parse_tree -> eax (SF set on EOF) ----
+## Read byte via do_io. If 0, return leaf. On EOF, return with SF set.
+## Otherwise: stosl tag, pre-bump rdi, recurse d times storing children.
 parse_tree:
 .Lp_read:
-    xorl    %eax, %eax                   # eax=0=SYS_READ
+    xorl    %eax, %eax          # eax=0=SYS_READ
     call    do_io
-    decl    %eax                         # 1 → 0 (byte read), else → eof
+    decl    %eax                # 1 → 0 (byte read), else → eof
     jnz     .Lp_ret
     movb    %cl, %al
-    subb    $'0', %al                    # ZF if '0', SF if < '0'
-    jz      .Lp_leaf                     # leaf: return .Lend
-    js      .Lp_read                     # skip non-digit
+    subb    $'0', %al           # ZF if '0', SF if < '0'
+    jz      .Lp_leaf             # leaf: return heap base
+    js      .Lp_read            # skip non-digit
     movl    %edi, %edx
-    stosl                                # store tag
+    stosl                       # store tag
     pushq   %rdx
-    leaq    (%rdi,%rax,4), %rdi          # pre-bump free pointer past children
-    xchg    %eax, %ecx                   # ecx = loop counter
+    leaq    (%rdi,%rax,4), %rdi # pre-bump free pointer past children
+    xchg    %eax, %ecx          # ecx = loop counter
 .Lp_loop:
     pushq   %rcx
     pushq   %rdx
@@ -213,10 +217,10 @@ parse_tree:
     addl    $4, %edx
     movl    %eax, (%rdx)
     loop    .Lp_loop
-    popq    %rax                         # return base address
+    popq    %rax                # return base address
     ret
 .Lp_leaf:
-    movl    %ebx, %eax                   # leaf = .Lend
+    movl    %ebx, %eax          # leaf = heap base
 .Lp_ret:
     ret
 
@@ -224,21 +228,20 @@ parse_tree:
 emit_tree:
     movl    (%rdx), %ecx
     pushq   %rcx
-    pushq   %rdx                               # save tree ptr
+    pushq   %rdx
     addb    $'0', %cl
     call    write_byte
-    popq    %rdx                               # restore tree ptr
+    popq    %rdx
     popq    %rcx
     jrcxz   1f
 .Lemit_loop:
     addl    $4, %edx
     pushq   %rcx
-    pushq   %rdx                               # save walker position
-    movl    (%rdx), %edx                       # load child pointer
+    pushq   %rdx
+    movl    (%rdx), %edx
     call    emit_tree
-    popq    %rdx                               # restore walker
+    popq    %rdx
     popq    %rcx
     loop    .Lemit_loop
 1:  ret
-
 .Lend:
