@@ -35,9 +35,14 @@ start:
 #endif
 
 _start:
+    leaq    apply(%rip), %rbp   # rbp = &apply (first: apply is nearby, so the
+                                # lea's disp32 high bytes are 00 00 — see below)
+    ## Filler completing the build script's p_memsz window: the first 8
+    ## .text bytes become [lea][00] whose LE value (~2.3 GB) is a valid
+    ## p_memsz. 00 c9 = addb %cl,%cl, harmless here. (See x64.s.)
+    .byte   0x00, 0xc9          # addb %cl, %cl
     leaq    heap(%rip), %rbx    # rbx = heap base = leaf address ([0][0] from BSS)
     leal    8(%rbx), %edi       # rdi = free pointer, past the leaf node
-    leaq    apply(%rip), %rbp   # rbp = &apply
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — two-word forks.
     movl    %ebx, %eax          # eax = leaf

@@ -50,9 +50,9 @@ There is actually not just one tree calculus, it is a family of calculi. See [Ba
 - `u != 0, v == 0` → **stem**(`u`)
 - `u != 0, v != 0` → **fork**(`u`, `v`)
 
-Heap addresses are always non-zero, so `0` unambiguously means "no child" — there is no tag word. Forks shrink from 12 to 8 bytes, and construction is just a pair of stores with no tag write. `apply`'s leaf/stem/fork and triage cases fall out of `jrcxz` null-checks with `jmp *%rbp` tail calls (no per-child loop, no tag arithmetic), and the ternary tag (0/1/2) is only reconstructed where genuinely needed — in `emit` — branchlessly. Because every non-null child is `>=` the heap base held in `rbx`, `cmpl %ebx, word` sets the carry flag exactly when `word == 0`, so the tag is `sbb %ecx,%ecx; sbb $-2,%ecx` = `2 - (u==0) - (v==0)` in four instructions. Net effect vs. the tagged layout: ~15–20% faster on reduction-heavy workloads *and* smaller across the board — the tighter nodes, branchless dispatch, and tail-call reduction outweigh `emit` rebuilding the tag. It is the default across the family; only the two variants whose whole point is a different layout keep theirs.
+Heap addresses are always non-zero, so `0` unambiguously means "no child" — there is no tag word. Forks shrink from 12 to 8 bytes, and construction is just a pair of stores with no tag write. `apply`'s leaf/stem/fork and triage cases fall out of `jrcxz` null-checks with `jmp *%rbp` tail calls (no per-child loop, no tag arithmetic), and the ternary tag (0/1/2) is only reconstructed where genuinely needed — in `emit` — branchlessly. Because every non-null child is `>=` the heap base, any code address is a valid null-threshold — during emit `rbp` points at `emit_tree`, so `cmpl %ebp, word` sets the carry flag exactly when `word == 0` (no dedicated leaf register needed), so the tag is `sbb %ecx,%ecx; sbb $-2,%ecx` = `2 - (u==0) - (v==0)` in four instructions. Net effect vs. the tagged layout: ~15–20% faster on reduction-heavy workloads *and* smaller across the board — the tighter nodes, branchless dispatch, and tail-call reduction outweigh `emit` rebuilding the tag. It is the default across the family; only the two variants whose whole point is a different layout keep theirs.
 
-**Tagged-ternary nodes** (`x64-ternary`): the original `x64` layout, preserved for comparison — `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork (4/8/12 bytes). Same reduction rules and I/O as `x64`; only the node representation differs (359 B vs. 340 B).
+**Tagged-ternary nodes** (`x64-ternary`): the original `x64` layout, preserved for comparison — `[tag:32][child1:32][child2:32]` with tag 0/1/2 for leaf/stem/fork (4/8/12 bytes). Same reduction rules and I/O as `x64`; only the node representation differs (343 B vs. 317 B).
 
 **Deep app-trees** (`x64-minbin-deep`): Only two node types — `leaf [tag=0]` and `app [tag=1][left][right]`. Ternary forms are nested apps: `stem(x)` = `app(leaf,x)`, `fork(x,y)` = `app(app(leaf,x),y)`. Simpler allocation and emission; deeper pattern matching in `apply()`. This layout *is* the point of the variant, so it keeps its tagged app-nodes rather than switching to the two-word form.
 
@@ -78,7 +78,7 @@ node test.mjs           # run all tests directly
 node test.mjs x64       # test specific variants
 ```
 
-Requires: `gcc`, `strip`, `dd`, `truncate`, `readelf`, `awk`, `python3`, `as`, `ld`, `objcopy`.
+Requires: `gcc`, `strip`, `readelf`, `awk`, `python3`, `as`, `ld`, `objcopy`.
 
 ## Tricks
 
@@ -92,13 +92,13 @@ Disclaimer: These binaries were developed on [Apple silicon via Rosetta](https:/
 
 **No libc, no dynamic linking.** `gcc -nostdlib -static` with `_start` as the entry point. The only syscalls are `read`, `write`, and `exit`.
 
-**BSS heap via `p_memsz > p_filesz`.** The ELF spec says the kernel zero-fills the difference. Setting `p_memsz` to 64 MB gives us a zero-initialized heap with no `mmap` or `brk` syscall. The heap starts at the first byte after the code (a link-time constant). We never free — it's a bump allocator in `rdi`.
+**BSS heap via `p_memsz > p_filesz`.** The ELF spec says the kernel zero-fills the difference. Making `p_memsz` span a couple of GB past the file gives us a zero-initialized heap with no `mmap` or `brk` syscall. The heap starts at the first byte after the code (a link-time constant). We never free — it's a bump allocator in `rdi`.
 
 **NMAGIC linking (`-Wl,-n`).** Suppresses page-alignment padding between ELF headers and code. Without this, the toolchain inserts ~3.7 KB of zeros to align `.text` to a page boundary.
 
-**Section header removal.** After linking and stripping, we zero out `e_shoff`, `e_shnum`, and `e_shstrndx`, then truncate the file right after `.text` ends. The kernel ignores section headers entirely — they're only used by debuggers.
+**Section header removal.** After linking and stripping, the post-processor rebuilds the file without section headers (`e_shoff`/`e_shnum`/`e_shstrndx` = 0) and truncates it right after `.text` ends. The kernel ignores section headers entirely — they're only used by debuggers.
 
-**Phdr overlap (standard build).** A Python post-processing script shifts the program header to overlap with the ELF header's tail, saving 8 bytes (phdr starts at offset 56 instead of 64).
+**Phdr-at-48 overlap + code-in-phdr (standard build).** A Python post-processing script rebuilds the toolchain ELF with the program header at offset 48, overlapping the ELF header's tail. The only ehdr fields the kernel still reads in [48:64] are `e_phentsize` (=56, doubled by `p_flags`' high half — the kernel only looks at the low PF_R/W/X bits) and `e_phnum` (=1, doubled by `p_offset=1`'s low bytes). The script then stores the first 16 bytes of `.text` inside the phdr itself: `p_align` [96:104] is ignored for `ET_EXEC`, and `p_memsz` [88:96] only has to be "big enough but mappable" — sources start with `lea` + a 2-byte `addb %cl,%cl` filler so their first 8 bytes end in `00 00`, reading as a ~2.3 GB memsz (the earlier 512 MB heap now rides along for free; a 64-bit value assembled from arbitrary code bytes would exceed the user address-space limit and make `exec` fail, which is why the filler matters). Headers shrink from 120 to 88 bytes — and unlike the header-hackery ELFs (whose `e_phentsize=0` only loads under Rosetta), these still exec on a stock Linux kernel. Sources whose leading bytes don't form a valid memsz automatically fall back to code-at-96 (headers cost 96 bytes).
 
 **Phdr-at-40 overlap (header-hackery build).** The hand-crafted ELF starts the program header at offset 40, overlapping the last 24 bytes of the ELF header with the first 24 bytes of the program header. Fields are chosen so both interpretations are valid: `e_shoff` doubles as `p_type`, `e_flags` as `p_flags`, etc.
 
@@ -109,7 +109,7 @@ Disclaimer: These binaries were developed on [Apple silicon via Rosetta](https:/
 - `p_align` [88:96] — init code: `movl $.Lend,%ebx` (5B) + `leal 8(%rbx),%edi` (3B), fitting exactly in 8 bytes.
 - `p_memsz` [80:88] — an 8-byte little-endian value that only needs to be "large enough." The trampoline encodes a 3-byte instruction + a 2-byte `jmp` + 3 bytes of padding, and the resulting integer (~16.8 GB) is plenty for the BSS heap. Used in ternary variants to hold `push $N; pop %rax` for the identity builder.
 
-**`p_offset=1` for Rosetta compatibility.** macOS's Rosetta requires `p_offset % page_size == p_vaddr % page_size`. Setting `p_offset=1` (with `p_vaddr=0x400001`) satisfies this while `e_phnum=1` is encoded in the low 2 bytes of `p_vaddr`.
+**`p_offset=1` for Rosetta compatibility.** (Used by both builds.) macOS's Rosetta requires `p_offset % page_size == p_vaddr % page_size`. Setting `p_offset=1` (with `p_vaddr=0x400001`) satisfies this while `e_phnum=1` is encoded in the low 2 bytes of `p_vaddr`.
 
 
 ### x86 instruction selection

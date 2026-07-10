@@ -38,6 +38,10 @@ _start:
     ## rbp = &apply; rbx = leaf = heap base, derived from rbp as a disp8
     ## (leaf-apply; apply is the last function). All PC-relative.
     leaq    apply(%rip), %rbp   # rbp = &apply
+    ## Filler completing the build script's p_memsz window: the first 8
+    ## .text bytes become [lea][00] whose LE value (~2.3 GB) is a valid
+    ## p_memsz. 00 c9 = addb %cl,%cl, harmless here. (See x64.s.)
+    .byte   0x00, 0xc9          # addb %cl, %cl
     .byte   0x8d, 0x5d          # leal disp8(%rbp), %ebx  (ModRM 5d: reg=ebx, base=rbp)
     .byte   leaf-apply          # disp8 = sizeof(apply)
     leal    8(%rbx), %edi       # rdi = heap free pointer (past the leaf node)

@@ -53,18 +53,26 @@ _start:
     ## and `leaf-apply` is a small intra-.text displacement (disp8) — this
     ## keeps everything PC-relative (no absolute relocations) yet compact.
     leaq    apply(%rip), %rbp   # rbp = &apply
-    ## rbx = leaf address = heap base ([0][0] from BSS) = apply + sizeof(apply).
-    ## Hand-encoded `leal (leaf-apply)(%rbp), %ebx`: leaf-apply is a forward
+    ## Two filler bytes complete the build script's p_memsz trick: the first
+    ## 8 bytes of .text become [lea][00] = 48 8d 2d xx 00 00 00 00, whose
+    ## little-endian value (~2.3 GB) is a valid "large enough" p_memsz, so
+    ## they can live inside that header field. 00 c9 = addb %cl,%cl: the 00
+    ## closes the 8-byte window and the pair executes harmlessly (cl is not
+    ## yet meaningful here).
+    .byte   0x00, 0xc9          # addb %cl, %cl
+    ## rdi = leaf address = heap base ([0][0] from BSS) = apply + sizeof(apply).
+    ## Hand-encoded `leal (leaf-apply)(%rbp), %edi`: leaf-apply is a forward
     ## reference so the assembler would pick the 6-byte disp32 form, but it
     ## fits in a signed byte (guarded at end of file), so force disp8 = 3B.
-    .byte   0x8d, 0x5d          # leal disp8(%rbp), %ebx  (ModRM 5d: mod=01, reg=ebx, base=rbp)
+    ## No permanent leaf register is needed: emit's null-threshold uses rbp.
+    .byte   0x8d, 0x7d          # leal disp8(%rbp), %edi  (ModRM 7d: mod=01, reg=edi, base=rbp)
     .byte   leaf-apply          # disp8 = sizeof(apply)
-    leal    8(%rbx), %edi       # rdi = heap free pointer (past the leaf node)
 
     ## Build identity: fork(fork(leaf, leaf), leaf) — inlined.
     ## In the two-word layout a fork is just [left][right]. Uses esi (not
     ## ebp) as scratch so rbp keeps pointing at apply — no reload needed.
-    movl    %ebx, %eax          # eax = leaf
+    movl    %edi, %eax          # eax = leaf
+    scasq                       # rdi = leaf+8 = free pointer (flags irrelevant)
     movl    %edi, %esi          # esi = inner fork addr
     stosl                       # inner.u = leaf
     stosl                       # inner.v = leaf
@@ -145,13 +153,14 @@ parse_tree:
 
 ## ---- emit_tree(edx=tree) — recursive, byte-at-a-time output ----
 emit_tree:
-    ## tag = 2 - (u==0) - (v==0), branchless. Every non-null child pointer
-    ## is >= the heap base (rbx), so `cmpl %ebx, word` sets CF iff word==0.
+    ## tag = 2 - (u==0) - (v==0), branchless. During emit, rbp = &emit_tree —
+    ## a code address strictly between 0 and every heap pointer — so
+    ## `cmpl %ebp, word` sets CF iff word==0 (word is either 0 or >= heap).
     ##   sbb %ecx,%ecx  -> ecx = -CF = -(u==0)          {0 or -1}
     ##   sbb $-2,%ecx   -> ecx = ecx + 2 - CF = tag     {leaf 0, stem 1, fork 2}
-    cmpl    %ebx, (%rdx)               # CF = (u == 0)
+    cmpl    %ebp, (%rdx)               # CF = (u == 0)
     sbbl    %ecx, %ecx                 # ecx = -(u == 0)
-    cmpl    %ebx, 4(%rdx)              # CF = (v == 0)
+    cmpl    %ebp, 4(%rdx)              # CF = (v == 0)
     sbbl    $-2, %ecx                  # ecx = tag in {0,1,2} = child count
     pushq   %rcx
     pushq   %rdx
