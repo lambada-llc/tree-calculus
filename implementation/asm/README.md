@@ -10,7 +10,7 @@ The variants differ along three axes:
 
 ### By I/O format
 
-**Ternary** (`x64`, `x64-ternary`, `x64-jay`, `x64-noid`, `x64-vm`): Reads one ternary-encoded tree per stdin line (`0`=leaf, `1X`=stem, `2XY`=fork). Left-folds application across all inputs (starting from the identity tree). Writes the result to stdout in the same encoding.
+**Ternary** (`x64`, `x64-rosetta`, `x64-ternary`, `x64-jay`, `x64-noid`, `x64-vm`): Reads one ternary-encoded tree per stdin line (`0`=leaf, `1X`=stem, `2XY`=fork). Left-folds application across all inputs (starting from the identity tree). Writes the result to stdout in the same encoding.
 
 ```sh
 # 21100 is the identity tree; applying it to 10 returns 10
@@ -58,6 +58,8 @@ Heap addresses are always non-zero, so `0` unambiguously means "no child" — th
 
 ### Other differences
 
+**x64-rosetta**: the Rosetta-compatible twin of `x64`. Its header-hackery build keeps `e_ident[4:16]` canonical and zero, which [Rosetta](https://support.apple.com/en-us/102527) validates but Linux ignores — every *other* variant's header-hackery build uses those 12 bytes as code and therefore loads only on a real Linux kernel (worth 9 bytes each). The standard (toolchain) builds never touch `e_ident`, so there `x64-rosetta` and `x64` are byte-identical.
+
 **x64-ternary**: `x64` with the original tagged-ternary node layout instead of the two-word tagless one (see *By internal representation*). Kept as the head-to-head baseline for the representation change.
 
 **x64-noid**: Omits the identity tree builder at startup. The first input becomes the accumulator directly instead of being applied to the identity. Undefined behavior for fewer than 2 inputs. Saves ~11 bytes.
@@ -86,7 +88,7 @@ A collection of techniques used across the variants.
 
 Again I want to thank Justine Tunney! I have little experience in machine code golfing, learnt a lot of tricks from [Lambda Calculus in 383 Bytes](https://justine.lol/lambda/) and bet that she'd find more bytes to squeeze out of these implementations.
 
-Disclaimer: These binaries were originally developed on [Apple silicon via Rosetta](https://support.apple.com/en-us/102527), which prevents _some_ cursed ELF header tricks (e.g. `EI_PAD` must stay zero — 8 more bytes of island space forgone). Both build flavors now produce ELFs that a stock Linux kernel loads, so the whole family is covered by the test suite.
+Disclaimer: These binaries were originally developed on [Apple silicon via Rosetta](https://support.apple.com/en-us/102527), which prevents _some_ cursed ELF header tricks — most notably it validates `e_ident[4:16]`, 12 bytes Linux never reads. Only `x64-rosetta` still honors that constraint; the other header-hackery builds execute code out of those bytes (worth 9 bytes each). Every build loads on a stock Linux kernel, so the whole family is covered by the test suite.
 
 ### ELF structure
 
@@ -102,10 +104,11 @@ Disclaimer: These binaries were originally developed on [Apple silicon via Roset
 
 **Phdr-at-48 overlap (header-hackery build).** The hand-crafted ELF starts the program header at offset 48, overlapping the last 16 bytes of the ELF header. Fields are chosen so both interpretations are valid — crucially including the two the kernel actually checks: `p_flags`' high half doubles as `e_phentsize=56` and `p_offset=1`'s low bytes double as `e_phnum=1`. (The previous layout put the phdr at 40 with `e_phentsize=0`, which only Rosetta's lax loader accepted; these binaries now exec on a stock Linux kernel and are covered by the test suite.) Offset 40 is impossible on real Linux: there `p_offset` would overlap `e_phentsize`, forcing a ~2^51 file offset.
 
-**Code in don't-care header fields.** The header-hackery builds weave executable instructions into ELF/Phdr fields the kernel doesn't validate:
+**Code in don't-care header fields.** The header-hackery builds weave executable instructions into ELF/Phdr fields the kernel doesn't validate. Linux reads only the 4 magic bytes of `e_ident`, so in the non-Rosetta variants the whole I/O stub and the exit epilogue live inside the headers — zero I/O bytes remain in the main stream:
 
-- `e_shoff` [40:48] — `write_byte` + the head of `do_io` (8 bytes exactly), ending in a `jmp` to the continuation in `p_paddr`. Calls land here directly — a function head in an island needs no entry glue.
-- `p_paddr` [72:80] — `do_io`'s argument setup (8 bytes exactly), ending in a `jmp` to the `syscall`/cleanup tail in the main stream.
+- `e_ident` [4:16] — `do_io`'s argument setup plus its `syscall`/cleanup/`ret` tail (11 of 12 bytes). Rosetta validates these bytes, so `x64-rosetta` forgoes this hole (costing it 9 bytes).
+- `e_shoff` [40:48] — `write_byte` + the head of `do_io` (8 bytes exactly), ending in a rel8 `jmp` *backwards* into `e_ident`. Calls land here directly — a function head in an island needs no entry glue.
+- `p_paddr` [72:80] — the exit epilogue (`mov $60,%al; xor %edi,%edi; syscall`); the stream reaches it with a 2-byte `jmp` (every variant's fold loop ends within rel8 range of offset 72).
 - `p_memsz` [88:96] — `_start`'s first 8 bytes: a 7-byte `lea` whose disp32 high bytes are `00 00 00`, plus a filler `00` closing the window. Read as a number this is ~2.2 GB — big enough for the heap, small enough to map (an arbitrary 8-byte code window would exceed the user address-space limit and abort `exec`).
 - `p_align` [96:104] — ignored for `ET_EXEC`; the rest of the code simply flows from offset 96 with no boundary at all.
 

@@ -1,21 +1,22 @@
 # ============================================================
-# Hand-crafted, *Linux-valid* ELF for the tagless two-word x64 evaluator.
+# Hand-crafted, *Linux-valid AND Rosetta-compatible* ELF for the tagless
+# two-word x64 evaluator. This twin keeps e_ident[4:16] canonical (Rosetta
+# validates it); the non-rosetta variants use those 12 bytes as code.
 #
-# Every field the Linux kernel actually validates holds its required value,
-# so this binary execs on a stock kernel:
+# Unlike the old header-hackery layout (phdr at 40, e_phentsize=0 — loadable
+# only under Rosetta), every field the Linux kernel actually validates holds
+# its required value here, so this binary execs on a stock kernel:
 #
 #   - phdr at offset 48, overlapping the ehdr tail. The kernel-read fields
 #     there are e_phentsize (=56, doubled by p_flags' high half; the loader
 #     only inspects the PF_R/W/X bits) and e_phnum (=1, doubled by
 #     p_offset=1's low bytes). e_flags/e_ehsize/e_sh* absorb the rest.
 #   - p_offset=1 with p_vaddr=0x400001: file offset F maps to 0x400000+F,
+#     and offset ≡ vaddr (mod page) keeps Rosetta happy too.
 #
-# Code lives in every hole the kernel ignores. This build is NOT Rosetta-
-# compatible: Rosetta validates e_ident[4:16], which here is executable
-# code (see x64-rosetta for the compatible twin).
-#   e_ident  [4:16]  — do_io argument setup + syscall/cleanup tail
-#   e_shoff  [40:48] — write_byte + do_io head (jmp back into e_ident)
-#   p_paddr  [72:80] — the exit epilogue (jmp .Lexit from the stream)
+# Code lives in every hole the kernel ignores:
+#   e_shoff  [40:48] — write_byte + do_io head        (jmp → p_paddr)
+#   p_paddr  [72:80] — do_io argument setup           (jmp → do_io tail)
 #   p_memsz  [88:96] — _start's first 8 bytes: lea+00, whose LE value
 #                      (~2.2 GB) doubles as a valid "big enough" memsz
 #   p_align  [96:..] — ignored for ET_EXEC; code flows contiguously from 96
@@ -29,26 +30,12 @@
 .globl _start
 
 # ================================================================
-# ELF64 Header — non-Rosetta layout: Linux only checks the 4 magic
-# bytes of e_ident, so [4:16] is 12 bytes of code (Rosetta validates
-# class/data/version/pad there; the x64-rosetta variant keeps them).
+# ELF64 Header
 # ================================================================
 ehdr:
-    .byte   0x7f, 'E', 'L', 'F'          # [0:4]   magic — all Linux reads of e_ident
-
-# ---- e_ident[4:16] (kernel-ignored): do_io argument setup + tail ----
-.Ldo_io2:
-    push    %rcx                         # byte on stack (write: cl=data; read: overwritten)
-    push    %rsp
-    pop     %rsi                         # buffer = stack
-    push    $1
-    pop     %rdx                         # count = 1
-    syscall
-    pop     %rcx
-    popq    %rdi                         # restore free pointer
-    ret
-
-.org 16
+    .byte   0x7f, 'E', 'L', 'F'          # [0:4]   magic
+    .byte   2, 1, 1, 0                   # [4:8]   64-bit, LE, v1, OSABI=0
+    .quad   0                            # [8:16]  EI_PAD (0 for Rosetta)
     .word   2                            # [16:18] e_type    = ET_EXEC
     .word   62                           # [18:20] e_machine = EM_X86_64
     .int    1                            # [20:24] e_version
@@ -62,7 +49,7 @@ write_byte:
 do_io:
     pushq   %rdi                         # save free pointer
     movl    %eax, %edi                   # fd = eax (0 read / 1 write)
-    jmp     .Ldo_io2                     # rel8 back into e_ident[4:16]
+    jmp     .Ldo_io2                     # continue in p_paddr
 
 # ================================================================
 # Program Header (offset 48, overlapping ehdr[48:64])
@@ -71,18 +58,24 @@ do_io:
     .int    1                            # [48:52] p_type  = PT_LOAD (= e_flags, ignored)
     .int    0x00380007                   # [52:56] p_flags = RWX; high half = e_phentsize = 56
     .quad   1                            # [56:64] p_offset = 1; low bytes = e_phnum = 1
-    .quad   0x400001                     # [64:72] p_vaddr (== p_offset mod page)
+    .quad   0x400001                     # [64:72] p_vaddr (≡ p_offset mod page)
 
-# ---- p_paddr [72:80] (kernel-ignored): exit epilogue ----
-.Lexit:
-    movb    $60, %al                     # SYS_EXIT (rax upper bytes 0 from last write)
-    xorl    %edi, %edi                   # status = 0
-    syscall
+# ---- p_paddr [72:80] (kernel-ignored): do_io argument setup ----
+.Ldo_io2:
+    push    %rcx                         # byte on stack (write: cl=data; read: overwritten)
+    push    %rsp
+    pop     %rsi                         # buffer = stack
+    push    $1
+    pop     %rdx                         # count = 1
+    jmp     .Ldo_io3                     # continue in the main stream
 
 .org 80
     .quad   .Lend - ehdr - 1             # [80:88] p_filesz
 
 # ---- p_memsz [88:96]: _start's first 8 bytes double as the value ----
+# lea's disp32 high bytes are 00 00 00 and the filler byte closes the
+# window: value = 0x__2d8d48 | disp<<24 ≈ 2.2 GB — big enough for the
+# heap, small enough to map.
 .org 88
 _start:
     leaq    apply(%rip), %rbp            # rbp = &apply
@@ -116,8 +109,16 @@ _start:
     .byte   0x8d, 0x6d                   # leal disp8(%rbp), %ebp
     .byte   emit_tree-apply
     call    *%rbp                        # emit_tree(edx = accumulator)
-    jmp     .Lexit              # exit epilogue lives in p_paddr
+    movb    $60, %al                     # SYS_EXIT
+    xorl    %edi, %edi
+    syscall
 
+## ---- do_io tail (head lives in the e_shoff/p_paddr islands) ----
+.Ldo_io3:
+    syscall
+    pop     %rcx
+    popq    %rdi                         # restore free pointer
+    ret
 
 ## ---- parse_tree -> eax (SF set on EOF) ----
 parse_tree:

@@ -1,9 +1,10 @@
 variant             eval   header-hackery
 -------             ----   --------------
-x64                317 B            305 B
-x64-ternary        343 B            323 B
-x64-jay            297 B            285 B
-x64-noid           313 B            301 B
-x64-minbin         314 B            302 B
-x64-minbin-deep    323 B            307 B
-x64-vm             334 B            321 B
+x64                317 B            296 B
+x64-rosetta        317 B            305 B
+x64-ternary        343 B            314 B
+x64-jay            297 B            276 B
+x64-noid           313 B            292 B
+x64-minbin         314 B            293 B
+x64-minbin-deep    323 B            298 B
+x64-vm             334 B            312 B
