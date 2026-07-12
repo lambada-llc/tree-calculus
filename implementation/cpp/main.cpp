@@ -3,6 +3,8 @@
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
 #include "eager-ternary-vm.hpp"
+#include "eager-ternary-nil.hpp"
+#include "eager-ternary-nil-vm.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -44,6 +46,10 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryLen>();
   } else if (evaluator == "eager-ternary-vm") {
     return run<EagerTernaryVM>();
+  } else if (evaluator == "eager-ternary-nil") {
+    return run<EagerTernaryNil>();
+  } else if (evaluator == "eager-ternary-nil-vm") {
+    return run<EagerTernaryNilVM>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {
