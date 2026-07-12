@@ -5,6 +5,8 @@
 #include "eager-ternary-vm.hpp"
 #include "eager-ternary-nil.hpp"
 #include "eager-ternary-nil-vm.hpp"
+#include "eager-ternary-nil-mmap.hpp"
+#include "eager-ternary-nil-mmap-vm.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -50,6 +52,10 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNil>();
   } else if (evaluator == "eager-ternary-nil-vm") {
     return run<EagerTernaryNilVM>();
+  } else if (evaluator == "eager-ternary-nil-mmap") {
+    return run<EagerTernaryNilMmap>();
+  } else if (evaluator == "eager-ternary-nil-mmap-vm") {
+    return run<EagerTernaryNilMmapVM>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {
