@@ -173,6 +173,8 @@ The tagless `[u][v]` layout (see *By internal representation*) enables a few tri
 
 Heap base `.Lend` is a link-time constant, and all addresses fit in 32 bits. Node pointers are stored as absolute addresses, so every heap access like `movl 4(%rbx,%rdx),%ecx` (4 bytes: opcode + ModR/M + SIB + disp8) becomes `movl 4(%rdx),%ecx` (3 bytes: no SIB). With ~14 heap accesses in `apply` alone, this saves 13+ bytes per variant.
 
+**32-bit is the sweet spot for pointer width.** Every variant already stores node fields as i32 (`stosl`/`movl`; there is no `stosq`/`movq` heap store anywhere), so there is no 64→32 narrowing left to reclaim. Going *below* 32 bits cannot shrink the file and would actually grow it: the heap lives in BSS (`.lcomm`), so node width contributes zero file bytes no matter what — only `.text` counts — and 16-bit accesses (`movw`/`stosw`) each carry a `0x66` operand-size prefix, making every heap load/store one byte longer. Worse, child pointers are absolute addresses at/above `0x400000` spanning a 512 MB heap (intrinsically ~30 bits), which both the null-vs-pointer discrimination and the SIB-free addressing above rely on; 16-bit fields would force base-relative indices and bring the SIB bytes back.
+
 ### Control flow
 
 **Tail calls.** `jmp target` instead of `call target; ret`. Saves 1 byte (the `ret`) and is used wherever a function's last action is calling another.
