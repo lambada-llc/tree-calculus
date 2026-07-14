@@ -4,9 +4,13 @@
 #include "eager-ternary-len.hpp"
 #include "eager-ternary-vm.hpp"
 #include "eager-ternary-nil.hpp"
+#include "eager-ternary-nil-32.hpp"
 #include "eager-ternary-nil-vm.hpp"
+#include "eager-ternary-nil-vm-32.hpp"
 #include "eager-ternary-nil-mmap.hpp"
+#include "eager-ternary-nil-mmap-32.hpp"
 #include "eager-ternary-nil-mmap-vm.hpp"
+#include "eager-ternary-nil-mmap-vm-32.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -50,12 +54,20 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryVM>();
   } else if (evaluator == "eager-ternary-nil") {
     return run<EagerTernaryNil>();
+  } else if (evaluator == "eager-ternary-nil-32") {
+    return run<EagerTernaryNil32>();
   } else if (evaluator == "eager-ternary-nil-vm") {
     return run<EagerTernaryNilVM>();
+  } else if (evaluator == "eager-ternary-nil-vm-32") {
+    return run<EagerTernaryNilVM32>();
   } else if (evaluator == "eager-ternary-nil-mmap") {
     return run<EagerTernaryNilMmap>();
+  } else if (evaluator == "eager-ternary-nil-mmap-32") {
+    return run<EagerTernaryNilMmap32>();
   } else if (evaluator == "eager-ternary-nil-mmap-vm") {
     return run<EagerTernaryNilMmapVM>();
+  } else if (evaluator == "eager-ternary-nil-mmap-vm-32") {
+    return run<EagerTernaryNilMmapVM32>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {
