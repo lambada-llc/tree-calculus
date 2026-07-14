@@ -16,6 +16,9 @@
 // Position 0 is reserved (0 is the null child sentinel); the shared leaf
 // lives at position 1. Positions are uint32_t, so the buffer is capped at
 // 2^32 slots (16 GiB); growing past that silently wraps positions.
+// Second-slot reads widen to size_t before the +1, so a node at the last
+// representable position still decodes correctly instead of wrapping into
+// slot 0.
 //
 // The VM's continuation frames shrink along with the nodes (two uint32_t
 // arguments instead of two size_t), halving stack traffic as well.
@@ -83,7 +86,7 @@ public:
            Tree x)
   {
     Tree c1 = _buf[x];
-    Tree c2 = _buf[x + 1];
+    Tree c2 = _buf[size_t(x) + 1];
     if (c1 == 0) return leaf_case();
     if (c2 == 0) return stem_case(c1);
     return fork_case(c1, c2);
@@ -96,7 +99,7 @@ public:
   reduce: // ---- evaluate apply(a, b) ----
     {
       Tree u = _buf[a];
-      Tree y = _buf[a + 1];
+      Tree y = _buf[size_t(a) + 1];
 
       if (u == 0) {                                      // apply(△, b) = △b
         result = stem(b);
@@ -109,7 +112,7 @@ public:
       }
 
       Tree w = _buf[u];
-      Tree x = _buf[u + 1];
+      Tree x = _buf[size_t(u) + 1];
 
       if (w == 0) {                                      // apply(△△y, b) = y
         result = y;
@@ -124,7 +127,7 @@ public:
 
       // apply(△(△wx)y, b) — triage on b
       Tree d = _buf[b];
-      Tree e = _buf[b + 1];
+      Tree e = _buf[size_t(b) + 1];
 
       if (d == 0) {                                      //   b = △:     w
         result = w;

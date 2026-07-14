@@ -24,7 +24,10 @@
 //     still fits in L3, ~parity on tiny workloads.
 //   — Positions are uint32_t, so the buffer is capped at 2^32 slots
 //     (16 GiB). Growing past that silently wraps positions; like arena
-//     exhaustion in the mmap variants, this is not detected.
+//     exhaustion in the mmap variants, this is not detected. Second-slot
+//     reads widen to size_t before the +1, so a node at the last
+//     representable position still decodes correctly instead of wrapping
+//     into slot 0.
 
 class EagerTernaryNil32 {
 private:
@@ -68,7 +71,7 @@ public:
            Tree x)
   {
     Tree c1 = _buf[x];
-    Tree c2 = _buf[x + 1];
+    Tree c2 = _buf[size_t(x) + 1];
     if (c1 == 0) return leaf_case();
     if (c2 == 0) return stem_case(c1);
     return fork_case(c1, c2);
@@ -76,7 +79,7 @@ public:
 
   Tree apply(Tree a, Tree b) {
     Tree u = _buf[a];
-    Tree y = _buf[a + 1];
+    Tree y = _buf[size_t(a) + 1];
 
     // apply(leaf, b) = stem(b)
     if (u == 0) return stem(b);
@@ -86,7 +89,7 @@ public:
 
     // a = fork(u, y)
     Tree w = _buf[u];
-    Tree x = _buf[u + 1];
+    Tree x = _buf[size_t(u) + 1];
 
     // apply(fork(leaf, y), b) = y
     if (w == 0) return y;
@@ -96,7 +99,7 @@ public:
 
     // apply(fork(fork(w, x), y), b) — triage on b
     Tree d = _buf[b];
-    Tree e = _buf[b + 1];
+    Tree e = _buf[size_t(b) + 1];
     if (d == 0) return w;                     // b = leaf
     if (e == 0) return apply(x, d);           // b = stem(d)
     return apply(apply(y, d), e);             // b = fork(d, e)

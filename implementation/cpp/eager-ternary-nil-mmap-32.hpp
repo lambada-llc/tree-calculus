@@ -66,7 +66,7 @@ public:
   EagerTernaryNilMmap32 &operator=(const EagerTernaryNilMmap32 &) = delete;
 
   std::string stats() {
-    return std::to_string(_head) + " nodes in arena";
+    return std::to_string(_head - 1) + " nodes in arena"; // index 0 is padding, not a node
   }
 
   Tree leaf() {
