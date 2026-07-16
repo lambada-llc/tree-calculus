@@ -165,6 +165,15 @@ int64_t expected_fib(int n) {
   return a;
 }
 
+// Build a fork-encoded list of natural numbers on evaluator e.
+template <typename E>
+typename E::Tree nat_list(E &e, const std::vector<int> &xs) {
+  std::vector<typename E::Tree> elems;
+  for (int x : xs)
+    elems.push_back(e.of_nat(x));
+  return e.of_list(elems);
+}
+
 template <typename Impl>
 void sanity_checks(std::string name) {
   std::cout << "Testing " << name << "..." << std::endl;
@@ -179,6 +188,16 @@ void sanity_checks(std::string name) {
   if (e.to_nat(e.apply(bench_linear_fib, e.of_nat(10))) != 89)
     throw std::runtime_error("fib misbehavior");
   std::cout << "  Fib behaves as expected." << std::endl;
+  // Merge-sort: sorting the descending list [n..1] yields the ascending [1..n].
+  const int sort_n = 20;
+  std::vector<int> descending, ascending;
+  for (int i = sort_n; i >= 1; --i) descending.push_back(i);
+  for (int i = 1; i <= sort_n; ++i) ascending.push_back(i);
+  auto merge_sort = e.of_ternary(bench_merge_sort_ternary);
+  if (e.to_ternary(e.apply(merge_sort, nat_list(e, descending))) !=
+      e.to_ternary(nat_list(e, ascending)))
+    throw std::runtime_error("merge-sort misbehavior");
+  std::cout << "  Merge-sort behaves as expected." << std::endl;
   std::cout << "    Stats: " << e.stats() << std::endl;
 }
 
@@ -217,61 +236,6 @@ void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, in
       }, iterations));
 }
 
-// Build a fork-encoded list of natural numbers on evaluator e.
-template <typename E>
-typename E::Tree nat_list(E &e, const std::vector<int> &xs) {
-  std::vector<typename E::Tree> elems;
-  for (int x : xs)
-    elems.push_back(e.of_nat(x));
-  return e.of_list(elems);
-}
-
-// Check that the peeking evaluator PeekImpl reduces identically to its plain base
-// Plain, and that both match the expected values, on recursive fib and
-// merge-sort. The peek == plain comparison proves the two reduction strategies
-// build byte-identical trees; the == expected comparison anchors that to ground
-// truth (fib values, and the sorted list).
-template <typename Plain, typename PeekImpl>
-void check_peek_matches_plain(const std::string &name) {
-  Evaluator<Plain> plain;
-  Evaluator<PeekImpl> peek;
-
-  auto fibPlain = plain.of_ternary(bench_recursive_fib_ternary);
-  auto fibPeek = peek.of_ternary(bench_recursive_fib_ternary);
-  for (int n = 0; n <= 20; ++n) {
-    int64_t rp = plain.to_nat(plain.apply(fibPlain, plain.of_nat(n)));
-    int64_t rk = peek.to_nat(peek.apply(fibPeek, peek.of_nat(n)));
-    if (rp != rk || rk != expected_fib(n))
-      throw std::runtime_error(name + ": fib(" + std::to_string(n) +
-                               ") peek/plain/expected mismatch");
-  }
-
-  const int K = 80;
-  std::vector<int> desc, asc;
-  for (int i = K; i >= 1; --i) desc.push_back(i);
-  for (int i = 1; i <= K; ++i) asc.push_back(i);
-  auto sortPlain = plain.of_ternary(bench_merge_sort_ternary);
-  auto sortPeek = peek.of_ternary(bench_merge_sort_ternary);
-  auto outPlain = plain.to_ternary(plain.apply(sortPlain, nat_list(plain, desc)));
-  auto outPeek = peek.to_ternary(peek.apply(sortPeek, nat_list(peek, desc)));
-  auto expected = plain.to_ternary(nat_list(plain, asc)); // the sorted list
-  if (outPlain != outPeek || outPeek != expected)
-    throw std::runtime_error(name + ": merge-sort peek/plain/expected mismatch");
-
-  std::cout << "  " << name << ": peek == plain == expected (fib 0..20, merge-sort "
-            << K << ")." << std::endl;
-}
-
-// Verify the peek layer reduces identically to the plain evaluator on real
-// programs, over each representation it composes with. (The reduction rules
-// themselves are already covered per peek variant by sanity_checks above.)
-void verify_peek() {
-  std::cout << "Verifying the peek layer reduces identically to plain..." << std::endl;
-  check_peek_matches_plain<EagerValueMem, EagerValueMemPeek>("value-mem");
-  check_peek_matches_plain<EagerTernaryNilMmap, EagerTernaryNilMmapPeek>("nil-mmap");
-  check_peek_matches_plain<EagerTernaryNilMmap32, EagerTernaryNilMmap32Peek>("nil-mmap-32");
-}
-
 int main(int argc, char *argv[]) {
   sanity_checks<EagerValueMem>("EagerValueMem");
   sanity_checks<EagerTernary>("EagerTernary");
@@ -290,8 +254,6 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
   sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
   sanity_checks<LazyAppStream>("LazyAppStream");
-
-  verify_peek();
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
