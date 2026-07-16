@@ -11,6 +11,9 @@
 #include "eager-ternary-nil-mmap-32.hpp"
 #include "eager-ternary-nil-mmap-vm.hpp"
 #include "eager-ternary-nil-mmap-vm-32.hpp"
+#include "eager-value-mem-peek.hpp"
+#include "eager-ternary-nil-mmap-peek.hpp"
+#include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -68,6 +71,12 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNilMmapVM>();
   } else if (evaluator == "eager-ternary-nil-mmap-vm-32") {
     return run<EagerTernaryNilMmapVM32>();
+  } else if (evaluator == "eager-value-mem-peek") {
+    return run<EagerValueMemPeek>();
+  } else if (evaluator == "eager-ternary-nil-mmap-peek") {
+    return run<EagerTernaryNilMmapPeek>();
+  } else if (evaluator == "eager-ternary-nil-mmap-32-peek") {
+    return run<EagerTernaryNilMmap32Peek>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
   } else {
