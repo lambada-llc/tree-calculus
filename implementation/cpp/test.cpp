@@ -217,24 +217,6 @@ void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, in
       }, iterations));
 }
 
-// Enumerate every ternary tree with up to max_nodes nodes, as ternary strings.
-std::vector<std::string> small_trees(int max_nodes) {
-  std::vector<std::vector<std::string>> by_size(max_nodes + 1);
-  if (max_nodes >= 1) by_size[1] = {"0"}; // leaf
-  for (int n = 2; n <= max_nodes; ++n) {
-    for (const auto &t : by_size[n - 1]) // stems
-      by_size[n].push_back("1" + t);
-    for (int i = 1; i <= n - 2; ++i) // forks: left has i nodes, right n-1-i
-      for (const auto &a : by_size[i])
-        for (const auto &b : by_size[n - 1 - i])
-          by_size[n].push_back("2" + a + b);
-  }
-  std::vector<std::string> all;
-  for (int n = 1; n <= max_nodes; ++n)
-    all.insert(all.end(), by_size[n].begin(), by_size[n].end());
-  return all;
-}
-
 // Build a fork-encoded list of natural numbers on evaluator e.
 template <typename E>
 typename E::Tree nat_list(E &e, const std::vector<int> &xs) {
@@ -244,12 +226,13 @@ typename E::Tree nat_list(E &e, const std::vector<int> &xs) {
   return e.of_list(elems);
 }
 
-// Check that the peeking evaluator PeekImpl reduces identically to its plain
-// base Plain and to the expected values on recursive fib and merge-sort.
-// Returns PeekImpl's apply count so callers can confirm it is the same whatever
-// the underlying representation.
+// Check that the peeking evaluator PeekImpl reduces identically to its plain base
+// Plain, and that both match the expected values, on recursive fib and
+// merge-sort. The peek == plain comparison proves the two reduction strategies
+// build byte-identical trees; the == expected comparison anchors that to ground
+// truth (fib values, and the sorted list).
 template <typename Plain, typename PeekImpl>
-uint64_t check_peek_matches_plain(const std::string &name) {
+void check_peek_matches_plain(const std::string &name) {
   Evaluator<Plain> plain;
   Evaluator<PeekImpl> peek;
 
@@ -271,48 +254,22 @@ uint64_t check_peek_matches_plain(const std::string &name) {
   auto sortPeek = peek.of_ternary(bench_merge_sort_ternary);
   auto outPlain = plain.to_ternary(plain.apply(sortPlain, nat_list(plain, desc)));
   auto outPeek = peek.to_ternary(peek.apply(sortPeek, nat_list(peek, desc)));
-  Evaluator<PeekImpl> ref;
-  auto expected = ref.to_ternary(nat_list(ref, asc));
+  auto expected = plain.to_ternary(nat_list(plain, asc)); // the sorted list
   if (outPlain != outPeek || outPeek != expected)
     throw std::runtime_error(name + ": merge-sort peek/plain/expected mismatch");
 
-  std::cout << "  " << name
-            << ": peek == plain == expected (fib 0..20, merge-sort " << K
-            << "); " << peek.applies() << " peek applies." << std::endl;
-  return peek.applies();
+  std::cout << "  " << name << ": peek == plain == expected (fib 0..20, merge-sort "
+            << K << ")." << std::endl;
 }
 
-// Verify the peek layer over every representation: it reduces identically to the
-// plain evaluator (only faster), and its apply count is the same whatever the
-// representation -- confirming peeking is genuinely representation-agnostic.
+// Verify the peek layer reduces identically to the plain evaluator on real
+// programs, over each representation it composes with. (The reduction rules
+// themselves are already covered per peek variant by sanity_checks above.)
 void verify_peek() {
-  std::cout << "Verifying the peek layer over each representation..." << std::endl;
-
-  // Drop rule (S+K elimination): apply(fork(stem(stem leaf), y), b) == b for
-  // many y, b -- the case where peeking proves apply(y, b) dead.
-  {
-    Evaluator<EagerValueMemPeek> e;
-    auto trees = small_trees(4);
-    int checks = 0;
-    for (const auto &ys : trees)
-      for (const auto &bs : trees) {
-        auto prog = e.fork(e.stem(e.stem(e.leaf())), e.of_ternary(ys));
-        if (e.to_ternary(e.apply(prog, e.of_ternary(bs))) != bs)
-          throw std::runtime_error("drop rule failed for y=" + ys + " b=" + bs);
-        checks++;
-      }
-    std::cout << "  Drop rule apply(fork(stem(stem leaf), y), b) == b: " << checks
-              << " (y,b) pairs passed." << std::endl;
-  }
-
-  uint64_t a = check_peek_matches_plain<EagerValueMem, EagerValueMemPeek>("value-mem");
-  uint64_t b = check_peek_matches_plain<EagerTernaryNilMmap, EagerTernaryNilMmapPeek>("nil-mmap");
-  uint64_t c = check_peek_matches_plain<EagerTernaryNilMmap32, EagerTernaryNilMmap32Peek>("nil-mmap-32");
-  if (a != b || b != c)
-    throw std::runtime_error("peek apply count differs across representations");
-  std::cout << "  Peek does " << a
-            << " applies on every representation (representation-independent)."
-            << std::endl;
+  std::cout << "Verifying the peek layer reduces identically to plain..." << std::endl;
+  check_peek_matches_plain<EagerValueMem, EagerValueMemPeek>("value-mem");
+  check_peek_matches_plain<EagerTernaryNilMmap, EagerTernaryNilMmapPeek>("nil-mmap");
+  check_peek_matches_plain<EagerTernaryNilMmap32, EagerTernaryNilMmap32Peek>("nil-mmap-32");
 }
 
 int main(int argc, char *argv[]) {

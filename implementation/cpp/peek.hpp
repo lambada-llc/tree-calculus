@@ -1,8 +1,5 @@
 #pragma once
 
-#include <cstdint>
-#include <string>
-
 // Peek<Base> layers the "peeking" reduction on top of any representation Base
 // that provides triage / stem / fork (every eager evaluator here does). It is
 // the peeking counterpart of ReduceRecursive (reduce-recursive.hpp): where that
@@ -37,14 +34,7 @@ class Peek : public Base {
 public:
   using Tree = typename Base::Tree;
 
-  uint64_t applies() const { return _applies; }
-
-  std::string stats() {
-    return Base::stats() + " (" + std::to_string(_applies) + " peek applies)";
-  }
-
   Tree apply(Tree a, Tree b) {
-    _applies++;
     return this->triage(
       // a = leaf:    apply(△, b) = △b
       [&]() PEEK_INLINE { return this->stem(b); },
@@ -106,9 +96,6 @@ public:
       },
       a);
   }
-
-private:
-  uint64_t _applies = 0;
 };
 
 #undef PEEK_INLINE
