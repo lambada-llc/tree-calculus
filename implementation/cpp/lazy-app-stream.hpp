@@ -127,8 +127,11 @@ public:
   Tree stem(Tree u) { Tree r={false,true}; r.append_range(u); return r; }
   Tree fork(Tree u, Tree v) { Tree r={false,false,true}; r.append_range(u); r.append_range(v); return r; }
 
-  template <typename T>
-  T triage(std::function<T()> leaf_case, std::function<T(Tree)> stem_case, std::function<T(Tree, Tree)> fork_case, Tree x) {
+  // Callables are template parameters (not std::function) so Evaluator's triage
+  // uses (parse/print) inline; reduction here happens by streaming, via apply().
+  template <typename FL, typename FS, typename FF>
+  [[gnu::always_inline]] auto triage(FL leaf_case, FS stem_case, FF fork_case, Tree x)
+      -> decltype(leaf_case()) {
     reduce(x);
     if (x[0]) return leaf_case();
     if (x[1]) return stem_case(Tree(x.begin()+2, x.end()));

@@ -67,11 +67,11 @@ public:
     return result;
   }
 
-  template <typename T>
-  T triage(std::function<T()> leaf_case,
-           std::function<T(Tree)> stem_case,
-           std::function<T(Tree, Tree)> fork_case,
-           Tree x)
+  // Callables are template parameters (not std::function) so Evaluator's triage
+  // uses (parse/print) inline; this VM keeps its own iterative apply() below.
+  template <typename FL, typename FS, typename FF>
+  [[gnu::always_inline]] auto triage(FL leaf_case, FS stem_case, FF fork_case, Tree x)
+      -> decltype(leaf_case())
   {
     switch (_buf[x]) {
       case 0: return leaf_case();

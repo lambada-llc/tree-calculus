@@ -1,9 +1,9 @@
 #pragma once
 
 #include <vector>
-#include <functional>
 #include <string>
 #include <stdexcept>
+#include "reduce-recursive.hpp"
 
 // Eager evaluator using a flat buffer with pointer sharing.
 //
@@ -23,7 +23,7 @@
 //   — No variable-length inline trees, no skip function needed.
 //   — Tag vs child position is always determined by structural context.
 
-class EagerTernaryRef {
+class EagerTernaryRef : public ReduceRecursive<EagerTernaryRef> {
 private:
   std::vector<size_t> _buf;
 
@@ -57,77 +57,29 @@ public:
     return result;
   }
 
-  template <typename T>
-  T triage(std::function<T()> leaf_case,
-           std::function<T(Tree)> stem_case,
-           std::function<T(Tree, Tree)> fork_case,
-           Tree x)
+  // The invariant check is kept but pushed into a cold, out-of-line helper: when
+  // triage is inlined three deep into the shared ReduceRecursive::apply, an
+  // inline throw (with its string building and exception edges) would pin the
+  // hot path's registers to the stack. Out-of-lining it keeps the dispatch tiny.
+  [[noreturn, gnu::noinline, gnu::cold]] void invariant_violation(Tree x) {
+    throw std::runtime_error(
+      "invariant violation: unexpected value " + std::to_string(_buf[x]) +
+      " at index " + std::to_string(x));
+  }
+
+  // Callables are template parameters (not std::function) so the shared
+  // ReduceRecursive::apply inlines its lambdas straight through this dispatch.
+  template <typename FL, typename FS, typename FF>
+  [[gnu::always_inline]] auto triage(FL leaf_case, FS stem_case, FF fork_case, Tree x)
+      -> decltype(leaf_case())
   {
     switch (_buf[x]) {
       case 0: return leaf_case();
       case 1: return stem_case(_buf[x + 1]);
       case 2: return fork_case(_buf[x + 1], _buf[x + 2]);
-      default:
-        throw std::runtime_error(
-          "invariant violation: unexpected value " + std::to_string(_buf[x]) +
-          " at index " + std::to_string(x));
+      default: invariant_violation(x);
     }
   }
 
-  Tree apply(Tree a, Tree b) {
-    switch (_buf[a]) {
-      case 0:
-        // apply(leaf, b) = stem(b)
-        return stem(b);
-
-      case 1: {
-        // apply(stem(u), b) = fork(u, b)
-        Tree u = _buf[a + 1];
-        return fork(u, b);
-      }
-
-      case 2: {
-        Tree u = _buf[a + 1];
-        Tree y = _buf[a + 2];
-
-        switch (_buf[u]) {
-          case 0:
-            // apply(fork(leaf, y), b) = y
-            return y;
-
-          case 1: {
-            // apply(fork(stem(u'), y), b) = apply(apply(u', b), apply(y, b))
-            Tree u_inner = _buf[u + 1];
-            return apply(apply(u_inner, b), apply(y, b));
-          }
-
-          case 2: {
-            // apply(fork(fork(w, x), y), b) — triage on b
-            Tree w = _buf[u + 1];
-            Tree x = _buf[u + 2];
-
-            switch (_buf[b]) {
-              case 0: return w;                                           // b = leaf
-              case 1: return apply(x, _buf[b + 1]);                      // b = stem(d)
-              case 2: return apply(apply(y, _buf[b + 1]), _buf[b + 2]);  // b = fork(d, e)
-              default:
-                throw std::runtime_error(
-                  "invariant violation: unexpected value " + std::to_string(_buf[b]) +
-                  " at index " + std::to_string(b));
-            }
-          }
-
-          default:
-            throw std::runtime_error(
-              "invariant violation: unexpected value " + std::to_string(_buf[u]) +
-              " at index " + std::to_string(u));
-        }
-      }
-
-      default:
-        throw std::runtime_error(
-          "invariant violation: unexpected value " + std::to_string(_buf[a]) +
-          " at index " + std::to_string(a));
-    }
-  }
+  // apply() is inherited from ReduceRecursive<EagerTernaryRef>.
 };
