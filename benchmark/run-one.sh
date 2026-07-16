@@ -165,7 +165,7 @@ else
 fi
 
 # --- Python ---
-PYTHON_IMPL="$REPO_ROOT/implementation/python/tree-calculus.py"
+PYTHON_IMPL="$REPO_ROOT/implementation/python/tree_calculus.py"
 if [[ -f "$PYTHON_IMPL" ]]; then
   if python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
     bench "Python" --stdin python3 "$PYTHON_IMPL"

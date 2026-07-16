@@ -212,7 +212,8 @@ let%expect_test "exp" =
   let t = test t 4 in
   let t = test t 8 in
   let t = test t 16 in
-  [%expect {|
+  [%expect
+    {|
     (exp 0 = 1 , cost((theoretical_num_apps 46)(theoretical_num_allocs 17)(num_apps 38)(num_allocs 11)(num_cache_hits 5)))
     (exp 1 = 2 , cost((theoretical_num_apps 143)(theoretical_num_allocs 53)(num_apps 12)(num_allocs 2)(num_cache_hits 5)))
     (exp 2 = 4 , cost((theoretical_num_apps 337)(theoretical_num_allocs 125)(num_apps 13)(num_allocs 3)(num_cache_hits 4)))
@@ -277,8 +278,7 @@ let%expect_test "naive fib" =
     |}];
   print_s [%sexp "known trees", (Map.length t.decode : int)];
   print_s [%sexp "known apps", (Map.length t.cache : int)];
-  [%expect
-    {|
+  [%expect {|
     ("known trees" 23083)
     ("known apps" 83831)
     |}]
