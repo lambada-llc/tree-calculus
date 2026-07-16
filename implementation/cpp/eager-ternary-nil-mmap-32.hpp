@@ -1,10 +1,10 @@
 #pragma once
 
 #include <cstdint>
-#include <functional>
 #include <string>
 #include <stdexcept>
 #include <sys/mman.h>
+#include "reduce-recursive.hpp"
 
 // Eager evaluator like EagerTernaryNilMmap (constant-size tagless nodes in an
 // mmap'd arena, arity discriminated by null children), but nodes are
@@ -29,7 +29,7 @@
 //   — 32-bit indices address 2^32 nodes = 32 GiB of arena; the reservation
 //     below is exactly that. Exhausting it is not detected and will wrap.
 
-class EagerTernaryNilMmap32 {
+class EagerTernaryNilMmap32 : public ReduceRecursive<EagerTernaryNilMmap32> {
 public:
   struct Node {
     uint32_t u;
@@ -85,11 +85,11 @@ public:
     return result;
   }
 
-  template <typename T>
-  T triage(std::function<T()> leaf_case,
-           std::function<T(Tree)> stem_case,
-           std::function<T(Tree, Tree)> fork_case,
-           Tree x)
+  // Callables are template parameters (not std::function) so the shared
+  // ReduceRecursive::apply inlines its lambdas straight through this dispatch.
+  template <typename FL, typename FS, typename FF>
+  [[gnu::always_inline]] auto triage(FL leaf_case, FS stem_case, FF fork_case, Tree x)
+      -> decltype(leaf_case())
   {
     Node n = _arena[x];
     if (!n.u) return leaf_case();
@@ -97,31 +97,5 @@ public:
     return fork_case(n.u, n.v);
   }
 
-  Tree apply(Tree a, Tree b) {
-    Tree u = _arena[a].u;
-    Tree y = _arena[a].v;
-
-    // apply(leaf, b) = stem(b)
-    if (!u) return stem(b);
-
-    // apply(stem(u), b) = fork(u, b)
-    if (!y) return fork(u, b);
-
-    // a = fork(u, y)
-    Tree w = _arena[u].u;
-    Tree x = _arena[u].v;
-
-    // apply(fork(leaf, y), b) = y
-    if (!w) return y;
-
-    // apply(fork(stem(u'), y), b) = apply(apply(u', b), apply(y, b))
-    if (!x) return apply(apply(w, b), apply(y, b));
-
-    // apply(fork(fork(w, x), y), b) — triage on b
-    Tree d = _arena[b].u;
-    Tree e = _arena[b].v;
-    if (!d) return w;                         // b = leaf
-    if (!e) return apply(x, d);               // b = stem(d)
-    return apply(apply(y, d), e);             // b = fork(d, e)
-  }
+  // apply() is inherited from ReduceRecursive<EagerTernaryNilMmap32>.
 };

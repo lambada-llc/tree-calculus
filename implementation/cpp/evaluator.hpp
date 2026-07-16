@@ -29,7 +29,7 @@ public:
   }
 
   bool to_bool(Tree x) {
-    return this->template triage<bool>(
+    return this->triage(
       []() { return false; },
       [&](Tree) { return true; },
       [&](Tree, Tree) -> bool { throw std::runtime_error("tree is not a bool"); },
@@ -43,7 +43,7 @@ public:
   std::vector<Tree> to_list(Tree x) {
     std::vector<Tree> res;
     while (true) {
-      bool done = this->template triage<bool>(
+      bool done = this->triage(
         [&]() { return true; },
         [&](Tree) -> bool { throw std::runtime_error("tree is not a list"); },
         [&](Tree u, Tree v) { res.push_back(u); x = v; return false; },
@@ -117,7 +117,7 @@ public:
   std::string to_ternary(Tree x) {
     std::string res;
     std::function<void(Tree)> walk = [&](Tree x) {
-      this->template triage<int>(
+      this->triage(
         [&]() { res.push_back('0'); return 0; },
         [&](Tree u) { res.push_back('1'); walk(u); return 0; },
         [&](Tree u, Tree v) { res.push_back('2'); walk(u); walk(v); return 0; },

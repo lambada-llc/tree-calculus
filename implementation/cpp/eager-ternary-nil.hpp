@@ -1,8 +1,8 @@
 #pragma once
 
 #include <vector>
-#include <functional>
 #include <string>
+#include "reduce-recursive.hpp"
 
 // Eager evaluator using a flat buffer with pointer sharing and constant-size,
 // tagless nodes.
@@ -22,7 +22,7 @@
 //     but there is only one leaf ever, so per-node size is constant 2.
 //   — No tag validity check: every two-slot pattern decodes to some arity.
 
-class EagerTernaryNil {
+class EagerTernaryNil : public ReduceRecursive<EagerTernaryNil> {
 private:
   std::vector<size_t> _buf;
 
@@ -57,11 +57,11 @@ public:
     return result;
   }
 
-  template <typename T>
-  T triage(std::function<T()> leaf_case,
-           std::function<T(Tree)> stem_case,
-           std::function<T(Tree, Tree)> fork_case,
-           Tree x)
+  // Callables are template parameters (not std::function) so the shared
+  // ReduceRecursive::apply inlines its lambdas straight through this dispatch.
+  template <typename FL, typename FS, typename FF>
+  [[gnu::always_inline]] auto triage(FL leaf_case, FS stem_case, FF fork_case, Tree x)
+      -> decltype(leaf_case())
   {
     Tree c1 = _buf[x];
     Tree c2 = _buf[x + 1];
@@ -70,31 +70,5 @@ public:
     return fork_case(c1, c2);
   }
 
-  Tree apply(Tree a, Tree b) {
-    Tree u = _buf[a];
-    Tree y = _buf[a + 1];
-
-    // apply(leaf, b) = stem(b)
-    if (u == 0) return stem(b);
-
-    // apply(stem(u), b) = fork(u, b)
-    if (y == 0) return fork(u, b);
-
-    // a = fork(u, y)
-    Tree w = _buf[u];
-    Tree x = _buf[u + 1];
-
-    // apply(fork(leaf, y), b) = y
-    if (w == 0) return y;
-
-    // apply(fork(stem(u'), y), b) = apply(apply(u', b), apply(y, b))
-    if (x == 0) return apply(apply(w, b), apply(y, b));
-
-    // apply(fork(fork(w, x), y), b) — triage on b
-    Tree d = _buf[b];
-    Tree e = _buf[b + 1];
-    if (d == 0) return w;                     // b = leaf
-    if (e == 0) return apply(x, d);           // b = stem(d)
-    return apply(apply(y, d), e);             // b = fork(d, e)
-  }
+  // apply() is inherited from ReduceRecursive<EagerTernaryNil>.
 };
