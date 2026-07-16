@@ -1,42 +1,30 @@
 #pragma once
 
-// Peek<Base> layers the "peeking" reduction on top of any representation Base
-// that provides triage / stem / fork (every eager evaluator here does). It is
-// the peeking counterpart of ReduceRecursive (reduce-recursive.hpp): where that
-// mixin restates the five rules straight, Peek expands rule 2 (S) by peeking
-// into x so that a provably dead apply(y, b) is never built (S + K elimination).
+// Peek<Base>: the peeking reduction over any triage/stem/fork backend (cf.
+// ReduceRecursive, which runs the five rules straight). It expands rule 2 (S) by
+// peeking into x, so a dead apply(y,b) is never built (S+K elimination) and
+// trivial applies fold into direct node builds. Effective rules, R := apply(y,b):
 //
-// Like ReduceRecursive it is written purely against triage -- no direct node
-// access, so no backend needs extra accessors.
+//   apply(leaf, b)               = stem(b)
+//   apply(stem u, b)             = fork(u, b)
+//   apply(fork(leaf, y), b)      = y                                          // rule 1
+//   apply(fork(fork(w,x), y), b) = w | apply(x,d) | apply(apply(y,d),e)       // rule 3, b = leaf | stem d | fork d e
+//   apply(fork(stem x, y), b), peeking x =                                    // rule 2 (S)
+//     leaf                -> fork(b, R)
+//     stem(leaf)          -> b                                                // R dead
+//     stem(stem x2)       -> apply(apply(x2,R), apply(b,R))
+//     stem(fork w x2)     -> w | apply(x2,d) | apply(apply(b,d),e)            // R = leaf | stem d | fork d e
+//     fork(leaf, leaf)    -> stem(R)
+//     fork(leaf, stem x3) -> fork(x3, R)
+//     fork(leaf, fork ..) -> apply(x2, R)
+//     fork(_, _)          -> apply(apply(x,b), R)                             // generic
 //
-// PEEK_INLINE forces each triage callable to inline. triage itself is
-// always_inline, but the lambdas handed to it are not, and this dispatch nests
-// triage far deeper than the plain reduction's three levels: without the hint
-// the largest inner lambdas exceed the inliner's size threshold and are left
-// out of line. An out-of-line callable defeats the scheme -- triage can no
-// longer collapse into apply, so a closure is materialised on the stack and the
-// reduction state is spilled on every step (measured ~50% slower, ~14 spills per
-// call). Forcing the lambdas inline collapses apply() back into one spill-free
-// self-recursive function whose machine code matches a hand-written switch.
+// PEEK_INLINE forces the triage lambdas to inline; at this depth the biggest are
+// otherwise left out of line, spilling the reduction state to a stack closure on
+// every step (~50% slower). Inlined, apply() is one spill-free self-recursive
+// function matching a hand-written switch.
 #define PEEK_INLINE __attribute__((always_inline))
-//
-// Peeking expansion of rule 2, apply(fork(stem x, y), b):
-//   x = leaf              -> fork(b, apply(y, b))
-//   x = stem(leaf)        -> b                       // apply(y, b) never built
-//   x = stem(stem x2)     -> R; apply(apply(x2, R), apply(b, R))
-//   x = stem(fork(w, x2)) -> R; triage R: leaf->w | stem d->apply(x2,d)
-//                                                  | fork d e->apply(apply(b,d),e)
-//   x = fork(leaf, x2)    -> R; peek x2 (x2 = K's body, applied to R):
-//                             x2 = leaf     -> stem(R)      // apply(leaf, R) = △R
-//                             x2 = stem x3  -> fork(x3, R)  // apply(△x3, R) = △x3 R
-//                             x2 = fork ..  -> apply(x2, R)
-//   x = fork(_, _)        -> apply(apply(x, b), apply(y, b))   // generic fallback
-// where R := apply(y, b), built lazily.
-//
-// The fork(leaf, x2) case is K x2 (a constant function) and is by far the most
-// common rule-2 shape in compiled programs; peeking x2 turns the trivial
-// apply(x2, R) into a direct node build ~2/3 of the time (measured), ~18% fewer
-// total applies and ~10% faster wall-clock on fib and merge-sort.
+
 template <typename Base>
 class Peek : public Base {
 public:
