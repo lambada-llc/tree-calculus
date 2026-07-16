@@ -11,6 +11,9 @@
 #include "eager-ternary-nil-mmap-32.hpp"
 #include "eager-ternary-nil-mmap-vm.hpp"
 #include "eager-ternary-nil-mmap-vm-32.hpp"
+#include "eager-value-mem-peek.hpp"
+#include "eager-ternary-nil-mmap-peek.hpp"
+#include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
@@ -45,6 +48,10 @@ std::string bench_linear_fib_ternary =
   "12002120112120212021200010212002102001021201121201121211002110010100212011201"
   "02120112000212012211000212021201121202120002120112021212011200020001011201021"
   "20112120112121100211001010200212011212011212110021100101020221002100";
+
+// merge-sort program from benchmark/run.sh: sorts a fork-encoded list of nats.
+std::string bench_merge_sort_ternary =
+  R"(212120112121100211001020212021201200212011212021212011200020021020021212021212021200021201021200020102120112021212021200021201021200020102120112011202120212000102120112011201200212120212120212000212010212000201021201120212021200010212011202121202120002120102120002010212011201120212021200010212011201120212120112121100211001020212021201221100021201121202120002120112021212011200020002121202121202120002120102120002010212011202121202120002120102120002010212011201120212000212011202121202120002120102120002010212120212000212011202121202120002120102120002010212120212021200010212021202120001021212021212021212021200021201021200020102120212011212011200010102002120212011212021202120001021202120212000102120212021200010010212120212120212000212010212000201021201120212021200010112021202120001020021201120112021201121202120212000100102121202120212000102120212000102002021201120221002120212120112121100211001020212021201121212011200020021212021202120001021202120001020212012002121202121202121202120002120102120002010212021201121201120001010200212121202121202120002120102120002010212021201121201120001010200200212121201120002020102002120112120112121100211001010220022221020100202202010002121201121211002110010202120212011212021200022202121201121211002110010202120212012002120112120212021200010212001010212011212011212110021100101002120102120122121201121211002110010202120212012002120112120212021200010212002102001021201121201121211002110010100212011201021201120002120122110002120212011212021200021201120212120112000200010112010212011212011212110021100101020211002021100212011212011212110021100101021212021202120001021202120001020021212021202120001021202120001020020212120112121100211001020212021201220002120112120212021200010212012002120212120212000212010212000201021201120001021201121201121211002110010102120112120112121100211001010)";
 
 template <typename Impl>
 void test_basic_reduction_rules(Evaluator<Impl> &e) {
@@ -210,6 +217,104 @@ void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, in
       }, iterations));
 }
 
+// Enumerate every ternary tree with up to max_nodes nodes, as ternary strings.
+std::vector<std::string> small_trees(int max_nodes) {
+  std::vector<std::vector<std::string>> by_size(max_nodes + 1);
+  if (max_nodes >= 1) by_size[1] = {"0"}; // leaf
+  for (int n = 2; n <= max_nodes; ++n) {
+    for (const auto &t : by_size[n - 1]) // stems
+      by_size[n].push_back("1" + t);
+    for (int i = 1; i <= n - 2; ++i) // forks: left has i nodes, right n-1-i
+      for (const auto &a : by_size[i])
+        for (const auto &b : by_size[n - 1 - i])
+          by_size[n].push_back("2" + a + b);
+  }
+  std::vector<std::string> all;
+  for (int n = 1; n <= max_nodes; ++n)
+    all.insert(all.end(), by_size[n].begin(), by_size[n].end());
+  return all;
+}
+
+// Build a fork-encoded list of natural numbers on evaluator e.
+template <typename E>
+typename E::Tree nat_list(E &e, const std::vector<int> &xs) {
+  std::vector<typename E::Tree> elems;
+  for (int x : xs)
+    elems.push_back(e.of_nat(x));
+  return e.of_list(elems);
+}
+
+// Check that the peeking evaluator PeekImpl reduces identically to its plain
+// base Plain and to the expected values on recursive fib and merge-sort.
+// Returns PeekImpl's apply count so callers can confirm it is the same whatever
+// the underlying representation.
+template <typename Plain, typename PeekImpl>
+uint64_t check_peek_matches_plain(const std::string &name) {
+  Evaluator<Plain> plain;
+  Evaluator<PeekImpl> peek;
+
+  auto fibPlain = plain.of_ternary(bench_recursive_fib_ternary);
+  auto fibPeek = peek.of_ternary(bench_recursive_fib_ternary);
+  for (int n = 0; n <= 20; ++n) {
+    int64_t rp = plain.to_nat(plain.apply(fibPlain, plain.of_nat(n)));
+    int64_t rk = peek.to_nat(peek.apply(fibPeek, peek.of_nat(n)));
+    if (rp != rk || rk != expected_fib(n))
+      throw std::runtime_error(name + ": fib(" + std::to_string(n) +
+                               ") peek/plain/expected mismatch");
+  }
+
+  const int K = 80;
+  std::vector<int> desc, asc;
+  for (int i = K; i >= 1; --i) desc.push_back(i);
+  for (int i = 1; i <= K; ++i) asc.push_back(i);
+  auto sortPlain = plain.of_ternary(bench_merge_sort_ternary);
+  auto sortPeek = peek.of_ternary(bench_merge_sort_ternary);
+  auto outPlain = plain.to_ternary(plain.apply(sortPlain, nat_list(plain, desc)));
+  auto outPeek = peek.to_ternary(peek.apply(sortPeek, nat_list(peek, desc)));
+  Evaluator<PeekImpl> ref;
+  auto expected = ref.to_ternary(nat_list(ref, asc));
+  if (outPlain != outPeek || outPeek != expected)
+    throw std::runtime_error(name + ": merge-sort peek/plain/expected mismatch");
+
+  std::cout << "  " << name
+            << ": peek == plain == expected (fib 0..20, merge-sort " << K
+            << "); " << peek.applies() << " peek applies." << std::endl;
+  return peek.applies();
+}
+
+// Verify the peek layer over every representation: it reduces identically to the
+// plain evaluator (only faster), and its apply count is the same whatever the
+// representation -- confirming peeking is genuinely representation-agnostic.
+void verify_peek() {
+  std::cout << "Verifying the peek layer over each representation..." << std::endl;
+
+  // Drop rule (S+K elimination): apply(fork(stem(stem leaf), y), b) == b for
+  // many y, b -- the case where peeking proves apply(y, b) dead.
+  {
+    Evaluator<EagerValueMemPeek> e;
+    auto trees = small_trees(4);
+    int checks = 0;
+    for (const auto &ys : trees)
+      for (const auto &bs : trees) {
+        auto prog = e.fork(e.stem(e.stem(e.leaf())), e.of_ternary(ys));
+        if (e.to_ternary(e.apply(prog, e.of_ternary(bs))) != bs)
+          throw std::runtime_error("drop rule failed for y=" + ys + " b=" + bs);
+        checks++;
+      }
+    std::cout << "  Drop rule apply(fork(stem(stem leaf), y), b) == b: " << checks
+              << " (y,b) pairs passed." << std::endl;
+  }
+
+  uint64_t a = check_peek_matches_plain<EagerValueMem, EagerValueMemPeek>("value-mem");
+  uint64_t b = check_peek_matches_plain<EagerTernaryNilMmap, EagerTernaryNilMmapPeek>("nil-mmap");
+  uint64_t c = check_peek_matches_plain<EagerTernaryNilMmap32, EagerTernaryNilMmap32Peek>("nil-mmap-32");
+  if (a != b || b != c)
+    throw std::runtime_error("peek apply count differs across representations");
+  std::cout << "  Peek does " << a
+            << " applies on every representation (representation-independent)."
+            << std::endl;
+}
+
 int main(int argc, char *argv[]) {
   sanity_checks<EagerValueMem>("EagerValueMem");
   sanity_checks<EagerTernary>("EagerTernary");
@@ -224,7 +329,12 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryNilMmap32>("EagerTernaryNilMmap32");
   sanity_checks<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM");
   sanity_checks<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32");
+  sanity_checks<EagerValueMemPeek>("EagerValueMemPeek");
+  sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
+  sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
   sanity_checks<LazyAppStream>("LazyAppStream");
+
+  verify_peek();
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
@@ -243,6 +353,9 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerTernaryNilMmap32>("EagerTernaryNilMmap32", 90, 24);
     bench_evaluator<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM", 90, 24);
     bench_evaluator<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32", 90, 24);
+    bench_evaluator<EagerValueMemPeek>("EagerValueMemPeek", 90, 24);
+    bench_evaluator<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek", 90, 24);
+    bench_evaluator<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek", 90, 24);
     bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
   }
 
