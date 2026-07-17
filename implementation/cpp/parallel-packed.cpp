@@ -135,6 +135,10 @@ static void to_ternary(uint32_t x, std::string &out) {
 }
 
 int main() {
+  // OpenMP worker threads get a fixed stack (default ~8 MB); the deep reduction
+  // recursion overflows it at larger inputs. Give workers a big stack unless the
+  // user already set one. Must run before the first parallel region.
+  setenv("OMP_STACKSIZE", "1G", 0);
   if (const char *e = getenv("BCUT")) BCUT = atoi(e);
   void *p = mmap(nullptr, CAP * sizeof(uint64_t), PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
