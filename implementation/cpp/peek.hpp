@@ -18,10 +18,10 @@
 //   △ (△ w x) y @ △ d         = x @ d
 //   △ (△ w x) y @ △ d e       = (y @ d) @ e
 //
-// PEEK_INLINE forces each triage lambda to inline; without it the larger ones go
-// out of line, spilling reduction state to a stack closure per step. The seven
-// that wrap a further triage are annotated +N% in apply() below -- the wall-clock
-// cost of dropping that one hint alone (leave-one-out, fib + merge-sort).
+// PEEK_INLINE forces a triage lambda to inline; without it the larger ones go out
+// of line, spilling reduction state to a stack closure per step. The six that wrap
+// a further triage are annotated +N% in apply() below -- the wall-clock cost of
+// dropping that one hint alone (leave-one-out, fib + merge-sort).
 #define PEEK_INLINE __attribute__((always_inline))
 
 template <typename Base>
@@ -72,11 +72,13 @@ public:
               },
               x);
           },
-          [&](Tree w, Tree x) PEEK_INLINE {                                   // ~0% (rule 3 is rare)
+          // rule 3 (base reduction, not peeking): forcing its dispatch inline is
+          // measured at +0.7%, i.e. nothing, so it is left to the compiler.
+          [&](Tree w, Tree x) {
             return this->triage(
-              [&]() PEEK_INLINE { return w; },
-              [&](Tree d) PEEK_INLINE { return this->apply(x, d); },
-              [&](Tree d, Tree e) PEEK_INLINE { return this->apply(this->apply(y, d), e); },
+              [&]() { return w; },
+              [&](Tree d) { return this->apply(x, d); },
+              [&](Tree d, Tree e) { return this->apply(this->apply(y, d), e); },
               b);
           },
           u);
