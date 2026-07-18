@@ -1,22 +1,22 @@
 #pragma once
 
-// Peek<Base>: apply() for the triage-calculus reduction over any triage/stem/fork
-// backend -- matching more redex shapes than the plain ReduceRecursive, same
-// result in fewer steps. @ = application; △, △u, △uv = leaf, stem, fork; R := y@b.
+// Peek<Base>: apply() for the triage-calculus reduction, over any triage/stem/fork
+// backend. @ = application (left-associative); △, △ u, △ u v = leaf, stem, fork.
 //
-//   △       @ b = △b
-//   △u      @ b = △ub
-//   △△y     @ b = y
-//   △(△wx)y @ b = w | x@d | (y@d)@e      (b = △ | △d | △de)
-//   △(△x)y  @ b, by x:
-//     △           → △bR
-//     △△          → b
-//     △(△x2)      → (x2@R)@(b@R)
-//     △(△wx2)     → w | x2@d | (b@d)@e   (R = △ | △d | △de)
-//     △△△         → △R
-//     △△(△x3)     → △x3R
-//     △△x2        → x2@R                 (x2 fork)
-//     △uv         → (x@b)@R              (u ≠ △)
+//   △ @ b                     = △ b
+//   △ u @ b                   = △ u b
+//   △ △ y @ b                 = y
+//   △ (△ △) y @ b             = △ b (y @ b)
+//   △ (△ (△ △)) y @ b         = b
+//   △ (△ (△ (△ x))) y @ b     = (x @ (y @ b)) @ (b @ (y @ b))
+//   △ (△ (△ (△ w x))) y @ b   = w | x @ d | (b @ d) @ e   when y @ b = △ | △ d | △ d e
+//   △ (△ (△ △ △)) y @ b       = △ (y @ b)
+//   △ (△ (△ △ (△ x))) y @ b   = △ x (y @ b)
+//   △ (△ (△ △ x)) y @ b       = x @ (y @ b)               (x a fork)
+//   △ (△ (△ u v)) y @ b       = ((△ u v) @ b) @ (y @ b)   (u ≠ △)
+//   △ (△ w x) y @ △           = w
+//   △ (△ w x) y @ △ d         = x @ d
+//   △ (△ w x) y @ △ d e       = (y @ d) @ e
 //
 // PEEK_INLINE forces the triage lambdas to inline; at this depth the biggest are
 // otherwise left out of line, spilling reduction state to a stack closure every
