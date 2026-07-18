@@ -18,10 +18,19 @@
 //   △ (△ w x) y @ △ d         = x @ d
 //   △ (△ w x) y @ △ d e       = (y @ d) @ e
 //
+// What each rule-2 peek buys: wall-clock cost of dropping it and letting that x
+// fall back to the plain (x @ b) @ (y @ b) (leave-one-out, fib + merge-sort).
+//
+//   x = △              0%   never built by either program
+//   x = △ △            6%
+//   x = △ (△ x)        0%   never built by either program
+//   x = △ (△ w x)      0%   never built by either program
+//   x = △ △ x         16%   a third of all applies land here
+//     refine by x tail  0%  the @ it saves (△ △ △, △ △ (△ x)) is already one step
+//   all five off       30%  super-additive: each fallback feeds the next
+//
 // PEEK_INLINE forces a triage lambda to inline; without it the larger ones go out
-// of line, spilling reduction state to a stack closure per step. The six that wrap
-// a further triage are annotated +N% in apply() below -- the wall-clock cost of
-// dropping that one hint alone (leave-one-out, fib + merge-sort).
+// of line, spilling reduction state to a stack closure per step.
 #define PEEK_INLINE __attribute__((always_inline))
 
 template <typename Base>
@@ -33,20 +42,20 @@ public:
     return this->triage(
       [&]() PEEK_INLINE { return this->stem(b); },
       [&](Tree u) PEEK_INLINE { return this->fork(u, b); },
-      [&](Tree u, Tree y) PEEK_INLINE {                                       // +18%
+      [&](Tree u, Tree y) PEEK_INLINE {
         return this->triage(
           [&]() PEEK_INLINE { return y; },
-          [&](Tree x) PEEK_INLINE {                                           // +40%
+          [&](Tree x) PEEK_INLINE {
             return this->triage(
               [&]() PEEK_INLINE { return this->fork(b, this->apply(y, b)); },
-              [&](Tree x1) PEEK_INLINE {                                       // +12%
+              [&](Tree x1) PEEK_INLINE {
                 return this->triage(
                   [&]() PEEK_INLINE { return b; },
                   [&](Tree x2) PEEK_INLINE {
                     Tree R = this->apply(y, b);
                     return this->apply(this->apply(x2, R), this->apply(b, R));
                   },
-                  [&](Tree w, Tree x2) PEEK_INLINE {                          // +17%
+                  [&](Tree w, Tree x2) PEEK_INLINE {
                     Tree R = this->apply(y, b);
                     return this->triage(
                       [&]() PEEK_INLINE { return w; },
@@ -56,9 +65,9 @@ public:
                   },
                   x1);
               },
-              [&](Tree xw, Tree x2) PEEK_INLINE {                             // +54%
+              [&](Tree xw, Tree x2) PEEK_INLINE {
                 return this->triage(
-                  [&]() PEEK_INLINE {                                         // +34%
+                  [&]() PEEK_INLINE {
                     Tree R = this->apply(y, b);
                     return this->triage(
                       [&]() PEEK_INLINE { return this->stem(R); },
@@ -72,9 +81,7 @@ public:
               },
               x);
           },
-          // rule 3 (base reduction, not peeking): forcing its dispatch inline is
-          // measured at +0.7%, i.e. nothing, so it is left to the compiler.
-          [&](Tree w, Tree x) {
+          [&](Tree w, Tree x) {                                              // rule 3
             return this->triage(
               [&]() { return w; },
               [&](Tree d) { return this->apply(x, d); },
