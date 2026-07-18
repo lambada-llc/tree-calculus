@@ -179,30 +179,39 @@ and only *writes* its own node plus freshly bump-allocated ones. The next
 frontier is built by parallel atomic batch-append (one `fetch_add` + `memcpy` per
 thread per round) — no serial merge, which was the first thing that flattened it.
 
-Measured on the same `equal` (two balanced depth-d trees, 4-core x86_64):
+Nodes are packed to 8 bytes (tag in the top 3 bits of one word) because reduction
+is bandwidth-bound — one application node allocated per reduction — so density
+helps both axes. Measured on the same `equal` (two balanced depth-d trees, 4-core
+x86_64; times move with machine load, read each row as an internal comparison):
 
-| depth | t1 | t2 | t3 | t4 | self-speedup |
-|------:|---:|---:|---:|---:|-------------:|
-| 16 | 0.585 | 0.363 | 0.285 | 0.259 | 2.26× |
-| 18 | 2.490 | 1.495 | 1.077 | 0.959 | **2.60×** |
-| 19 | 5.144 | 3.203 | 2.295 | 2.013 | 2.56× |
+| depth | champion (1 thr) | frontier t1 | t2 | t4 | self-speedup |
+|------:|-----------------:|------------:|---:|---:|-------------:|
+| 18 | 0.65 | 2.90 | 1.81 | 1.19 | **2.44×** |
+| 19 | 1.38 | 5.44 | 3.71 | 2.49 | 2.18× |
 
-So the frontier model **does** scale on `equal` — 2.6× on 4 cores, where every
-fork-join reducer was dead flat (1.0×). That is the point: the parallelism was
-always real; it just needs a bulk-synchronous engine, not fork-join. Correct on
-the whole suite (fib, silly-exp, exercise-rules, merge-sort, parallel-and, equal)
-vs the champion.
+So the frontier model **does** scale on `equal` — ~2.2–2.4× on 4 cores, where
+every fork-join reducer was dead flat (1.0×). That is the point: the parallelism
+was always real; it just needs a bulk-synchronous engine, not fork-join. Correct
+on the whole suite (fib, silly-exp, exercise-rules, merge-sort, parallel-and,
+equal) vs the champion.
 
-Two honest caveats. (1) It does not yet beat the champion in *absolute* time: its
-per-node overhead (scan the frontier each round, no peeking/K-elimination, an
-allocation per reduction) makes single-thread ~6× slower than
-`nil-mmap-32-peek`, so 2.6× isn't enough to overtake it. Closing that is a
-separate optimization axis (peeking in the frontier, incremental frontier instead
-of rescan, denser nodes). (2) It reduces *every* application node, including ones
-a lazy/peeking evaluator would discard, so it would diverge on a program that
-relies on not evaluating a non-terminating discarded branch (the suite here does
-not). This is also exactly the bulk-synchronous, per-round data-parallel shape a
-GPU wants. (Run: `OMP_NUM_THREADS=4 parallel-frontier < input`.)
+**Does it beat the record?** Not on 4 cores. It is still ~1.8× *slower* than the
+single-thread champion at t4, because the graph model is ~5× slower per reduction:
+a parallel reducer must materialize an application node on the heap wherever the
+sequential champion just recurses on the stack — that allocation is intrinsic to
+parallelism, not an accident of this implementation. Two optimizations we tried:
+8-byte packing (kept — ~1.2× and better scaling); and *peeking at node
+construction* (reverted — reading a new node's function tag during the reduce
+phase is a **data race**: the two-phase discipline only guarantees a ready node's
+*head* is a stable value, not the deeper children an eager arg may still leave as
+live App nodes). What remains is a core-count question: at ~2.3× per 4 cores the
+frontier overtakes the champion somewhere around 8–16 cores — the scaling is real,
+this box just doesn't have the cores. (And this per-round data-parallel shape is
+exactly what a GPU runs, where that core count is trivially available.)
+
+Second caveat, unchanged: it reduces *every* application node, so it would diverge
+on a program that relies on laziness to skip a non-terminating discarded branch
+(the suite here does not). Run: `OMP_NUM_THREADS=4 parallel-frontier < input`.
 
 ## GPU reducer — design 🧭
 
