@@ -127,15 +127,49 @@ Scaling depends entirely on the *workload*:
   misconception); and the combine must be a *balanced* tree, not a sequential
   right-fold, to keep recombination off the critical path.
 
-Further headroom: granularity is a fixed branch-depth cutoff (BCUT) + a task cap;
-a real work-stealing deque with cost-estimated splitting would push past 2.6×
-toward linear, and would also let the fold/fixpoint programs expose whatever
-parallelism they have.
-
 ```sh
 bash benchmark/parallel.sh              # scaling table vs champion (builds as needed)
 N=16 BCUT=5 bash benchmark/parallel.sh  # heavier per-leaf work
 ```
+
+### Fork-join is the wrong engine for fine-grained parallelism
+
+The fork-join reducers above only cash in *coarse* parallelism: the `and`-tree
+hands them 16 huge independent tasks. They completely fail on programs whose
+parallelism is *fine-grained* — e.g. a structural `equal` comparing two trees,
+whose recursion is independent at every node. Diagnosis on such an `equal`:
+allocations are identical at 1 and 4 threads (no redundant work) and
+`OMP_WAIT_POLICY=passive` collapses user-time to ≈ wall-time — i.e. the workers
+just **spin idle**; the reduction runs sequentially. Per-task overhead (~µs)
+swamps the tiny per-node tasks, so the runtime never distributes them. Rule 2
+(`△(△x)y z → xz(yz)`) is the *only* rule that forks work, and such an equal is
+full of balanced rule-2 forks — they're simply too small for a task scheduler.
+
+### Measuring the real parallelism: `frontier-reduce.cpp`
+
+`implementation/cpp/frontier-reduce.cpp` is a **bulk-synchronous graph reducer**:
+the term is an explicit graph of application nodes, and each *round* reduces
+every redex that is currently ready, simultaneously. The round count is then the
+parallel **span** (critical path with infinite cores) and the reduction count is
+the **work** — both measured directly (`DBG=1`). On a structural `equal`
+comparing two balanced depth-`d` trees:
+
+| depth d | rounds (span) | reductions (work) | parallelism |
+|--------:|--------------:|------------------:|------------:|
+| 2  | 133 | 1,656     | 12×    |
+| 4  | 225 | 7,560     | 34×    |
+| 6  | 317 | 31,176    | 98×    |
+| 8  | 409 | 125,640   | 307×   |
+| 10 | 501 | 503,496   | 1,005× |
+| 12 | 593 | 2,014,920 | 3,398× |
+
+Span is **exactly linear in depth** (+92 rounds per +2 levels) while work is
+O(2ᵈ), so the available parallelism is Θ(2ᵈ/d) — thousands-fold at depth 12. The
+parallelism is unambiguously there; the fork-join engine just can't schedule it.
+The reducer runs its rounds sequentially (it *measures* span rather than
+exploiting it); executing each round with a parallel-for — amortizing scheduling
+over the whole frontier instead of per task — is the way to actually cash it in,
+and is exactly the model a GPU wants. (Verify: `DBG=1 frontier-reduce < input`.)
 
 ## GPU reducer — design 🧭
 
