@@ -14,6 +14,7 @@
 #include "eager-value-mem-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
+#include "eager-stacks.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
@@ -254,6 +255,7 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
   sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
   sanity_checks<LazyAppStream>("LazyAppStream");
+  sanity_checks<EagerStacks>("EagerStacks");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {

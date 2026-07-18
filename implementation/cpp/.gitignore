@@ -1,1 +1,6 @@
 *.exe
+parallel-packed
+parallel-peek
+frontier-reduce
+parallel-frontier
+work-stealing-vm
