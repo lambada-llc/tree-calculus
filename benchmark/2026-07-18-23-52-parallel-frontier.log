@@ -1,0 +1,13 @@
+# parallel-frontier scaling benchmark
+# host: 4-core x86_64, Linux; compiler: g++ 13 -fopenmp
+# workload: benchmark/parallel-and.ternary (WIDTH=16 parallel equal), N=10
+# note: N reduced from the script default (14) to fit this container; times are
+#       internal comparisons (graph reducer, not the single-thread champion).
+
+correctness: PASS (parallel equal = true)
+
+parallel-frontier  (WIDTH=16 parallel equal, n=10, best of 4, 4 cores)
+  t=1   9.083s   self-speedup 1.00x
+  t=2   5.294s   self-speedup 1.72x
+  t=3   4.806s   self-speedup 1.89x
+  t=4   4.149s   self-speedup 2.19x
