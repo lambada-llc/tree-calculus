@@ -166,10 +166,43 @@ comparing two balanced depth-`d` trees:
 Span is **exactly linear in depth** (+92 rounds per +2 levels) while work is
 O(2ᵈ), so the available parallelism is Θ(2ᵈ/d) — thousands-fold at depth 12. The
 parallelism is unambiguously there; the fork-join engine just can't schedule it.
-The reducer runs its rounds sequentially (it *measures* span rather than
-exploiting it); executing each round with a parallel-for — amortizing scheduling
-over the whole frontier instead of per task — is the way to actually cash it in,
-and is exactly the model a GPU wants. (Verify: `DBG=1 frontier-reduce < input`.)
+(Verify: `DBG=1 frontier-reduce < input`.)
+
+### Cashing it in: `parallel-frontier.cpp`
+
+`implementation/cpp/parallel-frontier.cpp` executes each round in parallel and
+turns that available parallelism into real speedup. The round is two-phase and
+lock-free on the graph: Phase A (read-only) partitions the live application nodes
+into ready vs blocked; Phase B reduces the ready ones — a ready node only *reads*
+values (its operands are already normal forms, so no other thread mutates them)
+and only *writes* its own node plus freshly bump-allocated ones. The next
+frontier is built by parallel atomic batch-append (one `fetch_add` + `memcpy` per
+thread per round) — no serial merge, which was the first thing that flattened it.
+
+Measured on the same `equal` (two balanced depth-d trees, 4-core x86_64):
+
+| depth | t1 | t2 | t3 | t4 | self-speedup |
+|------:|---:|---:|---:|---:|-------------:|
+| 16 | 0.585 | 0.363 | 0.285 | 0.259 | 2.26× |
+| 18 | 2.490 | 1.495 | 1.077 | 0.959 | **2.60×** |
+| 19 | 5.144 | 3.203 | 2.295 | 2.013 | 2.56× |
+
+So the frontier model **does** scale on `equal` — 2.6× on 4 cores, where every
+fork-join reducer was dead flat (1.0×). That is the point: the parallelism was
+always real; it just needs a bulk-synchronous engine, not fork-join. Correct on
+the whole suite (fib, silly-exp, exercise-rules, merge-sort, parallel-and, equal)
+vs the champion.
+
+Two honest caveats. (1) It does not yet beat the champion in *absolute* time: its
+per-node overhead (scan the frontier each round, no peeking/K-elimination, an
+allocation per reduction) makes single-thread ~6× slower than
+`nil-mmap-32-peek`, so 2.6× isn't enough to overtake it. Closing that is a
+separate optimization axis (peeking in the frontier, incremental frontier instead
+of rescan, denser nodes). (2) It reduces *every* application node, including ones
+a lazy/peeking evaluator would discard, so it would diverge on a program that
+relies on not evaluating a non-terminating discarded branch (the suite here does
+not). This is also exactly the bulk-synchronous, per-round data-parallel shape a
+GPU wants. (Run: `OMP_NUM_THREADS=4 parallel-frontier < input`.)
 
 ## GPU reducer — design 🧭
 
