@@ -1,28 +1,26 @@
 #pragma once
 
-// Peek<Base>: the peeking reduction over any triage/stem/fork backend (cf.
-// ReduceRecursive, which runs the five rules straight). It expands rule 2 (S) by
-// peeking into x, so a dead apply(y,b) is never built (S+K elimination) and
-// trivial applies fold into direct node builds. Effective rules, R := apply(y,b):
+// Peek<Base>: apply() for the triage-calculus reduction over any triage/stem/fork
+// backend -- matching more redex shapes than the plain ReduceRecursive, same
+// result in fewer steps. @ = application; △, △u, △uv = leaf, stem, fork; R := y@b.
 //
-//   apply(leaf, b)               = stem(b)
-//   apply(stem u, b)             = fork(u, b)
-//   apply(fork(leaf, y), b)      = y                                          // rule 1
-//   apply(fork(fork(w,x), y), b) = w | apply(x,d) | apply(apply(y,d),e)       // rule 3, b = leaf | stem d | fork d e
-//   apply(fork(stem x, y), b), peeking x =                                    // rule 2 (S)
-//     leaf                -> fork(b, R)
-//     stem(leaf)          -> b                                                // R dead
-//     stem(stem x2)       -> apply(apply(x2,R), apply(b,R))
-//     stem(fork w x2)     -> w | apply(x2,d) | apply(apply(b,d),e)            // R = leaf | stem d | fork d e
-//     fork(leaf, leaf)    -> stem(R)
-//     fork(leaf, stem x3) -> fork(x3, R)
-//     fork(leaf, fork ..) -> apply(x2, R)
-//     fork(_, _)          -> apply(apply(x,b), R)                             // generic
+//   △       @ b = △b
+//   △u      @ b = △ub
+//   △△y     @ b = y
+//   △(△wx)y @ b = w | x@d | (y@d)@e      (b = △ | △d | △de)
+//   △(△x)y  @ b, by x:
+//     △           → △bR
+//     △△          → b
+//     △(△x2)      → (x2@R)@(b@R)
+//     △(△wx2)     → w | x2@d | (b@d)@e   (R = △ | △d | △de)
+//     △△△         → △R
+//     △△(△x3)     → △x3R
+//     △△x2        → x2@R                 (x2 fork)
+//     △uv         → (x@b)@R              (u ≠ △)
 //
 // PEEK_INLINE forces the triage lambdas to inline; at this depth the biggest are
-// otherwise left out of line, spilling the reduction state to a stack closure on
-// every step (~50% slower). Inlined, apply() is one spill-free self-recursive
-// function matching a hand-written switch.
+// otherwise left out of line, spilling reduction state to a stack closure every
+// step (~50% slower). Inlined, apply() is one spill-free self-recursive function.
 #define PEEK_INLINE __attribute__((always_inline))
 
 template <typename Base>
