@@ -14,6 +14,7 @@
 #include "eager-value-mem-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
+#include "eager-stacks.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <iostream>
@@ -79,6 +80,8 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNilMmap32Peek>();
   } else if (evaluator == "lazy-app-stream") {
     return run<LazyAppStream>();
+  } else if (evaluator == "eager-stacks") {
+    return run<EagerStacks>();
   } else {
     std::cerr << "Unknown evaluator: " << evaluator << std::endl;
     return 1;

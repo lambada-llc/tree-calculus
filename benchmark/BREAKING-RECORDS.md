@@ -241,6 +241,60 @@ is. For fine-grained, depth-distributed parallelism like `equal`, the
 bulk-synchronous frontier (no per-task synchronization, one barrier per round,
 oblivious to depth) is the right engine; per-fork work-stealing is not.
 
+### Work-list model in C++: `eager-stacks.hpp` — the sequential baseline is the catch ⚠️
+
+The TypeScript reference has an elegant reducer,
+`implementation/typescript/src/evaluator/eager-stacks.mts`, that is structurally
+*already* the shape we want for parallelism: it externalizes the continuation
+into an explicit `todo` work-list (not the native call stack), keeps every term
+in applicative-spine form, and mutates spine nodes in place so a shared subterm
+is reduced once (call-by-need via object identity). `eager-stacks.hpp` is a
+clean, single-threaded C++ model of it, per the suggestion to try a singly
+linked spine list with a per-cell length counter:
+
+```
+Cell { Node* arg; Cell* next; uint32_t len; }   // len = 1 + next.len  (arity in O(1))
+Node { Cell* spine; }                            // the only mutable object
+```
+
+Cells are immutable, so a rule that splices a *value's* spine onto an empty tail
+reuses that cell chain unchanged (no copy); a non-empty tail forces a copy so the
+last cell can continue into it — the same `O(spliced length)` cost the array
+version pays for `s.push(...value)`. It is **correct on all five suite programs**
+and, as a nice side effect of the explicit work-list, it survives
+`exercise-rules (n=200000)` where the *recursive* champion stack-overflows without
+`ulimit -s unlimited`.
+
+But single-threaded it is **~10–12× slower than the champion**:
+
+| program | champion (peek) | eager-stacks | slowdown |
+|---|---|---|---|
+| recursive-fib (24) | 156 ms | 2015 ms | 13× |
+| silly-exp (16) | 64 ms | 764 ms | 12× |
+| exercise-rules (2e5) | 108 ms | 1310 ms | 12× |
+
+The reduction *step* count matches the champion almost exactly (fib24: ~14.6M
+nodes each). The entire gap is memory traffic: the champion emits ~15M 8-byte
+value nodes (~0.12 GB); eager-stacks additionally materializes **~106M spine
+cells** — about **7 cons cells per reduction step** at 24 bytes each (~2.6 GB, a
+~22× traffic multiplier). That is intrinsic to representing each intermediate
+term's spine as a heap list. Shrinking to 32-bit indices (12-byte cells, 4-byte
+node handles) does **not** help — it measured *slower*, because the win is
+bandwidth on the same cell count, and the count, not the word size, is the
+problem.
+
+Takeaway: the explicit-work-list *idea* is right for parallelism, but the
+eager-stacks *representation* (spine-as-heap-list) is the wrong way to realize
+it — it pays a ~10× constant before any core is added, so it would need >10×
+perfect scaling just to reach the champion. The way to get the work-list benefit
+without the cell blowup is to keep binary application nodes in the heap (8 bytes,
+like the champion) and make the continuation an explicit stack/frontier — which
+is exactly what `eager-ternary-nil-mmap-vm-32.hpp` (≈champion speed) and
+`parallel-frontier.cpp` (~5× per-op overhead, scales ~2.4×) already do. So the
+model is a useful confirmation of *what not to materialize*, not a new record.
+Available as `main.exe --evaluator eager-stacks` (not in the timed suite: it
+times out at the 2 s bench limit on the heavier programs).
+
 ## GPU reducer — design 🧭
 
 A GPU wins when there are many independent reductions in flight — the same
@@ -278,6 +332,9 @@ single-threaded, and it composes with the peeking super-rules (compile them in).
 | Schematic peeking super-rules | **in-tree** as `peek.hpp`; next: generate depth 3+ |
 | Concrete memoization | loses here (no overlap); opt-in only — schematic is the win |
 | Parallel fork-join | `parallel-peek.cpp` (champion backend + fork-join); flat on fib/fold, **2.6× on 4 cores — beats the single-thread record** on the purpose-built `parallel.sh` workload |
+| Parallel frontier | `parallel-frontier.cpp` bulk-synchronous; scales ~2.4× on `equal`, ~5× per-op overhead vs champion |
+| Work-stealing VM | `work-stealing-vm.cpp`; materialization-free but scales *negatively* on `equal` — finding: granularity, not materialization, decides |
+| Work-list model in C++ | `eager-stacks.hpp`; clean, correct, but ~12× slower single-thread — finding: spine-as-heap-list costs ~7 cells/step, don't materialize spines |
 | GPU frontier reducer | design |
 | Compile-don't-interpret | idea; most promising further single-thread win |
 
