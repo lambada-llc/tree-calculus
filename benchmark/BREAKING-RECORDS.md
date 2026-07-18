@@ -213,6 +213,34 @@ Second caveat, unchanged: it reduces *every* application node, so it would diver
 on a program that relies on laziness to skip a non-terminating discarded branch
 (the suite here does not). Run: `OMP_NUM_THREADS=4 parallel-frontier < input`.
 
+### Work-stealing VM — the materialization-free attempt that doesn't fit
+
+`implementation/cpp/work-stealing-vm.cpp` tests the natural objection to the
+frontier's overhead: *don't* materialize application nodes — keep the champion's
+recursive `apply` on the native stack and parallelize rule 2 with a Chase–Lev
+work-stealing deque. The right branch `apply(y,b)` is a stack-allocated Task
+pushed to the deque; the thread recurses left, then reclaims the right branch
+(run inline if un-stolen, atomic-join + help if stolen). Un-stolen forks allocate
+nothing, so materialization is O(steals), not O(work) — the theory is sound and
+it's correct across the suite.
+
+But it **loses on `equal`**: single-thread ~2.5× slower than the champion (a deque
+push/pop with a memory fence at every one of ~4M rule-2 forks), and it scales
+**negatively** (P=2 slower than P=1), robust to backoff, help-with-own-work, and
+cache-line padding. The cause is structural, and it's the mirror image of why the
+frontier works. Instrumentation: identical apply counts at every P (no redundant
+work), but **~700k–950k steals** for ~4M forks — hundreds of times the ideal
+`cores × span`. equal's parallelism is fine-grained and *deep*; work-stealing
+steals the *oldest/shallowest* tasks, which for equal are junk fixpoint-machinery
+forks. Idle workers all hammer the one busy deque (the fold), steal tiny tasks,
+finish instantly, and re-poll — contending on its head/tail. Work-stealing wants
+coarse, top-concentrated divide-and-conquer; equal is the opposite.
+
+Takeaway: materialization is not the deciding factor — *scheduling granularity*
+is. For fine-grained, depth-distributed parallelism like `equal`, the
+bulk-synchronous frontier (no per-task synchronization, one barrier per round,
+oblivious to depth) is the right engine; per-fork work-stealing is not.
+
 ## GPU reducer — design 🧭
 
 A GPU wins when there are many independent reductions in flight — the same
