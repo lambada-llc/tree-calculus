@@ -10,9 +10,17 @@
 //     bump, per-thread chunks) and the frontier banks (atomic batch-append —
 //     one fetch_add + memcpy per thread per round, no serial merge).
 //
-// Node = two 32-bit words (8 bytes): tag in the top 3 bits of the first word,
-// index in the low 29 bits (up to 2^29 nodes). Reduction is bandwidth-bound, so
-// the tight packing cuts memory traffic.
+// Node = two 32-bit words (8 bytes): a 3-bit tag in the top bits of the first
+// word, index in the low 29 bits (up to 2^29 nodes -- feasible programs here use
+// <6M). Same 8 bytes / 32-bit index / mmap arena as the single-thread champion
+// `eager-ternary-nil-mmap-32`; that is where its speed comes from, and this
+// shares it. The champion additionally goes *tagless*, discriminating leaf/stem/
+// fork by null children -- great for 3 states classified rarely. This reducer is
+// a graph reducer with 5 states (adds APP for un-reduced applications and IND
+// for post-reduction indirections) and classifies nodes constantly on its hot
+// path, where an explicit tag (one shift on one word) measured ~1.1-1.2x faster
+// than null-discrimination (which examines both words and branches). Hence the
+// packed tag rather than the -nil encoding.
 //
 // Build:  clang++ parallel-frontier.cpp -O3 -std=c++23 -stdlib=libc++ -fopenmp -o parallel-frontier.exe
 // Usage:  ternary on stdin/stdout; DBG=1 prints rounds/work; env OMP_NUM_THREADS.
