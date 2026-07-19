@@ -9,7 +9,7 @@
 //   △ (△ △) y @ b             = △ b (y @ b)
 //   △ (△ (△ △)) y @ b         = b
 //   △ (△ (△ (△ x))) y @ b     = (x @ (y @ b)) @ (b @ (y @ b))
-//   △ (△ (△ (△ w x))) y @ b   = w | x @ d | (b @ d) @ e   when y @ b = △ | △ d | △ d e
+//   △ (△ (△ (△ w x))) y @ b   = ((△ (△ w x)) @ b) @ (y @ b)
 //   △ (△ (△ △ △)) y @ b       = △ (y @ b)
 //   △ (△ (△ △ (△ x))) y @ b   = △ x (y @ b)
 //   △ (△ (△ △ x)) y @ b       = x @ (y @ b)               (x a fork)
@@ -50,14 +50,7 @@ public:
                     Tree R = this->apply(y, b);
                     return this->apply(this->apply(x2, R), this->apply(b, R));
                   },
-                  [&](Tree w, Tree x2) PEEK_INLINE {
-                    Tree R = this->apply(y, b);
-                    return this->triage(                                      // peek R: 0% (branch never reached)
-                      [&]() PEEK_INLINE { return w; },
-                      [&](Tree d) PEEK_INLINE { return this->apply(x2, d); },
-                      [&](Tree d, Tree e) PEEK_INLINE { return this->apply(this->apply(b, d), e); },
-                      R);
-                  },
+                  [&](Tree, Tree) PEEK_INLINE { return this->apply(this->apply(x, b), this->apply(y, b)); },
                   x1);
               },
               [&](Tree xw, Tree x2) PEEK_INLINE {
