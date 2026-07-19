@@ -127,3 +127,10 @@ merge-sort (n=2000, descending)
   ASM x64-vm                          PASS  0.280s
   ASM x64-minbin                      PASS  0.338s
   ASM x64-minbin-deep                 PASS  0.387s
+
+parallel-and (WIDTH=16, n=9)
+  C++ parallel-frontier (t=1)         PASS  1.179s
+  C++ parallel-frontier (t=2)         PASS  0.622s
+  C++ parallel-frontier (t=4)         PASS  0.486s
+  C++ parallel-frontier (t=8)         PASS  3.563s
+  C++ parallel-frontier (t=16)        PASS  4.912s
