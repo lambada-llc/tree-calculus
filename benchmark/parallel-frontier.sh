@@ -2,23 +2,23 @@
 # Scaling benchmark for the parallel-frontier reducer, emitted in the same row
 # format as run.sh so it can be appended to a benchmark log.
 #
-# Workload: benchmark/parallel-and.ternary is a balanced AND of WIDTH=16
-# independent `equal (exp n) (exp n)` computations, each = true, so the whole
-# program reduces to a single bit true (ternary "10"). Many independent
-# expensive reductions combined into one bit is the shape a bulk-synchronous
-# parallel reducer can exploit. Each row also asserts that result (correctness).
+# Workload: benchmark/parallel-equal.ternary is `equal (exp n) (exp n)` -- it
+# builds two 2^n trees and compares them, reducing to a single bit true (ternary
+# "10"). Comparing two big trees is a single realistic computation whose subtree
+# comparisons are independent, so it is inherently parallel; the output is one
+# bit, so nothing large is printed. Each row also asserts that result.
 #
 # One row per parallelism degree (OMP_NUM_THREADS) in DEGREES; degrees above the
 # core count oversubscribe on purpose (the log header records the machine).
 #
-# Env: N = per-leaf work exponent 2^N (default 9); BENCH_N = repeats, best wins
+# Env: N = tree-size exponent 2^N (default 12); BENCH_N = repeats, best wins
 #      (default 5); DEGREES = thread counts (default "1 2 4 8 16"); CXX/CXXFLAGS
 #      override the compiler.
 set -euo pipefail
 
 BENCH_DIR="$(cd "$(dirname "$0")" && pwd)"
 CPP_DIR="$BENCH_DIR/../implementation/cpp"
-N=${N:-9}
+N=${N:-12}
 BENCH_N=${BENCH_N:-5}
 DEGREES=${DEGREES:-"1 2 4 8 16"}
 CXX=${CXX:-clang++}
@@ -37,9 +37,9 @@ encode_nat() { # nat -> ternary numeral the program folds over
 }
 
 infile="$(mktemp)"; trap 'rm -f "$infile"' EXIT
-printf '%s\n%s\n' "$(cat "$BENCH_DIR/parallel-and.ternary")" "$(encode_nat "$N")" > "$infile"
+printf '%s\n%s\n' "$(cat "$BENCH_DIR/parallel-equal.ternary")" "$(encode_nat "$N")" > "$infile"
 
-echo "parallel-and (WIDTH=16, n=$N)"
+echo "parallel-equal (n=$N)"
 for th in $DEGREES; do
   best="" ok=true
   for (( i=0; i<BENCH_N; i++ )); do
