@@ -1,0 +1,151 @@
+cpu:   Intel(R) Xeon(R) Processor @ 2.80GHz (x86_64, 4 cores)
+os:    Linux 6.18.5
+date:  2026-07-26 22:44
+
+building ASM...   x64: 317 bytes
+  x64-header-hackery: 296 bytes
+  x64-rosetta: 317 bytes
+  x64-rosetta-header-hackery: 305 bytes
+  x64-ternary: 343 bytes
+  x64-ternary-header-hackery: 314 bytes
+  x64-jay: 297 bytes
+  x64-jay-header-hackery: 276 bytes
+  x64-noid: 313 bytes
+  x64-noid-header-hackery: 292 bytes
+  x64-minbin: 314 bytes
+  x64-minbin-header-hackery: 293 bytes
+  x64-minbin-deep: 323 bytes
+  x64-minbin-deep-header-hackery: 298 bytes
+  x64-vm: 334 bytes
+  x64-vm-header-hackery: 312 bytes
+ok
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.055s
+  C++ eager-value-mem                 PASS  0.005s
+  C++ eager-ternary-ref               PASS  0.005s
+  C++ eager-ternary-vm                PASS  0.005s
+  C++ eager-ternary-nil               PASS  0.005s
+  C++ eager-ternary-nil-32            PASS  0.005s
+  C++ eager-ternary-nil-vm            PASS  0.005s
+  C++ eager-ternary-nil-vm-32         PASS  0.005s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.005s
+  C++ eager-ternary-nil-mmap          PASS  0.005s
+  C++ eager-ternary-nil-mmap-32       PASS  0.005s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.005s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.005s
+  C++ eager-value-mem-peek            PASS  0.005s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.005s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.005s
+  Python                              PASS  0.019s
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.003s
+  ASM x64-ternary                     PASS  0.003s
+  ASM x64-noid                        PASS  0.003s
+  ASM x64-vm                          PASS  0.003s
+  ASM x64-minbin                      PASS  0.003s
+  ASM x64-minbin-deep                 PASS  0.003s
+
+recursive-fib (n=24)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.479s
+  C++ eager-ternary-ref               FAIL  exit 124  (timeout)
+  C++ eager-ternary-vm                FAIL  exit 124  (timeout)
+  C++ eager-ternary-nil               PASS  0.502s
+  C++ eager-ternary-nil-32            PASS  0.319s
+  C++ eager-ternary-nil-vm            PASS  0.484s
+  C++ eager-ternary-nil-vm-32         PASS  0.367s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.606s
+  C++ eager-ternary-nil-mmap          PASS  0.293s
+  C++ eager-ternary-nil-mmap-32       PASS  0.227s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.288s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.192s
+  C++ eager-value-mem-peek            PASS  0.470s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.255s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.176s
+  Python                              FAIL  exit 124  (timeout)
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.198s
+  ASM x64-ternary                     PASS  0.245s
+  ASM x64-noid                        PASS  0.178s
+  ASM x64-vm                          PASS  0.194s
+  ASM x64-minbin                      PASS  0.181s
+  ASM x64-minbin-deep                 PASS  0.229s
+
+silly-exp (n=16)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.195s
+  C++ eager-ternary-ref               PASS  0.255s
+  C++ eager-ternary-vm                PASS  0.263s
+  C++ eager-ternary-nil               PASS  0.234s
+  C++ eager-ternary-nil-32            PASS  0.142s
+  C++ eager-ternary-nil-vm            PASS  0.225s
+  C++ eager-ternary-nil-vm-32         PASS  0.144s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.217s
+  C++ eager-ternary-nil-mmap          PASS  0.105s
+  C++ eager-ternary-nil-mmap-32       PASS  0.084s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.105s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.073s
+  C++ eager-value-mem-peek            PASS  0.167s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.092s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.067s
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.078s
+  ASM x64-ternary                     PASS  0.087s
+  ASM x64-noid                        PASS  0.073s
+  ASM x64-vm                          PASS  0.082s
+  ASM x64-minbin                      PASS  0.079s
+  ASM x64-minbin-deep                 PASS  0.100s
+
+exercise-rules (n=200000)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.369s
+  C++ eager-ternary-ref               PASS  0.476s
+  C++ eager-ternary-vm                PASS  0.543s
+  C++ eager-ternary-nil               PASS  0.460s
+  C++ eager-ternary-nil-32            PASS  0.286s
+  C++ eager-ternary-nil-vm            PASS  0.418s
+  C++ eager-ternary-nil-vm-32         PASS  0.278s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.404s
+  C++ eager-ternary-nil-mmap          PASS  0.197s
+  C++ eager-ternary-nil-mmap-32       PASS  0.144s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.176s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.123s
+  C++ eager-value-mem-peek            PASS  0.244s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.164s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.118s
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.126s
+  ASM x64-ternary                     PASS  0.153s
+  ASM x64-noid                        PASS  0.125s
+  ASM x64-vm                          PASS  0.130s
+  ASM x64-minbin                      PASS  0.127s
+  ASM x64-minbin-deep                 PASS  0.159s
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              FAIL  exit 124  (timeout)
+  C++ eager-value-mem                 PASS  0.963s
+  C++ eager-ternary-ref               FAIL  exit 124  (timeout)
+  C++ eager-ternary-vm                FAIL  exit 124  (timeout)
+  C++ eager-ternary-nil               PASS  1.123s
+  C++ eager-ternary-nil-32            PASS  0.602s
+  C++ eager-ternary-nil-vm            FAIL  exit 124  (timeout)
+  C++ eager-ternary-nil-vm-32         PASS  0.650s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.943s
+  C++ eager-ternary-nil-mmap          PASS  0.437s
+  C++ eager-ternary-nil-mmap-32       PASS  0.335s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.460s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.306s
+  C++ eager-value-mem-peek            PASS  0.871s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.462s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.276s
+  Python                              FAIL  exit 1
+  WASM                                FAIL  exit 139
+  ASM x64                             PASS  0.370s
+  ASM x64-ternary                     PASS  0.436s
+  ASM x64-noid                        PASS  0.368s
+  ASM x64-vm                          PASS  0.379s
+  ASM x64-minbin                      PASS  0.422s
+  ASM x64-minbin-deep                 PASS  0.513s
