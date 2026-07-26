@@ -7,6 +7,7 @@
 #include "eager-ternary-nil-32.hpp"
 #include "eager-ternary-nil-vm.hpp"
 #include "eager-ternary-nil-vm-32.hpp"
+#include "eager-ternary-nil-vm-32-rc.hpp"
 #include "eager-ternary-nil-mmap.hpp"
 #include "eager-ternary-nil-mmap-32.hpp"
 #include "eager-ternary-nil-mmap-vm.hpp"
@@ -63,6 +64,8 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNilVM>();
   } else if (evaluator == "eager-ternary-nil-vm-32") {
     return run<EagerTernaryNilVM32>();
+  } else if (evaluator == "eager-ternary-nil-vm-32-rc") {
+    return run<EagerTernaryNilVM32RC>();
   } else if (evaluator == "eager-ternary-nil-mmap") {
     return run<EagerTernaryNilMmap>();
   } else if (evaluator == "eager-ternary-nil-mmap-32") {
