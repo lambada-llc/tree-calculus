@@ -21,6 +21,10 @@ For example:
 * Option types can use a leaf for no value and a stem for some value.
 * Fixed-size tuples can be represented by connecting the tuple's values using forks, yielding logarithmic time complexity for primitive operations on a tuple. For instance, tuple $(a, b, c, d)$ would be represented as $△(△ab)(△cd)$.
 
+## Files
+A program that produces a _file_ has to say more than what the bytes are: it has to say what the file is called and how to interpret it.
+Pairing that metadata with the content as $△\ (△\ name\ media\\_type)\ bytes$ does so using nothing but the conventions above — $name$ and $media\\_type$ are text, $bytes$ is a list of bytes — and composes with the list convention, so a program returning several files returns a list of these.
+
 
 # Representing trees as text
 To communicate trees precisely and concisely, it makes sense to come up with some conventions.
@@ -65,6 +69,23 @@ i sk △
 false k i
 false
 ```
+
+#### DAG modules
+The same format is useful one step more loosely: a _module_ is a DAG that need not be terminated by a value, and that may reference names it does not define.
+That makes a DAG a namespace, and makes it possible to compile a program in pieces and put the pieces together later.
+Operations on modules are implemented [here](../implementation/typescript/src/module) and exposed by [`bin/dag.js`](../bin/README.md).
+
+Names carry meaning, so that a module needs no import or export statements — what it needs is simply what it mentions but does not define, and what it offers is what it binds:
+* `△` is the leaf, always spelled this way.
+* `:name` is a **label**: a marker for a node the producer wants to find again, never part of a module's interface.
+* Any name containing `:` is **internal** and never offered to other modules. Namespacing (below) uses this to make a private name unique without publishing it.
+* `_name` is **private**: defined for local use only. The local part is what counts, so `Bool._helper` is private while a bare `_` is not.
+* Anything else, bound by a two-word line, is **exported**. Three-word lines build intermediate nodes and are not an interface.
+
+Three operations turn separately compiled modules into one DAG:
+* **Namespacing** rewrites a module's exports under a prefix, so that `not` from one module can become `Bool.not` without colliding with another module's `not`. A name is exported when it is public and this is its last definition — anything shadowed later was only scaffolding for what came after.
+* **Linking** works out the dependency order implied by the names and concatenates the modules in it, so every reference is defined above its use. Two modules exporting the same name, or a dependency cycle, make a set of modules unlinkable; both are worth reporting rather than silently resolving. Ties are broken alphabetically, so the same inputs always link to the same bytes.
+* **Canonicalizing** hash-conses the result into globally unique numeric ids. Separately compiled modules each number their nodes from scratch, so plain concatenation leaves the same id meaning different things in different places, and the same subtree built many times over. Sharing is decided on resolved ids rather than on how a reference happens to be spelled, so two names for one value collapse to one node.
 
 ### Minimalist binary
 We can represent any expression (reduced or not) as a binary tree where leaves are `△` and inner nodes are application. Note that this is different from the tree structure we usually consider in tree calculus, in that it makes application explicit!

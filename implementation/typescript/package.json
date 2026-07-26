@@ -4,7 +4,7 @@
   "description": "Tree Calculus Reference Implementation",
   "homepage": "https://github.com/lambada-llc/tree-calculus/tree/main/implementation/typescript",
   "scripts": {
-    "bundle": "esbuild src/main.mjs --bundle --platform=node --outfile=main.js",
+    "bundle": "esbuild src/main.mjs --bundle --platform=node --outfile=main.js && esbuild src/main-dag.mjs --bundle --platform=node --outfile=dag.js",
     "build": "tsc --project src",
     "test": "node src/test.mjs",
     "start": "node src/main.mjs",

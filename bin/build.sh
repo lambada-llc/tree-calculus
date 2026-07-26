@@ -7,6 +7,8 @@ DIR="$HERE/../implementation/typescript"
 npm run --prefix "$DIR" build
 npm run --prefix "$DIR" bundle
 
-echo '#!/usr/bin/env node' > "$HERE/main.js"
-cat "$DIR/main.js" >> "$HERE/main.js"
-chmod +x "$HERE/main.js"
+for tool in main dag; do
+  echo '#!/usr/bin/env node' > "$HERE/$tool.js"
+  cat "$DIR/$tool.js" >> "$HERE/$tool.js"
+  chmod +x "$HERE/$tool.js"
+done

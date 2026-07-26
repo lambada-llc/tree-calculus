@@ -30,7 +30,7 @@ export function children<TTree>(e: Evaluator<TTree>, x: TTree): TTree[] {
   )(x);
 }
 
-export const raise = (message: string) => { throw new Error(message); }
+export const raise = (message: string): never => { throw new Error(message); }
 
 export interface Marshaller<TTree> {
   // false == △  and  true == △ △
