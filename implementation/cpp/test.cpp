@@ -7,6 +7,7 @@
 #include "eager-ternary-nil-32.hpp"
 #include "eager-ternary-nil-vm.hpp"
 #include "eager-ternary-nil-vm-32.hpp"
+#include "eager-ternary-nil-vm-32-rc.hpp"
 #include "eager-ternary-nil-mmap.hpp"
 #include "eager-ternary-nil-mmap-32.hpp"
 #include "eager-ternary-nil-mmap-vm.hpp"
@@ -246,6 +247,7 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryNil32>("EagerTernaryNil32");
   sanity_checks<EagerTernaryNilVM>("EagerTernaryNilVM");
   sanity_checks<EagerTernaryNilVM32>("EagerTernaryNilVM32");
+  sanity_checks<EagerTernaryNilVM32RC>("EagerTernaryNilVM32RC");
   sanity_checks<EagerTernaryNilMmap>("EagerTernaryNilMmap");
   sanity_checks<EagerTernaryNilMmap32>("EagerTernaryNilMmap32");
   sanity_checks<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM");
@@ -268,6 +270,7 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerTernaryNil32>("EagerTernaryNil32", 90, 24);
     bench_evaluator<EagerTernaryNilVM>("EagerTernaryNilVM", 90, 24);
     bench_evaluator<EagerTernaryNilVM32>("EagerTernaryNilVM32", 90, 24);
+    bench_evaluator<EagerTernaryNilVM32RC>("EagerTernaryNilVM32RC", 90, 24);
     bench_evaluator<EagerTernaryNilMmap>("EagerTernaryNilMmap", 90, 24);
     bench_evaluator<EagerTernaryNilMmap32>("EagerTernaryNilMmap32", 90, 24);
     bench_evaluator<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM", 90, 24);
