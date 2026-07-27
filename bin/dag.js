@@ -403,6 +403,43 @@ var DagModule = class _DagModule {
     }
     return module2;
   }
+  /** The box a reference to `name` resolves to: its last definition, if any. */
+  definition(name) {
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      if (line.length > 1 && line[0].symbol === name)
+        return line[0];
+    }
+    return null;
+  }
+  /**
+   * Keep only the definitions `symbol` is built from, dropping everything else
+   * the module happens to carry. Linking a library produces one big module; this
+   * takes a single value back out of it.
+   *
+   * One backwards pass suffices: a reference resolves to a definition above it,
+   * so by the time a line is reached, every line that could need it has been
+   * seen. Names are kept as they are — a reference by name says which symbol was
+   * used, which an id no longer does.
+   */
+  extract(symbol) {
+    const root = this.definition(symbol);
+    if (!root)
+      throw new Error(`unknown symbol: ${symbol}`);
+    const needed = /* @__PURE__ */ new Set([root]);
+    const kept = [];
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      if (line.length === 1 || !needed.has(line[0]))
+        continue;
+      for (let j = 1; j < line.length; j++)
+        needed.add(line[j]);
+      kept.push(line);
+    }
+    const out = new _DagModule();
+    out.lines = kept.reverse();
+    return out;
+  }
   /**
    * Namespace this module's exports under `prefix`, so that `not` compiled from
    * `bool/bool.lamb` can become `Bool.not` without colliding with any other
@@ -717,18 +754,21 @@ Commands:
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
                           that are not exported are made unique but stay private.
+  extract --symbol <s> [file]
+                          Keep only what <s> is built from, as a DAG naming it.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
   --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
-  --symbol <s>            Which symbol 'eval' prints. Defaults to the last one.
+  --symbol <s>            Which symbol 'extract' keeps, or 'eval' prints.
+                          'eval' defaults to the last one.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(", ")}.
                           Defaults to term.
 
 A file argument of '-', or no file at all, reads stdin.`;
-var COMMANDS = ["link", "canonicalize", "qualify", "eval", "interface"];
+var COMMANDS = ["link", "canonicalize", "qualify", "extract", "eval", "interface"];
 function parse_args(argv) {
   const command = argv[0];
   if (!COMMANDS.includes(command))
@@ -777,6 +817,10 @@ function run(command, files, options) {
       const prefix = options.prefix ?? raise("qualify needs --prefix");
       const extra = options.reserved === void 0 ? null : new RegExp(options.reserved);
       return utf8(DagModule.parse(read_input(files), { absorb_internal_aliases: false }).qualify(prefix, { reserved: (name) => is_label(name) || !!extra?.test(name) }).toString());
+    }
+    case "extract": {
+      const symbol = options.symbol ?? raise("extract needs --symbol");
+      return utf8(DagModule.parse(read_input(files)).extract(symbol).toString([symbol]));
     }
     case "eval": {
       const text = read_input(files);

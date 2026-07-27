@@ -59,8 +59,8 @@ export function marshal<TTree>(e: Evaluator<TTree>): Marshaller<TTree> {
   const of_list = (l: TTree[]) => { let f = e.leaf; for (let i = l.length; i; i--) f = e.fork(l[i - 1], f); return f; };
   const to_nat = (t: TTree): bigint => to_list(t).reduceRight((acc, b) => 2n * acc + (to_bool(b) ? 1n : 0n), 0n);
   const of_nat = (n: bigint) => { let l = []; for (; n; n >>= 1n) l.push(of_bool(n % 2n == 1n)); return of_list(l); };
-  const to_string = (t: TTree) => to_list(t).map(to_nat).map(x => String.fromCharCode(Number(x))).join('');
-  const of_string = (s: string) => of_list(s.split('').map(c => of_nat(BigInt(c.charCodeAt(0)))));
+  const to_string = (t: TTree) => to_list(t).map(to_nat).map(x => String.fromCodePoint(Number(x))).join('');
+  const of_string = (s: string) => of_list(Array.from(s).map(c => of_nat(BigInt(c.codePointAt(0)!))));
   const to_buffer = (t: TTree) => new Uint8Array(to_list(t).map(to_nat).map(n => Number(n)));
   const of_buffer = (s: Uint8Array) => of_list([...s].map(n => of_nat(BigInt(n))));
   return {

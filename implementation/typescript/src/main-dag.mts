@@ -30,13 +30,16 @@ Commands:
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
                           that are not exported are made unique but stay private.
+  extract --symbol <s> [file]
+                          Keep only what <s> is built from, as a DAG naming it.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
   --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
-  --symbol <s>            Which symbol 'eval' prints. Defaults to the last one.
+  --symbol <s>            Which symbol 'extract' keeps, or 'eval' prints.
+                          'eval' defaults to the last one.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(', ')}.
                           Defaults to term.
 
@@ -49,7 +52,7 @@ interface Options {
   format: string;
 }
 
-const COMMANDS = ['link', 'canonicalize', 'qualify', 'eval', 'interface'];
+const COMMANDS = ['link', 'canonicalize', 'qualify', 'extract', 'eval', 'interface'];
 
 function parse_args(argv: string[]): { command: string, files: string[], options: Options } {
   const command = argv[0];
@@ -101,6 +104,11 @@ function run(command: string, files: string[], options: Options): Uint8Array {
         .parse(read_input(files), { absorb_internal_aliases: false })
         .qualify(prefix, { reserved: name => is_label(name) || !!extra?.test(name) })
         .toString());
+    }
+
+    case 'extract': {
+      const symbol = options.symbol ?? raise('extract needs --symbol');
+      return utf8(DagModule.parse(read_input(files)).extract(symbol).toString([symbol]));
     }
 
     case 'eval': {

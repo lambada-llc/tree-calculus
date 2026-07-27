@@ -69,6 +69,29 @@ function test_qualify() {
     'reserved names are left alone');
 }
 
+// --- Extracting ---
+
+function test_extract() {
+  const library = 'k △ △\nunused △ k\ni △ (△ (△ △)) △\n';
+  assert_equal(
+    'i △ (△ (△ △)) △\ni\n',
+    DagModule.parse(library).extract('i').toString(['i']),
+    'only what the symbol is built from is kept, closed by naming it');
+  assert_equal(
+    'k △ △\nunused △ k\n',
+    DagModule.parse(library).extract('unused').toString(),
+    'a definition brings along what it refers to, by name');
+
+  // Extracting a shadowed name yields its last definition, like a reference would.
+  assert_equal(
+    'a △\n',
+    DagModule.parse('a △ △\nb a\na △\n').extract('a').toString(),
+    'the latest definition wins');
+
+  assert_throws(() => DagModule.parse('a △\n').extract('nope'), 'unknown symbol: nope',
+    'extracting something undefined is an error');
+}
+
 // --- Canonicalizing ---
 
 function assert_same_value(expected: string, actual: string, symbol: string, test_case: string) {
@@ -179,6 +202,7 @@ export function test() {
   test_parse();
   test_conventions();
   test_qualify();
+  test_extract();
   test_canonicalize();
   test_interface();
   test_link();

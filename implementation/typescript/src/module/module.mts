@@ -118,6 +118,43 @@ export class DagModule {
     return module;
   }
 
+  /** The box a reference to `name` resolves to: its last definition, if any. */
+  definition(name: string): Box | null {
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      if (line.length > 1 && line[0].symbol === name) return line[0];
+    }
+    return null;
+  }
+
+  /**
+   * Keep only the definitions `symbol` is built from, dropping everything else
+   * the module happens to carry. Linking a library produces one big module; this
+   * takes a single value back out of it.
+   *
+   * One backwards pass suffices: a reference resolves to a definition above it,
+   * so by the time a line is reached, every line that could need it has been
+   * seen. Names are kept as they are — a reference by name says which symbol was
+   * used, which an id no longer does.
+   */
+  extract(symbol: string): DagModule {
+    const root = this.definition(symbol);
+    if (!root) throw new Error(`unknown symbol: ${symbol}`);
+
+    const needed = new Set<Box>([root]);
+    const kept: Line[] = [];
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      if (line.length === 1 || !needed.has(line[0])) continue;
+      for (let j = 1; j < line.length; j++) needed.add(line[j]);
+      kept.push(line);
+    }
+
+    const out = new DagModule();
+    out.lines = kept.reverse();
+    return out;
+  }
+
   /**
    * Namespace this module's exports under `prefix`, so that `not` compiled from
    * `bool/bool.lamb` can become `Bool.not` without colliding with any other
