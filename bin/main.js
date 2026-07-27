@@ -65,8 +65,8 @@ function marshal(e) {
       l.push(of_bool(n % 2n == 1n));
     return of_list(l);
   };
-  const to_string = (t) => to_list(t).map(to_nat).map((x) => String.fromCharCode(Number(x))).join("");
-  const of_string = (s) => of_list(s.split("").map((c) => of_nat(BigInt(c.charCodeAt(0)))));
+  const to_string = (t) => to_list(t).map(to_nat).map((x) => String.fromCodePoint(Number(x))).join("");
+  const of_string = (s) => of_list(Array.from(s).map((c) => of_nat(BigInt(c.codePointAt(0)))));
   const to_buffer = (t) => new Uint8Array(to_list(t).map(to_nat).map((n) => Number(n)));
   const of_buffer = (s) => of_list([...s].map((n) => of_nat(BigInt(n))));
   return {
