@@ -1,4 +1,5 @@
 #include "eager-value-mem.hpp"
+#include "eager-value-heap.hpp"
 #include "eager-ternary.hpp"
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
@@ -13,6 +14,7 @@
 #include "eager-ternary-nil-mmap-vm.hpp"
 #include "eager-ternary-nil-mmap-vm-32.hpp"
 #include "eager-value-mem-peek.hpp"
+#include "eager-value-heap-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
@@ -49,6 +51,8 @@ int main(int argc, char *argv[]) {
 
   if (evaluator == "eager-value-mem") {
     return run<EagerValueMem>();
+  } else if (evaluator == "eager-value-heap") {
+    return run<EagerValueHeap>();
   } else if (evaluator == "eager-ternary") {
     return run<EagerTernary>();
   } else if (evaluator == "eager-ternary-ref") {
@@ -77,6 +81,8 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNilMmapVM32>();
   } else if (evaluator == "eager-value-mem-peek") {
     return run<EagerValueMemPeek>();
+  } else if (evaluator == "eager-value-heap-peek") {
+    return run<EagerValueHeapPeek>();
   } else if (evaluator == "eager-ternary-nil-mmap-peek") {
     return run<EagerTernaryNilMmapPeek>();
   } else if (evaluator == "eager-ternary-nil-mmap-32-peek") {

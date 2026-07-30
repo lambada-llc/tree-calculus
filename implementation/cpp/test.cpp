@@ -1,4 +1,5 @@
 #include "eager-value-mem.hpp"
+#include "eager-value-heap.hpp"
 #include "eager-ternary.hpp"
 #include "eager-ternary-ref.hpp"
 #include "eager-ternary-len.hpp"
@@ -13,6 +14,7 @@
 #include "eager-ternary-nil-mmap-vm.hpp"
 #include "eager-ternary-nil-mmap-vm-32.hpp"
 #include "eager-value-mem-peek.hpp"
+#include "eager-value-heap-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
@@ -277,6 +279,7 @@ void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, in
 
 int main(int argc, char *argv[]) {
   sanity_checks<EagerValueMem>("EagerValueMem");
+  sanity_checks<EagerValueHeap>("EagerValueHeap");
   sanity_checks<EagerTernary>("EagerTernary");
   sanity_checks<EagerTernaryRef>("EagerTernaryRef");
   sanity_checks<EagerTernaryLen>("EagerTernaryLen");
@@ -291,6 +294,7 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM");
   sanity_checks<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32");
   sanity_checks<EagerValueMemPeek>("EagerValueMemPeek");
+  sanity_checks<EagerValueHeapPeek>("EagerValueHeapPeek");
   sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
   sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
   sanity_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
@@ -302,6 +306,7 @@ int main(int argc, char *argv[]) {
     // Fib arguments tuned so each benchmark takes ~0.1s.
     // Linear fib is capped at 90 to avoid int64_t overflow.
     bench_evaluator<EagerValueMem>("EagerValueMem", 90, 24);
+    bench_evaluator<EagerValueHeap>("EagerValueHeap", 90, 19);
     bench_evaluator<EagerTernary>("EagerTernary", 55, 14);
     bench_evaluator<EagerTernaryLen>("EagerTernaryLen", 55, 14);
     bench_evaluator<EagerTernaryRef>("EagerTernaryRef", 90, 24);
@@ -316,6 +321,7 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM", 90, 24);
     bench_evaluator<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32", 90, 24);
     bench_evaluator<EagerValueMemPeek>("EagerValueMemPeek", 90, 24);
+    bench_evaluator<EagerValueHeapPeek>("EagerValueHeapPeek", 90, 19);
     bench_evaluator<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek", 90, 24);
     bench_evaluator<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek", 90, 24);
     bench_evaluator<LazyGraphNilMmap32>("LazyGraphNilMmap32", 90, 24);
