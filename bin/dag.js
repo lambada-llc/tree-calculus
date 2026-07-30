@@ -26,7 +26,7 @@ __export(main_dag_exports, {
   DuplicateExportError: () => DuplicateExportError,
   LEAF: () => LEAF,
   box: () => box,
-  environment: () => environment,
+  environment: () => environment3,
   evaluator: () => lazy_stacks_default,
   formatters: () => formatters,
   interface_of: () => interface_of,
@@ -40,10 +40,10 @@ __export(main_dag_exports, {
   order: () => order,
   to_file: () => to_file,
   topological_sort: () => topological_sort,
-  transformer: () => transformer
+  transformer: () => transformer3
 });
 module.exports = __toCommonJS(main_dag_exports);
-var import_fs2 = require("fs");
+var import_fs3 = require("fs");
 
 // src/common.mjs
 function children(e, x) {
@@ -385,19 +385,19 @@ var DagModule = class _DagModule {
     const { absorb_internal_aliases = true } = options;
     const module2 = new _DagModule();
     const latest = /* @__PURE__ */ Object.create(null);
-    const resolve2 = (symbol) => latest[symbol] ?? (latest[symbol] = box(symbol));
+    const resolve3 = (symbol) => latest[symbol] ?? (latest[symbol] = box(symbol));
     for (const raw of text.split("\n")) {
       const trimmed = raw.trim();
       if (!trimmed)
         continue;
       const words = trimmed.split(/\s+/);
       if (absorb_internal_aliases && words.length === 3 && words[1] === ":i") {
-        latest[words[0]] = resolve2(words[2]);
+        latest[words[0]] = resolve3(words[2]);
         continue;
       }
       const is_definition = words.length === 2 || words.length === 3;
       const head = is_definition ? box(words[0]) : null;
-      module2.lines.push(words.map((word, i) => i === 0 && head ? head : resolve2(word)));
+      module2.lines.push(words.map((word, i) => i === 0 && head ? head : resolve3(word)));
       if (head)
         latest[head.symbol] = head;
     }
@@ -694,14 +694,8 @@ var import_crypto = require("crypto");
 var import_fs = require("fs");
 var import_path = require("path");
 var sha256 = (s) => (0, import_crypto.createHash)("sha256").update(s).digest("hex");
-function transformer(e, program, options = {}) {
+function memoize(run2, program, options = {}) {
   const { cache_dir } = options;
-  const m2 = marshal(e);
-  let tree = null;
-  const run2 = (input) => {
-    tree ?? (tree = dag_default.of(e, program));
-    return m2.to_string(e.apply(tree, m2.of_string(input)));
-  };
   if (cache_dir === void 0)
     return run2;
   (0, import_fs.mkdirSync)(cache_dir, { recursive: true });
@@ -714,6 +708,124 @@ ${input}`));
     return (0, import_fs.readFileSync)(path, "utf8");
   };
 }
+function transformer(e, program, options = {}) {
+  const m2 = marshal(e);
+  let tree = null;
+  return memoize((input) => {
+    tree ?? (tree = dag_default.of(e, program));
+    return m2.to_string(e.apply(tree, m2.of_string(input)));
+  }, program, options);
+}
+
+// src/runner/native.mjs
+var import_child_process = require("child_process");
+var import_fs2 = require("fs");
+var import_os = require("os");
+var import_path2 = require("path");
+var SOURCE = "implementation/cpp/dag-machine/runner.cpp";
+function once(f) {
+  let value;
+  return () => value === void 0 ? value = f() : value;
+}
+var scratch = once(() => {
+  const directory = (0, import_fs2.mkdtempSync)((0, import_path2.join)((0, import_os.tmpdir)(), "tree-calculus-"));
+  process.on("exit", () => (0, import_fs2.rmSync)(directory, { recursive: true, force: true }));
+  return directory;
+});
+function source() {
+  for (let directory = __dirname; ; directory = (0, import_path2.dirname)(directory)) {
+    const candidate = (0, import_path2.join)(directory, SOURCE);
+    if ((0, import_fs2.existsSync)(candidate))
+      return candidate;
+    if ((0, import_path2.dirname)(directory) === directory)
+      raise(`no ${SOURCE} above ${__dirname}`);
+  }
+}
+function source_mtime(from) {
+  const headers = (0, import_path2.resolve)((0, import_path2.dirname)(from), "..");
+  return (0, import_fs2.readdirSync)(headers).filter((name) => name.endsWith(".hpp")).map((name) => (0, import_fs2.statSync)((0, import_path2.join)(headers, name)).mtimeMs).reduce((a, b) => Math.max(a, b), (0, import_fs2.statSync)(from).mtimeMs);
+}
+var executable = once(() => {
+  const from = source();
+  const exe = (0, import_path2.join)((0, import_path2.dirname)(from), "runner.exe");
+  const current = (0, import_fs2.existsSync)(exe) && (0, import_fs2.statSync)(exe).mtimeMs >= source_mtime(from);
+  if (!current) {
+    (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", ["-O3", "-std=c++17", "-pthread", from, "-o", exe], { stdio: "inherit" });
+  }
+  return exe;
+});
+var server = once(() => {
+  const to5 = (0, import_path2.join)(scratch(), "to-runner");
+  const from = (0, import_path2.join)(scratch(), "from-runner");
+  (0, import_child_process.execFileSync)("mkfifo", [to5, from]);
+  const write_fd = (0, import_fs2.openSync)(to5, "r+");
+  const read_fd = (0, import_fs2.openSync)(from, "r+");
+  const runner = (0, import_child_process.spawn)(executable(), ["-s"], { stdio: [write_fd, read_fd, "inherit"] });
+  runner.unref();
+  process.on("exit", () => runner.kill());
+  const byte = Buffer.alloc(1);
+  const line = () => {
+    let text = "";
+    for (; ; ) {
+      if ((0, import_fs2.readSync)(read_fd, byte, 0, 1, null) === 0)
+        raise("runner: no response");
+      if (byte[0] === 10)
+        return text;
+      text += String.fromCharCode(byte[0]);
+    }
+  };
+  const bytes = (length) => {
+    const buffer = Buffer.alloc(length);
+    for (let got = 0; got < length; )
+      got += (0, import_fs2.readSync)(read_fd, buffer, got, length - got, null);
+    return buffer;
+  };
+  return (command, payload) => {
+    (0, import_fs2.writeSync)(write_fd, `${command}
+`);
+    if (payload)
+      (0, import_fs2.writeSync)(write_fd, payload);
+    const head = line();
+    if (head === "ok")
+      return Buffer.alloc(0);
+    if (!head.startsWith("data "))
+      raise(`runner: ${head.replace(/^err /, "")}`);
+    return bytes(Number(head.slice("data ".length)));
+  };
+});
+var loaded = null;
+function ask(path, command, payload) {
+  const send = server();
+  if (loaded !== path) {
+    loaded = null;
+    send(`load ${path}`);
+    loaded = path;
+  }
+  return send(command, payload);
+}
+function terminator(text) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const words = (lines[lines.length - 1] ?? "").split(/\s+/);
+  return words.length === 1 ? words[0] : raise("dag representation was unexpectedly not terminated by a value");
+}
+function as_file(text, name) {
+  const path = (0, import_path2.join)(scratch(), name);
+  (0, import_fs2.writeFileSync)(path, text);
+  return path;
+}
+function transformer2(_, program, options = {}) {
+  const path = once(() => as_file(program, "program.dag"));
+  const symbol = once(() => terminator(program));
+  return memoize((input) => {
+    const payload = Buffer.from(input, "utf8");
+    return ask(path(), `apply ${symbol()} ${payload.length}`, payload).toString("utf8");
+  }, program, options);
+}
+function environment2(e, text, _ = {}) {
+  const path = once(() => as_file(text, "module.dag"));
+  return (symbol) => dag_default.of(e, ask(path(), `eval-dag ${symbol}`).toString("utf8"));
+}
+var native = process.env.TREE_CALCULUS_RUNNER === "1" ? { transformer: transformer2, environment: environment2 } : null;
 
 // src/format/file.mjs
 var PLAUSIBLE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z0-9]+$/;
@@ -745,6 +857,8 @@ function to_file(e, x) {
 }
 
 // src/main-dag.mjs
+var environment3 = native?.environment ?? environment;
+var transformer3 = native?.transformer ?? transformer;
 var USAGE = `Usage: dag <command> [options] [file...]
 
 Commands:
@@ -793,7 +907,7 @@ function parse_args(argv) {
   }
   return { command, files, options };
 }
-var read = (file) => (0, import_fs2.readFileSync)(file === "-" ? 0 : file, "utf8");
+var read = (file) => (0, import_fs3.readFileSync)(file === "-" ? 0 : file, "utf8");
 var read_input = (files) => read(files.length ? files[0] : "-");
 function last_symbol(text) {
   let last = null;
@@ -826,7 +940,7 @@ function run(command, files, options) {
       const text = read_input(files);
       const origin = files.length && files[0] !== "-" ? files[0] : "";
       const format = formatters[options.format] ?? raise(`unrecognized format ${options.format}`);
-      const value = environment(lazy_stacks_default, text, { origin })(options.symbol ?? last_symbol(text));
+      const value = environment3(lazy_stacks_default, text, { origin })(options.symbol ?? last_symbol(text));
       const out = format.to(value);
       return options.format === "buffer" ? out : new Uint8Array([...out, 10]);
     }

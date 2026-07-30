@@ -15,6 +15,7 @@
 #include "eager-value-mem-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
+#include "lazy-graph-nil-mmap-32.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
@@ -202,6 +203,43 @@ void sanity_checks(std::string name) {
   std::cout << "    Stats: " << e.stats() << std::endl;
 }
 
+// LazyGraphNilMmap32 reclaims by marking from a root set the caller registers,
+// from inside the reduction loop rather than between requests. A budget large
+// enough never to trip leaves all of that untested, so run the same programs
+// under one small enough that collection happens constantly, and check that the
+// answers are unchanged.
+void collection_checks() {
+  std::cout << "Testing LazyGraphNilMmap32 under collection..." << std::endl;
+  Evaluator<LazyGraphNilMmap32> e;
+  e.set_budget(4096);
+
+  auto rooted = [&](LazyGraphNilMmap32::Tree t) {
+    e.roots().push_back(t);
+    return t;
+  };
+
+  auto fib = rooted(e.of_ternary(bench_recursive_fib_ternary));
+  for (int n = 1; n <= 12; ++n) {
+    int64_t got = e.to_nat(rooted(e.apply(fib, rooted(e.of_nat(n)))));
+    if (got != expected_fib(n))
+      throw std::runtime_error("fib(" + std::to_string(n) + ") = " + std::to_string(got)
+                               + " under collection");
+  }
+  std::cout << "  Fib behaves as expected." << std::endl;
+
+  const int sort_n = 20;
+  std::vector<int> descending, ascending;
+  for (int i = sort_n; i >= 1; --i) descending.push_back(i);
+  for (int i = 1; i <= sort_n; ++i) ascending.push_back(i);
+  auto merge_sort = rooted(e.of_ternary(bench_merge_sort_ternary));
+  auto input = rooted(nat_list(e, descending));
+  if (e.to_ternary(rooted(e.apply(merge_sort, input))) !=
+      e.to_ternary(rooted(nat_list(e, ascending))))
+    throw std::runtime_error("merge-sort misbehavior under collection");
+  std::cout << "  Merge-sort behaves as expected." << std::endl;
+  std::cout << "    Stats: " << e.stats() << ", " << e.live() << " live" << std::endl;
+}
+
 template <typename Impl>
 void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, int iterations = 10) {
   int64_t expected_linear = expected_fib(linear_fib_n);
@@ -255,7 +293,9 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerValueMemPeek>("EagerValueMemPeek");
   sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
   sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
+  sanity_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
   sanity_checks<LazyAppStream>("LazyAppStream");
+  collection_checks();
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
@@ -278,6 +318,7 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerValueMemPeek>("EagerValueMemPeek", 90, 24);
     bench_evaluator<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek", 90, 24);
     bench_evaluator<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek", 90, 24);
+    bench_evaluator<LazyGraphNilMmap32>("LazyGraphNilMmap32", 90, 24);
     bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
   }
 

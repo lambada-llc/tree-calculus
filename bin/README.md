@@ -72,6 +72,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `link <file>...` | Concatenate modules in dependency order. Rejects duplicate exports and dependency cycles. |
 | `canonicalize [file]` | Hash-cons into globally unique numeric ids. |
 | `qualify --prefix <p> [file]` | Namespace a module's exports under `<p>`. Definitions that are not exported are made unique but stay private. |
+| `extract --symbol <s> [file]` | Keep only what `<s>` is built from, as a DAG naming it. |
 | `eval [file]` | Evaluate a module and print one of its symbols. |
 | `interface [file]` | List what a module exports and what it needs. |
 
@@ -79,7 +80,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | --- | --- |
 | `--prefix <p>` | Namespace prefix for `qualify`, e.g. `Bool.` |
 | `--reserved <regex>` | Names `qualify` must leave alone, on top of labels. Useful for whatever a compiler reserves for itself. |
-| `--symbol <s>` | Which symbol `eval` prints. Defaults to the last one. |
+| `--symbol <s>` | Which symbol `extract` keeps, or `eval` prints. `eval` defaults to the last one. |
 | `--format <f>` | Output format for `eval`, as for `main.js`. Defaults to `term`. |
 
 ## Examples
@@ -91,6 +92,9 @@ $ ./dag.js qualify --prefix Bool. bool.dag > .bool.dag
 $ ./dag.js qualify --prefix Nat. nat.dag > .nat.dag
 $ ./dag.js link .bool.dag .nat.dag | ./dag.js canonicalize > bundle.dag
 $ ./dag.js eval --symbol Bool.not --format term bundle.dag
+
+# Take one value back out of the bundle, as a DAG that stands on its own.
+$ ./dag.js extract --symbol Bool.not bundle.dag | ./dag.js canonicalize > not.dag
 
 # What does a module need from elsewhere?
 $ ./dag.js interface .nat.dag | grep '^import'

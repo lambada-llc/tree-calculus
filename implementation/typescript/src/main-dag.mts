@@ -6,18 +6,25 @@ import { readFileSync } from "fs";
 import { raise } from "./common.mjs";
 import { evaluator as e, formatters } from "./format/formats.mjs";
 import { DagModule, is_label } from "./module/module.mjs";
-import { environment } from "./module/env.mjs";
+import { environment as environment_js } from "./module/env.mjs";
 import { link, interface_of } from "./module/link.mjs";
+import { transformer as transformer_js } from "./module/transform.mjs";
+import { native } from "./runner/native.mjs";
+
+// Reduction happens either in Node or in the C++ runner, and the choice is made
+// here, once: everything downstream — this file's own `eval`, and every build
+// tool that imports the two below — keeps the same signatures either way. See
+// ./runner/native.mts for what opts in and why it is not the default.
+export const environment = native?.environment ?? environment_js;
+export const transformer = native?.transformer ?? transformer_js;
 
 // Library exports — the pieces a language's own build tool needs in order to
 // drive this in process rather than through the command line.
 export { DagModule, box, is_label, is_symbol_name, is_private, LEAF } from "./module/module.mjs";
-export { environment } from "./module/env.mjs";
 export {
   link, order, interface_of, topological_sort,
   DuplicateExportError, DependencyCycleError,
 } from "./module/link.mjs";
-export { transformer } from "./module/transform.mjs";
 export { to_file, of_file, is_plausible_file_name } from "./format/file.mjs";
 export { evaluator, formatters, m as marshal } from "./format/formats.mjs";
 

@@ -27,6 +27,31 @@ export interface TransformerOptions {
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 
 /**
+ * `run`, with its results kept on disk, keyed by the program and the input.
+ *
+ * Separate from `transformer` because who *runs* the tree is not fixed — the
+ * native runner in ../runner/native.mts transforms the same text with the same
+ * caching, and the cache should not know or care which of them produced a
+ * result.
+ */
+export function memoize(
+  run: (input: string) => string,
+  program: string,
+  options: TransformerOptions = {},
+): (input: string) => string {
+  const { cache_dir } = options;
+  if (cache_dir === undefined) return run;
+
+  mkdirSync(cache_dir, { recursive: true });
+  const program_hash = sha256(program);
+  return (input: string): string => {
+    const path = resolve(cache_dir, sha256(`${program_hash}\n${input}`));
+    if (!existsSync(path)) writeFileSync(path, run(input));
+    return readFileSync(path, 'utf8');
+  };
+}
+
+/**
  * A text-to-text function backed by the tree that `program` (DAG text) denotes.
  *
  * The program is only parsed and evaluated once something is actually
@@ -37,22 +62,10 @@ export function transformer<TTree>(
   program: string,
   options: TransformerOptions = {},
 ): (input: string) => string {
-  const { cache_dir } = options;
   const m = marshal(e);
-
   let tree: TTree | null = null;
-  const run = (input: string): string => {
+  return memoize((input: string): string => {
     tree ??= formatter_dag.of(e, program);
     return m.to_string(e.apply(tree, m.of_string(input)));
-  };
-
-  if (cache_dir === undefined) return run;
-
-  mkdirSync(cache_dir, { recursive: true });
-  const program_hash = sha256(program);
-  return (input: string): string => {
-    const path = resolve(cache_dir, sha256(`${program_hash}\n${input}`));
-    if (!existsSync(path)) writeFileSync(path, run(input));
-    return readFileSync(path, 'utf8');
-  };
+  }, program, options);
 }

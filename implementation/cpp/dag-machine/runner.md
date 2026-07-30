@@ -31,10 +31,20 @@ newline-terminated; some carry a length-prefixed payload.
 On any failure: `err <message>\n`. `<bytes>` in responses is exactly
 `<len>` raw bytes, no trailing newline (length is exact).
 
-State across commands: TC reduction is confluent, so trees in the env
+State across commands: reduction happens in place, so trees in the env
 get progressively more reduced as commands fire — pure benefit. The
 flip side is that allocations from reduction are never freed until a
-recycle (see `RUNNER_RSS_THRESHOLD_MB` below).
+collection (see `RUNNER_RSS_THRESHOLD_MB` below).
+
+## Reduction
+
+`../lazy-graph-nil-mmap-32.hpp`: 8-byte nil-packed nodes in an mmap'd
+arena — the representation the fastest evaluators in the benchmark suite
+use — reduced lazily and in place, which is what a *module* needs and
+none of the eager evaluators can offer. Most of a bundle's bindings have
+no normal form, so evaluating each one as it is read (what an eager
+`apply` amounts to) diverges; here a binding is an unreduced application
+node, forced only as far as a request looks at it.
 
 ## Environment variables
 
@@ -45,24 +55,27 @@ These influence runtime behaviour. All are optional; defaults aim to
 
 #### `RUNNER_RSS_THRESHOLD_MB` *(default: 512)*
 
-Auto-recycle watermark for server mode. After each `eval`/`apply` we
-read `/proc/self/status:VmRSS`; if it's above this threshold we drop the
-arena, clear env, re-parse the bundle (~17 ms on the canonical bundle),
-and `malloc_trim(0)` so the OS sees the freed pages. `0` disables
-auto-recycling.
+Collection budget, in MiB of arena. Once the arena passes it, the
+evaluator marks from its root set — every binding of the loaded module,
+plus whatever the request itself is holding — and sweeps the rest onto a
+free list. `0` lets the arena grow unchecked.
 
-Bump this on a roomy local machine (e.g. `RUNNER_RSS_THRESHOLD_MB=4096`) to
-recycle less often and squeeze more cross-eval reduction sharing out of
-the in-memory state.
+This runs from *inside* the reduction loop, not between commands: a
+single `eval-dag` can allocate a thousand times what it keeps, so peak
+memory tracks this setting rather than the size of the heaviest test.
+Nothing moves, so the reduction already written into the bundle's nodes
+survives — which is the sharing that makes a long-lived server worth
+having.
 
-The watermark is checked *between* commands, so a single eval that
-allocates well past the threshold can still spike. Lowering this only
-helps with cumulative growth, not single-eval peaks.
+Bump this on a roomy local machine (e.g. `RUNNER_RSS_THRESHOLD_MB=4096`)
+to collect less often. The budget also raises itself if a collection
+finds that most of the arena is still live, so a genuinely large term
+does not turn into a collection per allocation.
 
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
 `runner` runs all real work on a worker pthread with this stack size, since
-`reduce()` is recursive and chains tens of thousands of frames deep on
+forcing a term is recursive and chains tens of thousands of frames deep on
 heavy benchmark suites (`Poly.Bench`, `Nat.Bench`). Bump this if you
 hit a `runner: pthread_create(stack=…): …` error or a SIGSEGV during
 reduction.
