@@ -1,0 +1,129 @@
+cpu:   Apple M2 (arm64, 8 cores)
+os:    Darwin 25.5.0
+date:  2026-07-30 22:17
+
+
+sanity-check (size size)
+  JavaScript (reference)              PASS  0.028s
+  C++ eager-value-mem                 PASS  0.005s
+  C++ eager-value-heap                PASS  0.005s
+  C++ eager-ternary-ref               PASS  0.005s
+  C++ eager-ternary-vm                PASS  0.005s
+  C++ eager-ternary-nil               PASS  0.005s
+  C++ eager-ternary-nil-32            PASS  0.005s
+  C++ eager-ternary-nil-vm            PASS  0.005s
+  C++ eager-ternary-nil-vm-32         PASS  0.005s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.005s
+  C++ eager-ternary-nil-mmap          PASS  0.005s
+  C++ eager-ternary-nil-mmap-32       PASS  0.005s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.005s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.005s
+  C++ eager-value-mem-peek            PASS  0.005s
+  C++ eager-value-heap-peek           PASS  0.005s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.005s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.005s
+  C++ lazy-graph-nil-mmap-32          PASS  0.005s
+  Python                              PASS  0.019s
+  WASM eager-value                    PASS  0.035s
+  WASM eager-nil                      PASS  0.033s
+  ASM                                 SKIP  x86_64 required
+
+recursive-fib (n=24)
+  JavaScript (reference)              PASS  0.940s
+  C++ eager-value-mem                 PASS  0.201s
+  C++ eager-value-heap                PASS  1.119s
+  C++ eager-ternary-ref               PASS  0.190s
+  C++ eager-ternary-vm                PASS  0.204s
+  C++ eager-ternary-nil               PASS  0.149s
+  C++ eager-ternary-nil-32            PASS  0.105s
+  C++ eager-ternary-nil-vm            PASS  0.138s
+  C++ eager-ternary-nil-vm-32         PASS  0.122s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.330s
+  C++ eager-ternary-nil-mmap          PASS  0.093s
+  C++ eager-ternary-nil-mmap-32       PASS  0.086s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.114s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.085s
+  C++ eager-value-mem-peek            PASS  0.125s
+  C++ eager-value-heap-peek           PASS  1.037s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.067s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.072s
+  C++ lazy-graph-nil-mmap-32          FAIL  exit 139
+  Python                              FAIL  exit 124  (timeout)
+  WASM eager-value                    PASS  0.157s
+  WASM eager-nil                      PASS  0.164s
+  ASM                                 SKIP  x86_64 required
+
+silly-exp (n=16)
+  JavaScript (reference)              PASS  0.558s
+  C++ eager-value-mem                 PASS  0.052s
+  C++ eager-value-heap                FAIL  exit 139
+  C++ eager-ternary-ref               PASS  0.057s
+  C++ eager-ternary-vm                PASS  0.077s
+  C++ eager-ternary-nil               PASS  0.064s
+  C++ eager-ternary-nil-32            PASS  0.045s
+  C++ eager-ternary-nil-vm            PASS  0.063s
+  C++ eager-ternary-nil-vm-32         PASS  0.048s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.122s
+  C++ eager-ternary-nil-mmap          PASS  0.037s
+  C++ eager-ternary-nil-mmap-32       PASS  0.035s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.046s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.034s
+  C++ eager-value-mem-peek            PASS  0.055s
+  C++ eager-value-heap-peek           FAIL  exit 139
+  C++ eager-ternary-nil-mmap-peek     PASS  0.059s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.034s
+  C++ lazy-graph-nil-mmap-32          FAIL  exit 139
+  Python                              FAIL  exit 1
+  WASM eager-value                    FAIL  exit 1
+  WASM eager-nil                      FAIL  exit 1
+  ASM                                 SKIP  x86_64 required
+
+exercise-rules (n=200000)
+  JavaScript (reference)              PASS  0.790s
+  C++ eager-value-mem                 FAIL  exit 139
+  C++ eager-value-heap                FAIL  exit 139
+  C++ eager-ternary-ref               FAIL  exit 139
+  C++ eager-ternary-vm                PASS  0.121s
+  C++ eager-ternary-nil               FAIL  exit 139
+  C++ eager-ternary-nil-32            FAIL  exit 139
+  C++ eager-ternary-nil-vm            PASS  0.104s
+  C++ eager-ternary-nil-vm-32         PASS  0.086s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.213s
+  C++ eager-ternary-nil-mmap          FAIL  exit 139
+  C++ eager-ternary-nil-mmap-32       FAIL  exit 139
+  C++ eager-ternary-nil-mmap-vm       PASS  0.075s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.056s
+  C++ eager-value-mem-peek            FAIL  exit 139
+  C++ eager-value-heap-peek           FAIL  exit 139
+  C++ eager-ternary-nil-mmap-peek     FAIL  exit 139
+  C++ eager-ternary-nil-mmap-32-peek  FAIL  exit 139
+  C++ lazy-graph-nil-mmap-32          FAIL  exit 139
+  Python                              FAIL  exit 1
+  WASM eager-value                    FAIL  exit 1
+  WASM eager-nil                      FAIL  exit 1
+  ASM                                 SKIP  x86_64 required
+
+merge-sort (n=2000, descending)
+  JavaScript (reference)              PASS  1.118s
+  C++ eager-value-mem                 PASS  0.244s
+  C++ eager-value-heap                FAIL  exit 124  (timeout)
+  C++ eager-ternary-ref               PASS  0.232s
+  C++ eager-ternary-vm                PASS  0.277s
+  C++ eager-ternary-nil               PASS  0.243s
+  C++ eager-ternary-nil-32            PASS  0.180s
+  C++ eager-ternary-nil-vm            PASS  0.252s
+  C++ eager-ternary-nil-vm-32         PASS  0.203s
+  C++ eager-ternary-nil-vm-32-rc      PASS  0.538s
+  C++ eager-ternary-nil-mmap          PASS  0.136s
+  C++ eager-ternary-nil-mmap-32       PASS  0.126s
+  C++ eager-ternary-nil-mmap-vm       PASS  0.182s
+  C++ eager-ternary-nil-mmap-vm-32    PASS  0.128s
+  C++ eager-value-mem-peek            PASS  0.232s
+  C++ eager-value-heap-peek           PASS  1.667s
+  C++ eager-ternary-nil-mmap-peek     PASS  0.112s
+  C++ eager-ternary-nil-mmap-32-peek  PASS  0.116s
+  C++ lazy-graph-nil-mmap-32          PASS  0.283s
+  Python                              FAIL  exit 1
+  WASM eager-value                    PASS  0.295s
+  WASM eager-nil                      PASS  0.304s
+  ASM                                 SKIP  x86_64 required

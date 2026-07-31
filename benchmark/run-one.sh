@@ -177,12 +177,14 @@ else
 fi
 
 # --- WASM ---
-WASM_MAIN="$REPO_ROOT/implementation/wasm/eager-value/main.mjs"
-if [[ -f "$WASM_MAIN" ]] && require_node 21 "WASM"; then
-  bench "WASM" --stdin node "$WASM_MAIN"
-elif [[ ! -f "$WASM_MAIN" ]]; then
-  printf "  %-35s SKIP  not found\n" "WASM"
-fi
+for variant in eager-value eager-nil; do
+  WASM_MAIN="$REPO_ROOT/implementation/wasm/$variant/main.mjs"
+  if [[ ! -f "$WASM_MAIN" ]]; then
+    printf "  %-35s SKIP  not found\n" "WASM $variant"
+  elif require_node 21 "WASM $variant"; then
+    bench "WASM $variant" --stdin node "$WASM_MAIN"
+  fi
+done
 
 # --- ASM (x86_64 only) ---
 ASM_DIR="$REPO_ROOT/implementation/asm"
