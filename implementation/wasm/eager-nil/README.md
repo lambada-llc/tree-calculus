@@ -24,14 +24,24 @@ The memory saving is exact and engine-independent — a third less, since node
 counts are identical and only the stride changes. Recursive fib, n=28: 832 MB of
 arena against `eager-value`'s 1216 MB.
 
-The time it buys is engine-dependent. On recursive fib, n=24..28:
+Speed is not what it buys. Compared like for like — same dispatch shape, only
+the node layout differing — the two are within a few percent, this one typically
+a hair slower, because a triage here reads two child slots and tests both where
+a tagged node answers from one field:
 
-| engine   | vs `eager-value`                     |
-| -------- | ------------------------------------ |
-| wasmtime | ~2.8x faster                         |
-| Node/V8  | within ~10% (marginally *slower*)    |
+| workload (Node/V8, best of 5, incl. ~0.04s process startup) | eager-value | eager-nil |
+| --- | --- | --- |
+| recursive fib, n=26 | 0.40s | 0.43s |
+| merge-sort, n=2000 | 0.32s | 0.32s |
 
-So measure on whichever engine you care about. Two things that did not explain
-the gap, in case they look tempting: alignment (padding the tagged node to an
-aligned 16 bytes is no faster under wasmtime than the unaligned 12) and
-allocation count (identical in both).
+One caveat if you time this against `eager-value` as it stands: under wasmtime
+that variant is ~2.7x slower than this one, and none of that gap is the node
+size. It is the `br_table` its triage dispatches with, which Cranelift compiles
+badly; a tagged evaluator that dispatches with an `if` chain instead lands on
+this variant's time (fib n=26: 0.75s vs 0.81s). Node/V8 shows no such penalty,
+which is why the two engines appeared to disagree.
+
+Two other things that did not explain anything, in case they look tempting:
+alignment (padding the tagged node to an aligned 16 bytes is no faster under
+wasmtime than the unaligned 12) and arena growth (preallocating 1 GB so
+`memory.grow` never runs changes no result above).

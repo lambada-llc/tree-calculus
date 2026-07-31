@@ -38,10 +38,11 @@
   ;; some arity.
   ;;
   ;; The memory saving is exact and engine-independent (recursive fib n=28:
-  ;; 832 MB of arena against eager-value's 1216 MB), but the time it buys
-  ;; is not: measured on fib n=24..28, ~2.8x faster under wasmtime, while
-  ;; under Node/V8 the two variants land within ~10% of each other (this one
-  ;; marginally slower).  Whichever engine you care about is the one to measure.
+  ;; 832 MB of arena against eager-value's 1216 MB).  Time is not where this
+  ;; pays: against an equivalently-dispatching tagged evaluator the two run
+  ;; within a few percent, this one a hair slower.  See the README — in
+  ;; particular before reading anything into eager-value's wasmtime time,
+  ;; which is dominated by its br_table dispatch rather than its node size.
   ;; ============================================================
 
   ;; ---- WASI imports ----
