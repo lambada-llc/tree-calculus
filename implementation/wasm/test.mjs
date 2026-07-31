@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 
-// These tests compare WASM output with JS reference for various inputs
+// These tests compare WASM output with JS reference for various inputs.
+// Every sibling directory with a main.mjs runner is tested, so a new variant
+// only has to exist to be covered.
 
 import { execSync } from "node:child_process";
-import { dirname } from "node:path";
+import { existsSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const wasmDir = dirname(fileURLToPath(import.meta.url));
+
+const variants = readdirSync(wasmDir, { withFileTypes: true })
+  .filter((e) => e.isDirectory() && existsSync(join(wasmDir, e.name, "main.mjs")))
+  .map((e) => e.name);
 
 function runJS(args) {
   return execSync(`node bin/main.js -ternary ${args.join(" ")}`, { cwd: `${wasmDir}/../..` })
@@ -14,22 +21,15 @@ function runJS(args) {
     .trim();
 }
 
-function runWASM(args) {
-  return execSync(`node main.mjs`, { cwd: wasmDir, input: args.join("\n") + "\n" })
+function runWASM(variant, args) {
+  return execSync(`node main.mjs`, { cwd: join(wasmDir, variant), input: args.join("\n") + "\n" })
     .toString()
     .trim();
 }
 
-function test(name, ...args) {
-  const js = runJS(args);
-  const wasm = runWASM(args);
-  if (js === wasm) {
-    console.log(`✓ ${name}: ${wasm}`);
-  } else {
-    console.log(`✗ ${name}: JS=${js} WASM=${wasm}`);
-    process.exitCode = 1;
-  }
-}
+// Collected first, then run against each variant.
+const cases = [];
+const test = (name, ...args) => cases.push([name, args]);
 
 test("no input");
 
@@ -83,5 +83,18 @@ const lfib =
 
 test("linear fib applied to nat(0)", lfib, "0");
 test("linear fib applied to nat(9)", lfib, "21020202100");
+
+for (const [name, args] of cases) {
+  const js = runJS(args);
+  for (const variant of variants) {
+    const wasm = runWASM(variant, args);
+    if (js === wasm) {
+      console.log(`✓ ${variant} ${name}: ${wasm}`);
+    } else {
+      console.log(`✗ ${variant} ${name}: JS=${js} WASM=${wasm}`);
+      process.exitCode = 1;
+    }
+  }
+}
 
 console.log("\nAll tests completed.");
