@@ -60,14 +60,24 @@ function source_mtime(from: string): number {
     .reduce((a, b) => Math.max(a, b), statSync(from).mtimeMs);
 }
 
+/**
+ * Whether to build the runner's eager evaluator, which is faster but only
+ * terminates on a module whose every binding has a normal form. Opting in is a
+ * claim about the module, so it is the caller's to make: TREE_CALCULUS_RUNNER=eager.
+ */
+const eager = () => process.env.TREE_CALCULUS_RUNNER === 'eager';
+
 /** Build the runner next to its source, unless a current binary is already there. */
 const executable = once(() => {
   const from = source();
-  const exe = join(dirname(from), 'runner.exe');
+  // The two evaluators get their own binaries, so a repository that uses one
+  // does not force a rebuild on a repository that uses the other.
+  const exe = join(dirname(from), eager() ? 'runner-eager.exe' : 'runner.exe');
   const current = existsSync(exe) && statSync(exe).mtimeMs >= source_mtime(from);
   if (!current) {
     execFileSync(process.env.CXX ?? 'c++',
-      ['-O3', '-std=c++17', '-pthread', from, '-o', exe], { stdio: 'inherit' });
+      ['-O3', '-std=c++17', '-pthread', ...(eager() ? ['-DRUNNER_EAGER'] : []),
+       from, '-o', exe], { stdio: 'inherit' });
   }
   return exe;
 });
@@ -181,10 +191,11 @@ function environment<TTree>(
 /**
  * The native implementations, or null to stay in Node.
  *
- * Opt in with TREE_CALCULUS_RUNNER=1. It is off by default because it turns a
- * package that needs nothing but Node into one that needs a C++ compiler and
- * POSIX FIFOs.
+ * Opt in with TREE_CALCULUS_RUNNER=1, or =eager for the faster evaluator that
+ * requires every binding in the module to have a normal form (see `eager`
+ * above). Off by default because it turns a package that needs nothing but Node
+ * into one that needs a C++ compiler and POSIX FIFOs.
  */
-export const native = process.env.TREE_CALCULUS_RUNNER === '1'
+export const native = ['1', 'eager'].includes(process.env.TREE_CALCULUS_RUNNER ?? '')
   ? { transformer, environment }
   : null;

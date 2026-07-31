@@ -44,27 +44,38 @@
 //
 // Reduction
 //
-// All of it happens in ../lazy-graph-nil-mmap-32.hpp — the same 8-byte
-// nil-packed nodes the fastest evaluators in this repository use, reduced
-// lazily and in place. A module is exactly what needs that laziness: most
-// of a bundle's bindings have no normal form, so they are held as
-// unreduced application nodes and forced only as far as a request looks
-// at them. See that header for why nothing here is eager.
+// Either of two evaluators, both over the same 8-byte nil-packed nodes in
+// an mmap'd arena, chosen when this file is compiled:
+//
+//   default        ../lazy-graph-nil-mmap-32.hpp — head normal form on
+//                  demand, so a binding whose normal form does not exist
+//                  costs nothing until something asks for it.
+//   -DRUNNER_EAGER ../eager-ternary-nil-mmap-32-peek.hpp — the fastest
+//                  evaluator in the benchmark suite. Every binding is
+//                  normalized as the module is read, which is ~2.7x faster
+//                  and half the memory *if* every binding in the module
+//                  has a normal form.
+//
+// That proviso is the whole story. Eager is the better evaluator and the
+// worse default: one definition that only converges lazily hangs the build,
+// and nothing in the module system checks for it. A repository that holds
+// itself to eager termination should build with -DRUNNER_EAGER and say so;
+// everyone else gets an evaluator that cannot be broken this way.
 //
 // Memory management
 //
-// Reduction itself frees nothing; what bounds memory is the evaluator's
-// mark-and-sweep, which runs from inside the reduction loop once the arena
-// passes RUNNER_RSS_THRESHOLD_MB. A single request can allocate a thousand
-// times what it keeps, so waiting until it has answered is not enough.
-// Everything that has to survive is registered as a root: every binding of
-// the loaded module, for as long as it stays loaded, and the argument and
-// application a one-off `apply` builds, for as long as it is being answered.
-// What survives is the reduction written into the bundle's own nodes, which
-// is exactly the sharing that makes a long-lived server worth having.
+// The lazy evaluator frees nothing as it reduces; what bounds it is a
+// mark-and-sweep from inside the reduction loop, once the arena passes
+// RUNNER_RSS_THRESHOLD_MB. A single request can allocate a thousand times
+// what it keeps, so waiting until it has answered is not enough. Everything
+// that has to survive is registered as a root: every binding of the loaded
+// module, and the argument and application a one-off `apply` builds. The
+// eager evaluator has neither — a binding is a value the moment it is read,
+// and there is no intermediate state to protect — so the root calls below
+// compile away to nothing.
 //
 // Build:
-//   c++ -O3 -std=c++17 -pthread -o runner runner.cpp
+//   c++ -O3 -std=c++17 -pthread [-DRUNNER_EAGER] -o runner runner.cpp
 
 #include <cstdint>
 #include <cstdio>
@@ -80,13 +91,47 @@
 #include <unordered_map>
 #include <vector>
 
+#ifdef RUNNER_EAGER
+#include "../eager-ternary-nil-mmap-32-peek.hpp"
+using Reducer = EagerTernaryNilMmap32Peek;
+#else
 #include "../lazy-graph-nil-mmap-32.hpp"
+using Reducer = LazyGraphNilMmap32;
+#endif
 
 // The one evaluator this process reduces in. Trees are indices into its arena,
 // so they are only meaningful until the next clear().
-static LazyGraphNilMmap32 g_e;
+static Reducer g_e;
 
-using Tree = LazyGraphNilMmap32::Tree;
+using Tree = Reducer::Tree;
+
+// Reclamation is the only thing the two reducers disagree about, so it is the
+// only thing that branches on which one was built. The lazy reducer collects by
+// marking from a root set the caller keeps filled; the eager one normalizes each
+// binding as it is read and has no notion of a term still being worked on, so
+// there is nothing to name and nothing to reclaim. Everything below this point
+// is written once, against whichever is in play.
+static inline void hold(Tree t) {
+#ifndef RUNNER_EAGER
+  g_e.roots().push_back(t);
+#else
+  (void)t;
+#endif
+}
+
+static inline void drop_held() {
+#ifndef RUNNER_EAGER
+  g_e.roots().pop_back();
+#endif
+}
+
+static inline void set_collection_budget(size_t nodes) {
+#ifndef RUNNER_EAGER
+  g_e.set_budget(nodes);
+#else
+  (void)nodes;
+#endif
+}
 
 // die() throws so server-mode commands can recover; main() catches and reports.
 [[noreturn]] static void die(const char* msg) {
@@ -328,7 +373,7 @@ static Tree parse_dag_into(std::string_view text, TreeEnv& env) {
       env[std::string(tok[0])] = value;
       // A binding is a root for as long as the module is loaded. Collection does
       // not move anything, so registering it once is all it ever needs.
-      g_e.roots().push_back(value);
+      hold(value);
     } else if (nt == 2) {
       env[std::string(tok[0])] = get(tok[1]);
     } else if (nt == 1) {
@@ -464,9 +509,10 @@ static int run_server() {
         if (it == env.end()) { write_err("unbound: " + sym); continue; }
         // The argument and the application are the caller's, not the bundle's, so
         // they need rooting for as long as the answer is being computed.
-        g_e.roots().push_back(g_e.apply(it->second, of_string(payload)));
-        std::string out = to_string_marshal(g_e.roots().back());
-        g_e.roots().pop_back();
+        const Tree result = g_e.apply(it->second, of_string(payload));
+        hold(result);
+        std::string out = to_string_marshal(result);
+        drop_held();
         write_data(out);
         continue;
       }
@@ -490,7 +536,7 @@ static void* worker_main(void* p) {
   int argc = w->argc;
   char** argv = w->argv;
 
-  g_e.set_budget(collection_budget_nodes());
+  set_collection_budget(collection_budget_nodes());
 
   if (argc == 2 && (std::strcmp(argv[1], "-s") == 0 ||
                     std::strcmp(argv[1], "--server") == 0)) {
@@ -512,8 +558,9 @@ static void* worker_main(void* p) {
     TreeEnv env;
     Tree dag = parse_dag_into(read_file(argv[1]), env);
     if (!dag) die("dag representation was not terminated by a value");
-    g_e.roots().push_back(g_e.apply(dag, of_string(argv[2])));
-    std::string out = to_string_marshal(g_e.roots().back());
+    const Tree result = g_e.apply(dag, of_string(argv[2]));
+    hold(result);
+    std::string out = to_string_marshal(result);
     std::fwrite(out.data(), 1, out.size(), stdout);
     std::fputc('\n', stdout);
     w->result = 0;

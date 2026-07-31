@@ -43,8 +43,8 @@ private:
   Node *_arena;
   uint32_t _head;
 
-public:
-  EagerTernaryNilMmap32() {
+private:
+  void map_arena() {
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
     flags |= MAP_NORESERVE;
@@ -58,6 +58,9 @@ public:
     _head = 2;
   }
 
+public:
+  EagerTernaryNilMmap32() { map_arena(); }
+
   ~EagerTernaryNilMmap32() {
     munmap(_arena, ARENA_BYTES);
   }
@@ -65,8 +68,18 @@ public:
   EagerTernaryNilMmap32(const EagerTernaryNilMmap32 &) = delete;
   EagerTernaryNilMmap32 &operator=(const EagerTernaryNilMmap32 &) = delete;
 
+  /** Drop everything allocated so far. Every Tree handed out becomes invalid. */
+  void clear() {
+    Node *old = _arena;
+    map_arena(); // first, so a failed mapping leaves the old arena intact
+    munmap(old, ARENA_BYTES);
+  }
+
+  /** The arena's high-water mark in nodes, which is what it costs in memory. */
+  size_t allocated() const { return _head - 1; } // index 0 is padding, not a node
+
   std::string stats() {
-    return std::to_string(_head - 1) + " nodes in arena"; // index 0 is padding, not a node
+    return std::to_string(allocated()) + " nodes in arena";
   }
 
   Tree leaf() {

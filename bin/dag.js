@@ -745,12 +745,21 @@ function source_mtime(from) {
   const headers = (0, import_path2.resolve)((0, import_path2.dirname)(from), "..");
   return (0, import_fs2.readdirSync)(headers).filter((name) => name.endsWith(".hpp")).map((name) => (0, import_fs2.statSync)((0, import_path2.join)(headers, name)).mtimeMs).reduce((a, b) => Math.max(a, b), (0, import_fs2.statSync)(from).mtimeMs);
 }
+var eager = () => process.env.TREE_CALCULUS_RUNNER === "eager";
 var executable = once(() => {
   const from = source();
-  const exe = (0, import_path2.join)((0, import_path2.dirname)(from), "runner.exe");
+  const exe = (0, import_path2.join)((0, import_path2.dirname)(from), eager() ? "runner-eager.exe" : "runner.exe");
   const current = (0, import_fs2.existsSync)(exe) && (0, import_fs2.statSync)(exe).mtimeMs >= source_mtime(from);
   if (!current) {
-    (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", ["-O3", "-std=c++17", "-pthread", from, "-o", exe], { stdio: "inherit" });
+    (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", [
+      "-O3",
+      "-std=c++17",
+      "-pthread",
+      ...eager() ? ["-DRUNNER_EAGER"] : [],
+      from,
+      "-o",
+      exe
+    ], { stdio: "inherit" });
   }
   return exe;
 });
@@ -825,7 +834,7 @@ function environment2(e, text, _ = {}) {
   const path = once(() => as_file(text, "module.dag"));
   return (symbol) => dag_default.of(e, ask(path(), `eval-dag ${symbol}`).toString("utf8"));
 }
-var native = process.env.TREE_CALCULUS_RUNNER === "1" ? { transformer: transformer2, environment: environment2 } : null;
+var native = ["1", "eager"].includes(process.env.TREE_CALCULUS_RUNNER ?? "") ? { transformer: transformer2, environment: environment2 } : null;
 
 // src/format/file.mjs
 var PLAUSIBLE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z0-9]+$/;
