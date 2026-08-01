@@ -50,11 +50,9 @@
 //   default        ../lazy-graph-nil-mmap-32.hpp — head normal form on
 //                  demand, so a binding whose normal form does not exist
 //                  costs nothing until something asks for it.
-//   -DRUNNER_EAGER ../eager-ternary-nil-mmap-32-peek.hpp — the fastest
-//                  evaluator in the benchmark suite. Every binding is
-//                  normalized as the module is read, which is ~2.7x faster
-//                  and half the memory *if* every binding in the module
-//                  has a normal form.
+//   -DRUNNER_EAGER ../eager-graph-nil-mmap-32.hpp — every binding is
+//                  normalized as the module is read, which is faster and
+//                  leaner *if* every binding in the module has a normal form.
 //
 // That proviso is the whole story. Eager is the better evaluator and the
 // worse default: one definition that only converges lazily hangs the build,
@@ -62,17 +60,23 @@
 // itself to eager termination should build with -DRUNNER_EAGER and say so;
 // everyone else gets an evaluator that cannot be broken this way.
 //
+// The eager evaluators in ../ that are not *-graph-* are benchmark
+// implementations — recursive apply(), an arena that never frees — and are
+// not usable here: a module is thousands of bindings reduced back to back in
+// one process, which is a stack overflow and an unbounded heap respectively.
+// See eager-graph-nil-mmap-32.hpp.
+//
 // Memory management
 //
-// The lazy evaluator frees nothing as it reduces; what bounds it is a
-// mark-and-sweep from inside the reduction loop, once the arena passes
+// Neither evaluator frees as it reduces; what bounds them is a mark-and-sweep
+// from inside the reduction loop, once the arena passes
 // RUNNER_RSS_THRESHOLD_MB. A single request can allocate a thousand times
 // what it keeps, so waiting until it has answered is not enough. Everything
 // that has to survive is registered as a root: every binding of the loaded
-// module, and the argument and application a one-off `apply` builds. The
-// eager evaluator has neither — a binding is a value the moment it is read,
-// and there is no intermediate state to protect — so the root calls below
-// compile away to nothing.
+// module, and the argument and application a one-off `apply` builds. Both
+// collectors are non-moving, so a root registered once stays valid, and a
+// Tree held anywhere the collector cannot see — a local here, a frame of the
+// walk in to_dag — survives a collection unchanged.
 //
 // Build:
 //   c++ -O3 -std=c++17 -pthread [-DRUNNER_EAGER] -o runner runner.cpp
@@ -92,8 +96,8 @@
 #include <vector>
 
 #ifdef RUNNER_EAGER
-#include "../eager-ternary-nil-mmap-32-peek.hpp"
-using Reducer = EagerTernaryNilMmap32Peek;
+#include "../eager-graph-nil-mmap-32.hpp"
+using Reducer = EagerGraphNilMmap32;
 #else
 #include "../lazy-graph-nil-mmap-32.hpp"
 using Reducer = LazyGraphNilMmap32;
@@ -105,33 +109,15 @@ static Reducer g_e;
 
 using Tree = Reducer::Tree;
 
-// Reclamation is the only thing the two reducers disagree about, so it is the
-// only thing that branches on which one was built. The lazy reducer collects by
-// marking from a root set the caller keeps filled; the eager one normalizes each
-// binding as it is read and has no notion of a term still being worked on, so
-// there is nothing to name and nothing to reclaim. Everything below this point
-// is written once, against whichever is in play.
-static inline void hold(Tree t) {
-#ifndef RUNNER_EAGER
-  g_e.roots().push_back(t);
-#else
-  (void)t;
-#endif
-}
+// Evaluation order is the only thing the two reducers disagree about. Both
+// reclaim the same way — a non-moving mark-and-sweep from a root set the caller
+// keeps filled — so everything below this point is written once, against
+// whichever is in play.
+static inline void hold(Tree t) { g_e.roots().push_back(t); }
 
-static inline void drop_held() {
-#ifndef RUNNER_EAGER
-  g_e.roots().pop_back();
-#endif
-}
+static inline void drop_held() { g_e.roots().pop_back(); }
 
-static inline void set_collection_budget(size_t nodes) {
-#ifndef RUNNER_EAGER
-  g_e.set_budget(nodes);
-#else
-  (void)nodes;
-#endif
-}
+static inline void set_collection_budget(size_t nodes) { g_e.set_budget(nodes); }
 
 // die() throws so server-mode commands can recover; main() catches and reports.
 [[noreturn]] static void die(const char* msg) {
