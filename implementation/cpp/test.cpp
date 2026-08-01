@@ -17,6 +17,7 @@
 #include "eager-value-heap-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
+#include "eager-graph-nil-mmap-32.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
@@ -205,17 +206,23 @@ void sanity_checks(std::string name) {
   std::cout << "    Stats: " << e.stats() << std::endl;
 }
 
-// LazyGraphNilMmap32 reclaims by marking from a root set the caller registers,
-// from inside the reduction loop rather than between requests. A budget large
-// enough never to trip leaves all of that untested, so run the same programs
-// under one small enough that collection happens constantly, and check that the
-// answers are unchanged.
-void collection_checks() {
-  std::cout << "Testing LazyGraphNilMmap32 under collection..." << std::endl;
-  Evaluator<LazyGraphNilMmap32> e;
+// The two *-graph-* evaluators reclaim by marking from a root set the caller
+// registers, from inside the reduction loop rather than between requests. A
+// budget large enough never to trip leaves all of that untested, so run the same
+// programs under one small enough that collection happens constantly, and check
+// that the answers are unchanged.
+//
+// For EagerGraphNilMmap32 that also covers the two tables a collection has to
+// bring along — the hash-consing table is re-laid over the survivors, the memo
+// dropped — and those are the parts where a mistake is silent: a stale entry
+// does not crash, it answers a question with the wrong tree.
+template <typename Impl>
+void collection_checks(std::string name) {
+  std::cout << "Testing " << name << " under collection..." << std::endl;
+  Evaluator<Impl> e;
   e.set_budget(4096);
 
-  auto rooted = [&](LazyGraphNilMmap32::Tree t) {
+  auto rooted = [&](typename Impl::Tree t) {
     e.roots().push_back(t);
     return t;
   };
@@ -297,9 +304,11 @@ int main(int argc, char *argv[]) {
   sanity_checks<EagerValueHeapPeek>("EagerValueHeapPeek");
   sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
   sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
+  sanity_checks<EagerGraphNilMmap32>("EagerGraphNilMmap32");
   sanity_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
   sanity_checks<LazyAppStream>("LazyAppStream");
-  collection_checks();
+  collection_checks<EagerGraphNilMmap32>("EagerGraphNilMmap32");
+  collection_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
@@ -324,6 +333,7 @@ int main(int argc, char *argv[]) {
     bench_evaluator<EagerValueHeapPeek>("EagerValueHeapPeek", 90, 19);
     bench_evaluator<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek", 90, 24);
     bench_evaluator<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek", 90, 24);
+    bench_evaluator<EagerGraphNilMmap32>("EagerGraphNilMmap32", 90, 24);
     bench_evaluator<LazyGraphNilMmap32>("LazyGraphNilMmap32", 90, 24);
     bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
   }

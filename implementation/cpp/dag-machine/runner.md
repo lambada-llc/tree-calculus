@@ -38,13 +38,30 @@ collection (see `RUNNER_RSS_THRESHOLD_MB` below).
 
 ## Reduction
 
-`../lazy-graph-nil-mmap-32.hpp`: 8-byte nil-packed nodes in an mmap'd
-arena — the representation the fastest evaluators in the benchmark suite
-use — reduced lazily and in place, which is what a *module* needs and
-none of the eager evaluators can offer. Most of a bundle's bindings have
-no normal form, so evaluating each one as it is read (what an eager
-`apply` amounts to) diverges; here a binding is an unreduced application
-node, forced only as far as a request looks at it.
+Either of two evaluators over the same representation — 8-byte
+nil-packed nodes in an mmap'd arena, the one the fastest evaluators in
+the benchmark suite use — picked when `runner.cpp` is compiled.
+
+`../lazy-graph-nil-mmap-32.hpp` (default) reduces lazily and in place.
+Most of a bundle's bindings have no normal form, so evaluating each one
+as it is read diverges; here a binding is an unreduced application node,
+forced only as far as a request looks at it.
+
+`../eager-graph-nil-mmap-32.hpp` (`-DRUNNER_EAGER`) normalizes every
+binding as the module is read. That is a claim about the module — one
+definition that only converges lazily hangs the build — so it is the
+caller's to make, and `TREE_CALCULUS_RUNNER=eager` is where they make it.
+In exchange, a repository that holds itself to eager termination builds
+in about half the time.
+
+Both keep memory bounded by a non-moving mark-and-sweep over `roots()`,
+run from inside the reduction loop (see `RUNNER_RSS_THRESHOLD_MB`), and
+neither reduces on the C stack. The eager one additionally hash-conses
+what it builds and memoizes the reductions it repeats, which is not an
+optimization but the thing that makes it usable at all: a DAG bundle says
+what it says by sharing, plain eager reduction re-derives each occurrence
+and materializes the normal form as a tree, and that tree is
+exponentially larger than the DAG it prints as.
 
 ## Environment variables
 
@@ -72,13 +89,18 @@ to collect less often. The budget also raises itself if a collection
 finds that most of the arena is still live, so a genuinely large term
 does not turn into a collection per allocation.
 
+Under `-DRUNNER_EAGER` the same setting also sizes the memo, which is the
+rest of what a collection has to bound; a tighter budget therefore costs
+a little more re-reduction as well as more sweeps.
+
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
-`runner` runs all real work on a worker pthread with this stack size, since
-forcing a term is recursive and chains tens of thousands of frames deep on
-heavy benchmark suites (`Poly.Bench`, `Nat.Bench`). Bump this if you
-hit a `runner: pthread_create(stack=…): …` error or a SIGSEGV during
-reduction.
+`runner` runs all real work on a worker pthread with this stack size,
+since the lazy evaluator's `whnf` is recursive and chains tens of
+thousands of frames deep on heavy benchmark suites (`Poly.Bench`,
+`Nat.Bench`). Bump this if you hit a `runner: pthread_create(stack=…): …`
+error or a SIGSEGV during reduction. The eager evaluator keeps its
+continuations on the heap and does not depend on it.
 
 ### Read by the build scripts that drive `runner`
 

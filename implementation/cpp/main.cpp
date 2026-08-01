@@ -17,6 +17,7 @@
 #include "eager-value-heap-peek.hpp"
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
+#include "eager-graph-nil-mmap-32.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
 #include "lazy-app-stream.hpp"
 #include "evaluator.hpp"
@@ -87,6 +88,8 @@ int main(int argc, char *argv[]) {
     return run<EagerTernaryNilMmapPeek>();
   } else if (evaluator == "eager-ternary-nil-mmap-32-peek") {
     return run<EagerTernaryNilMmap32Peek>();
+  } else if (evaluator == "eager-graph-nil-mmap-32") {
+    return run<EagerGraphNilMmap32>();
   } else if (evaluator == "lazy-graph-nil-mmap-32") {
     return run<LazyGraphNilMmap32>();
   } else if (evaluator == "lazy-app-stream") {
