@@ -1,5 +1,5 @@
 Tree calculus was discovered by Barry Jay.
-This repo is maintained by Johannes Bader and aims to be a starting point for learning about and contributing to the effort.
+This repo is maintained by Johannes Bader and collects implementations and other resources.
 
 ## Resources
 - Book: [Reflective Programs in Tree Calculus](https://github.com/barry-jay-personal/tree-calculus/blob/master/tree_book.pdf) (Barry Jay, 2021)
