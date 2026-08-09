@@ -72,7 +72,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `link <file>...` | Concatenate modules in dependency order. Rejects duplicate exports and dependency cycles. |
 | `canonicalize [file]` | Hash-cons into globally unique numeric ids. |
 | `qualify --prefix <p> [file]` | Namespace a module's exports under `<p>`. Definitions that are not exported are made unique but stay private. |
-| `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several is not the same as several extracts: what two of them share is kept once. |
+| `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several share what they share, rather than repeating it. |
 | `eval [file]` | Evaluate a module and print one of its symbols. |
 | `interface [file]` | List what a module exports and what it needs. |
 
@@ -81,7 +81,8 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `--prefix <p>` | Namespace prefix for `qualify`, e.g. `Bool.` |
 | `--reserved <regex>` | Names `qualify` must leave alone, on top of labels. Useful for whatever a compiler reserves for itself. |
 | `--symbol <s>` | Which symbol `extract` keeps — repeat it for several — or which one `eval` prints. `eval` defaults to the last one. |
-| `--except <regex>` | Name `extract`'s symbols by what they are not: every symbol the module defines but those matching. |
+| `--matching <regex>` | `extract`'s symbols by pattern; `^Nat\.` is a module. |
+| `--except <regex>` | The same, by what they are not. |
 | `--format <f>` | Output format for `eval`, as for `main.js`. Defaults to `term`. |
 
 ## Examples
@@ -97,13 +98,14 @@ $ ./dag.js eval --symbol Bool.not --format term bundle.dag
 # Take one value back out of the bundle, as a DAG that stands on its own.
 $ ./dag.js extract --symbol Bool.not bundle.dag | ./dag.js canonicalize > not.dag
 
-# Or several at once, as a library to read other things against. What they
-# share is kept once, which is what makes this not the same as two extracts.
+# Or several at once, as a library to read other things against.
 $ ./dag.js extract --symbol Bool.not --symbol Nat.add bundle.dag > pair.dag
 
-# Naming what stays is also how one says "everything but". A test is a root
-# nothing else is built from, so keeping every other symbol drops the tests
-# and whatever only they reached.
+# By pattern, which is how a namespace is asked for.
+$ ./dag.js extract --matching '^(Bool|Nat)\.' bundle.dag > booleans-and-naturals.dag
+
+# Naming what stays is how one drops something: nothing is built from a test,
+# so keeping every other symbol leaves them and their data behind.
 $ ./dag.js extract --except '^:test\.' bundle.dag > library.dag
 
 # What does a module need from elsewhere?

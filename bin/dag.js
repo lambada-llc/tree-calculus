@@ -415,14 +415,11 @@ var DagModule = class _DagModule {
   /**
    * Keep only the definitions `symbols` are built from, dropping everything else
    * the module happens to carry. Linking a library produces one big module; this
-   * takes a value back out of it — or a set of them, which is not the same as
-   * extracting each on its own and concatenating the results: what two of them
-   * share is kept once, and stays one node rather than becoming two.
+   * takes a value back out of it — or a set of them, sharing what they share
+   * rather than repeating it, which is why it is not several extracts.
    *
-   * Several roots is also how one says "everything but": name what stays and
-   * whatever only the rest reached is gone, which is what strips a library of
-   * its tests. There is no need for a `drop`, because a definition is worth
-   * keeping exactly when something kept is built from it.
+   * Naming what stays is also how one drops something: what only the rest
+   * reached is gone. No `drop` needed.
    *
    * One backwards pass suffices: a reference resolves to a definition above it,
    * so by the time a line is reached, every line that could need it has been
@@ -1017,8 +1014,7 @@ Commands:
                           that are not exported are made unique but stay private.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
-                          DAG naming them. Several is not the same as several
-                          extracts: what two of them share is kept once.
+                          DAG naming them. Several share what they share.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
@@ -1028,10 +1024,8 @@ Options:
   --symbol <s>            Which symbol 'extract' keeps \u2014 repeat it for several \u2014
                           or which one 'eval' prints. 'eval' defaults to the
                           last one.
-  --except <regex>        Name 'extract's symbols by what they are not: every
-                          symbol the module defines but those matching. How a
-                          library is stripped of its tests, which are the only
-                          thing nothing else is built from.
+  --matching <regex>      'extract's symbols by pattern; '^Nat\\.' is a module.
+  --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(", ")}.
                           Defaults to term.
 
@@ -1052,6 +1046,8 @@ function parse_args(argv) {
       options.reserved = value();
     else if (arg === "--symbol")
       options.symbols.push(value());
+    else if (arg === "--matching")
+      options.matching = value();
     else if (arg === "--except")
       options.except = value();
     else if (arg === "--format")
@@ -1090,11 +1086,15 @@ function run(command, files, options) {
     }
     case "extract": {
       const module2 = DagModule.parse(read_input(files));
-      const excluded = options.except === void 0 ? null : new RegExp(options.except);
-      const matched = excluded === null ? [] : [...new Set(module2.lines.filter((line) => line.length > 1 && is_symbol_name(line[0].symbol)).map((line) => line[0].symbol).filter((name) => !excluded.test(name)))];
-      const symbols = [.../* @__PURE__ */ new Set([...options.symbols, ...matched])];
+      const named = () => [...new Set(module2.lines.filter((line) => line.length > 1 && is_symbol_name(line[0].symbol)).map((line) => line[0].symbol))];
+      const by_pattern = (pattern, wanted) => pattern === void 0 ? [] : named().filter((name) => new RegExp(pattern).test(name) === wanted);
+      const symbols = [.../* @__PURE__ */ new Set([
+        ...options.symbols,
+        ...by_pattern(options.matching, true),
+        ...by_pattern(options.except, false)
+      ])];
       if (!symbols.length)
-        raise("extract needs --symbol or --except");
+        raise("extract needs --symbol, --matching or --except");
       return utf8(module2.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
     }
     case "eval": {

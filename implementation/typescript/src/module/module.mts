@@ -130,14 +130,11 @@ export class DagModule {
   /**
    * Keep only the definitions `symbols` are built from, dropping everything else
    * the module happens to carry. Linking a library produces one big module; this
-   * takes a value back out of it — or a set of them, which is not the same as
-   * extracting each on its own and concatenating the results: what two of them
-   * share is kept once, and stays one node rather than becoming two.
+   * takes a value back out of it — or a set of them, sharing what they share
+   * rather than repeating it, which is why it is not several extracts.
    *
-   * Several roots is also how one says "everything but": name what stays and
-   * whatever only the rest reached is gone, which is what strips a library of
-   * its tests. There is no need for a `drop`, because a definition is worth
-   * keeping exactly when something kept is built from it.
+   * Naming what stays is also how one drops something: what only the rest
+   * reached is gone. No `drop` needed.
    *
    * One backwards pass suffices: a reference resolves to a definition above it,
    * so by the time a line is reached, every line that could need it has been

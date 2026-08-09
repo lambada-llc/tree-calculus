@@ -39,8 +39,7 @@ Commands:
                           that are not exported are made unique but stay private.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
-                          DAG naming them. Several is not the same as several
-                          extracts: what two of them share is kept once.
+                          DAG naming them. Several share what they share.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
@@ -50,10 +49,8 @@ Options:
   --symbol <s>            Which symbol 'extract' keeps — repeat it for several —
                           or which one 'eval' prints. 'eval' defaults to the
                           last one.
-  --except <regex>        Name 'extract's symbols by what they are not: every
-                          symbol the module defines but those matching. How a
-                          library is stripped of its tests, which are the only
-                          thing nothing else is built from.
+  --matching <regex>      'extract's symbols by pattern; '^Nat\\.' is a module.
+  --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(', ')}.
                           Defaults to term.
 
@@ -63,6 +60,7 @@ interface Options {
   prefix?: string;
   reserved?: string;
   symbols: string[];
+  matching?: string;
   except?: string;
   format: string;
 }
@@ -81,6 +79,7 @@ function parse_args(argv: string[]): { command: string, files: string[], options
     if (arg === '--prefix') options.prefix = value();
     else if (arg === '--reserved') options.reserved = value();
     else if (arg === '--symbol') options.symbols.push(value());
+    else if (arg === '--matching') options.matching = value();
     else if (arg === '--except') options.except = value();
     else if (arg === '--format') options.format = value();
     else if (arg.startsWith('--')) raise(`unrecognized option ${arg}`);
@@ -124,19 +123,21 @@ function run(command: string, files: string[], options: Options): Uint8Array {
 
     case 'extract': {
       const module = DagModule.parse(read_input(files));
-      // Named definitions are what a reader can ask for; an id is scaffolding
-      // reachable only through the lines that use it, so it is never a root of
-      // its own. The same notion of an interface `partition` works from.
-      const excluded = options.except === undefined ? null : new RegExp(options.except);
-      const matched = excluded === null ? [] : [...new Set(module.lines
+      // Only named definitions; an id is reachable through the lines using it.
+      const named = () => [...new Set(module.lines
         .filter(line => line.length > 1 && is_symbol_name(line[0].symbol))
-        .map(line => line[0].symbol)
-        .filter(name => !excluded.test(name)))];
-      const symbols = [...new Set([...options.symbols, ...matched])];
-      if (!symbols.length) raise('extract needs --symbol or --except');
-      // A DAG ends in the name of its value, and a set of them has no single
-      // one to end on — so the entry line is written only when one was asked
-      // for, and several produce definitions to be read against, as a library.
+        .map(line => line[0].symbol))];
+      const by_pattern = (pattern: string | undefined, wanted: boolean) =>
+        pattern === undefined ? [] :
+          named().filter(name => new RegExp(pattern).test(name) === wanted);
+      const symbols = [...new Set([
+        ...options.symbols,
+        ...by_pattern(options.matching, true),
+        ...by_pattern(options.except, false),
+      ])];
+      if (!symbols.length) raise('extract needs --symbol, --matching or --except');
+      // A DAG ends in the name of its value; a set of them has none, so it ends
+      // in nothing and is read as a library.
       return utf8(module.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
     }
 
