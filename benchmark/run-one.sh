@@ -152,7 +152,9 @@ require_node() {
 JS_RUNNER="$(dirname "$0")/js-runner.mjs"
 JS_EVALUATORS="$REPO_ROOT/implementation/typescript/src/evaluator"
 if require_node 18 "JavaScript evaluators"; then
-  for eval in lazy-stacks lazy-stacks-opt; do
+  # eager-stacks stands in for the eager evaluators: the recursive ones exhaust
+  # V8's stack on these inputs, and it is the fastest of those that do not.
+  for eval in eager-stacks lazy-stacks lazy-stacks-opt; do
     if [[ -f "$JS_EVALUATORS/$eval.mjs" ]]; then
       bench "JavaScript $eval" --stdin node "$JS_RUNNER" --evaluator "$eval"
     else
