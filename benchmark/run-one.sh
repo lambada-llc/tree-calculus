@@ -184,11 +184,13 @@ else
 fi
 
 # --- WASM ---
-for variant in eager-value eager-nil; do
+# The runner supplies fd_read/fd_write as plain JS (see implementation/wasm/run.mjs),
+# so any Node with WASM support works — node:wasi is not involved.
+for variant in eager-value eager-nil eager-nil-vm; do
   WASM_MAIN="$REPO_ROOT/implementation/wasm/$variant/main.mjs"
   if [[ ! -f "$WASM_MAIN" ]]; then
     printf "  %-35s SKIP  not found\n" "WASM $variant"
-  elif require_node 21 "WASM $variant"; then
+  elif require_node 18 "WASM $variant"; then
     bench "WASM $variant" --stdin node "$WASM_MAIN"
   fi
 done

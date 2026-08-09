@@ -15,3 +15,10 @@ under wasmtime that alone costs ~2.7x on recursive fib (n=26: 2.05s, against
 0.75s for the same 12-byte nodes dispatched with an `if` chain). Node/V8 is
 indifferent. Nothing here depends on the `br_table`, so this is worth revisiting
 if wasmtime is the target.
+
+## Depth
+
+Reduction, parsing and printing all recurse on the machine stack, so workload
+depth is capped by whatever stack the engine grants (under Node, roughly
+10⁴–10⁵ frames). [../eager-nil-vm](../eager-nil-vm/) runs the same reduction
+with its frames in linear memory instead, when that cap is the problem.
