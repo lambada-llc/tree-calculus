@@ -1,25 +1,4 @@
-#include "eager-value-mem.hpp"
-#include "eager-value-heap.hpp"
-#include "eager-ternary.hpp"
-#include "eager-ternary-ref.hpp"
-#include "eager-ternary-len.hpp"
-#include "eager-ternary-vm.hpp"
-#include "eager-ternary-nil.hpp"
-#include "eager-ternary-nil-32.hpp"
-#include "eager-ternary-nil-vm.hpp"
-#include "eager-ternary-nil-vm-32.hpp"
-#include "eager-ternary-nil-vm-32-rc.hpp"
-#include "eager-ternary-nil-mmap.hpp"
-#include "eager-ternary-nil-mmap-32.hpp"
-#include "eager-ternary-nil-mmap-vm.hpp"
-#include "eager-ternary-nil-mmap-vm-32.hpp"
-#include "eager-value-mem-peek.hpp"
-#include "eager-value-heap-peek.hpp"
-#include "eager-ternary-nil-mmap-peek.hpp"
-#include "eager-ternary-nil-mmap-32-peek.hpp"
-#include "eager-graph-nil-mmap-32.hpp"
-#include "lazy-graph-nil-mmap-32.hpp"
-#include "lazy-app-stream.hpp"
+#include "evaluators.hpp"
 #include "evaluator.hpp"
 #include <algorithm>
 #include <chrono>
@@ -285,57 +264,19 @@ void bench_evaluator(std::string name, int linear_fib_n, int recursive_fib_n, in
 }
 
 int main(int argc, char *argv[]) {
-  sanity_checks<EagerValueMem>("EagerValueMem");
-  sanity_checks<EagerValueHeap>("EagerValueHeap");
-  sanity_checks<EagerTernary>("EagerTernary");
-  sanity_checks<EagerTernaryRef>("EagerTernaryRef");
-  sanity_checks<EagerTernaryLen>("EagerTernaryLen");
-  sanity_checks<EagerTernaryVM>("EagerTernaryVM");
-  sanity_checks<EagerTernaryNil>("EagerTernaryNil");
-  sanity_checks<EagerTernaryNil32>("EagerTernaryNil32");
-  sanity_checks<EagerTernaryNilVM>("EagerTernaryNilVM");
-  sanity_checks<EagerTernaryNilVM32>("EagerTernaryNilVM32");
-  sanity_checks<EagerTernaryNilVM32RC>("EagerTernaryNilVM32RC");
-  sanity_checks<EagerTernaryNilMmap>("EagerTernaryNilMmap");
-  sanity_checks<EagerTernaryNilMmap32>("EagerTernaryNilMmap32");
-  sanity_checks<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM");
-  sanity_checks<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32");
-  sanity_checks<EagerValueMemPeek>("EagerValueMemPeek");
-  sanity_checks<EagerValueHeapPeek>("EagerValueHeapPeek");
-  sanity_checks<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek");
-  sanity_checks<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek");
-  sanity_checks<EagerGraphNilMmap32>("EagerGraphNilMmap32");
-  sanity_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
-  sanity_checks<LazyAppStream>("LazyAppStream");
+#define SANITY(Class, Name, InSuite, L, R) sanity_checks<Class>(#Class);
+  EVALUATORS(SANITY)
+#undef SANITY
+
+  // Only the two graph evaluators own a heap they can collect.
   collection_checks<EagerGraphNilMmap32>("EagerGraphNilMmap32");
   collection_checks<LazyGraphNilMmap32>("LazyGraphNilMmap32");
 
   bool bench = argc > 1 && std::string(argv[1]) == "--bench";
   if (bench) {
-    // Fib arguments tuned so each benchmark takes ~0.1s.
-    // Linear fib is capped at 90 to avoid int64_t overflow.
-    bench_evaluator<EagerValueMem>("EagerValueMem", 90, 24);
-    bench_evaluator<EagerValueHeap>("EagerValueHeap", 90, 19);
-    bench_evaluator<EagerTernary>("EagerTernary", 55, 14);
-    bench_evaluator<EagerTernaryLen>("EagerTernaryLen", 55, 14);
-    bench_evaluator<EagerTernaryRef>("EagerTernaryRef", 90, 24);
-    bench_evaluator<EagerTernaryVM>("EagerTernaryVM", 90, 24);
-    bench_evaluator<EagerTernaryNil>("EagerTernaryNil", 90, 24);
-    bench_evaluator<EagerTernaryNil32>("EagerTernaryNil32", 90, 24);
-    bench_evaluator<EagerTernaryNilVM>("EagerTernaryNilVM", 90, 24);
-    bench_evaluator<EagerTernaryNilVM32>("EagerTernaryNilVM32", 90, 24);
-    bench_evaluator<EagerTernaryNilVM32RC>("EagerTernaryNilVM32RC", 90, 24);
-    bench_evaluator<EagerTernaryNilMmap>("EagerTernaryNilMmap", 90, 24);
-    bench_evaluator<EagerTernaryNilMmap32>("EagerTernaryNilMmap32", 90, 24);
-    bench_evaluator<EagerTernaryNilMmapVM>("EagerTernaryNilMmapVM", 90, 24);
-    bench_evaluator<EagerTernaryNilMmapVM32>("EagerTernaryNilMmapVM32", 90, 24);
-    bench_evaluator<EagerValueMemPeek>("EagerValueMemPeek", 90, 24);
-    bench_evaluator<EagerValueHeapPeek>("EagerValueHeapPeek", 90, 19);
-    bench_evaluator<EagerTernaryNilMmapPeek>("EagerTernaryNilMmapPeek", 90, 24);
-    bench_evaluator<EagerTernaryNilMmap32Peek>("EagerTernaryNilMmap32Peek", 90, 24);
-    bench_evaluator<EagerGraphNilMmap32>("EagerGraphNilMmap32", 90, 24);
-    bench_evaluator<LazyGraphNilMmap32>("LazyGraphNilMmap32", 90, 24);
-    bench_evaluator<LazyAppStream>("LazyAppStream", 22, 9);
+#define BENCH(Class, Name, InSuite, L, R) bench_evaluator<Class>(#Class, L, R);
+    EVALUATORS(BENCH)
+#undef BENCH
   }
 
   std::cout << std::endl << "All tests passed." << std::endl;

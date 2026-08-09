@@ -68,17 +68,17 @@ function benchmark<TTree>(e: Evaluator<TTree>) {
   const bench_linear_fib = formatter_ternary.of(e, bench_linear_fib_ternary);
   const fib100 = measure(() => m.to_nat(e.apply(bench_linear_fib, m.of_nat(100n))));
   assert_equal(573147844013817084101n, fib100.result, "fib 100");
-  console.debug("linear fib 100:", fib100.elasped_ms + "ms");
+  console.debug("linear fib 100:", fib100.elapsed_ms + "ms");
   if (e !== lazy_func as any && e !== lazy_value_adt as any) { // stack overflow
     const bench_recursive_fib = formatter_ternary.of(e, bench_recursive_fib_ternary);
     const fib23 = measure(() => m.to_nat(e.apply(bench_recursive_fib, m.of_nat(23n))));
     assert_equal(46368n, fib23.result, "fib 23");
-    console.debug("recursive fib 23:", fib23.elasped_ms + "ms");
+    console.debug("recursive fib 23:", fib23.elapsed_ms + "ms");
   }
   const bench_alloc_and_identity = formatter_ternary.of(e, bench_alloc_and_identity_ternary);
   const alloc_id = measure(() => m.to_string(e.apply(e.apply(bench_alloc_and_identity, m.of_nat(1000000n)), m.of_string("hello world"))));
   assert_equal("hello world", alloc_id.result, "identity with needless allocation");
-  console.debug("alloc and identity:", alloc_id.elasped_ms + "ms");
+  console.debug("alloc and identity:", alloc_id.elapsed_ms + "ms");
   console.groupEnd();
 }
 

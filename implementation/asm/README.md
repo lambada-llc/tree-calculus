@@ -1,4 +1,4 @@
-# Size-Golfed Tree Calculus Evaluators — x86 Assymbly
+# Size-Golfed Tree Calculus Evaluators — x86 Assembly
 
 The smallest working ELF binaries that evaluate [tree calculus](https://treecalcul.us/specification/).
 

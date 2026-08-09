@@ -62,11 +62,11 @@ echo
 REPO_ROOT="$BENCH_DIR/.."
 
 CPP_BIN="$REPO_ROOT/implementation/cpp/main.exe"
-# Whether it runs here, not whether it has the executable bit: a binary left
-# behind by a build for another platform has the bit and then fails every case
-# with exit 126, which reads as twenty broken evaluators rather than one stale
-# file.
-if ! printf '0\n' | "$CPP_BIN" >/dev/null 2>&1; then
+# Whether it can answer the question run-one.sh asks it, not whether it has the
+# executable bit: a binary left behind by a build for another platform has the
+# bit and then fails every case with exit 126, which reads as twenty broken
+# evaluators rather than one stale file.
+if ! "$CPP_BIN" --list >/dev/null 2>&1; then
   printf "building C++... "
   if (cd "$REPO_ROOT/implementation/cpp" && bash compile.sh) 2>/dev/null; then
     printf "ok\n"
@@ -90,7 +90,9 @@ fi
 if [[ "$(uname -m)" == "x86_64" ]]; then
   ASM_DIR="$REPO_ROOT/implementation/asm"
   needs_asm_build=false
-  for variant in x64 x64-jay x64-noid x64-minbin x64-minbin-deep x64-vm; do
+  # The variants run-one.sh times; build.sh has no partial mode, so any one of
+  # them missing rebuilds the lot.
+  for variant in x64 x64-ternary x64-noid x64-vm x64-minbin x64-minbin-deep; do
     [[ ! -x "$ASM_DIR/bin/$variant" ]] && needs_asm_build=true && break
   done
   if $needs_asm_build; then

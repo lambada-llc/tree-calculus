@@ -164,13 +164,16 @@ if require_node 18 "JavaScript evaluators"; then
 fi
 
 # --- C++ ---
+# The binary names the evaluators it wants timed, so the roster lives in one
+# place (implementation/cpp/evaluators.hpp) rather than being copied here.
 CPP_BIN="$REPO_ROOT/implementation/cpp/main.exe"
-if [[ -x "$CPP_BIN" ]]; then
-  for eval in eager-value-mem eager-value-heap eager-ternary-ref eager-ternary-vm eager-ternary-nil eager-ternary-nil-32 eager-ternary-nil-vm eager-ternary-nil-vm-32 eager-ternary-nil-vm-32-rc eager-ternary-nil-mmap eager-ternary-nil-mmap-32 eager-ternary-nil-mmap-vm eager-ternary-nil-mmap-vm-32 eager-value-mem-peek eager-value-heap-peek eager-ternary-nil-mmap-peek eager-ternary-nil-mmap-32-peek eager-graph-nil-mmap-32 lazy-graph-nil-mmap-32; do
+CPP_EVALUATORS=$("$CPP_BIN" --list 2>/dev/null || true)
+if [[ -z "$CPP_EVALUATORS" ]]; then
+  printf "  %-35s SKIP  not built\n" "C++"
+else
+  for eval in $CPP_EVALUATORS; do
     bench "C++ $eval" --stdin "$CPP_BIN" --evaluator "$eval"
   done
-else
-  printf "  %-35s SKIP  not built\n" "C++"
 fi
 
 # --- Python ---
@@ -201,6 +204,9 @@ done
 ASM_DIR="$REPO_ROOT/implementation/asm"
 if [[ -f "$ASM_DIR/test.mjs" ]]; then
   if [[ "$(uname -m)" == "x86_64" ]]; then
+    # Two of build.sh's variants are deliberately absent: x64-jay reduces by
+    # Jay's rules and cannot run these triage-calculus programs, and
+    # x64-rosetta's standard build is byte-identical to x64's.
     for variant in x64 x64-ternary x64-noid x64-vm; do
       BIN_PATH="$ASM_DIR/bin/$variant"
       if [[ -x "$BIN_PATH" ]]; then

@@ -1,25 +1,4 @@
-#include "eager-value-mem.hpp"
-#include "eager-value-heap.hpp"
-#include "eager-ternary.hpp"
-#include "eager-ternary-ref.hpp"
-#include "eager-ternary-len.hpp"
-#include "eager-ternary-vm.hpp"
-#include "eager-ternary-nil.hpp"
-#include "eager-ternary-nil-32.hpp"
-#include "eager-ternary-nil-vm.hpp"
-#include "eager-ternary-nil-vm-32.hpp"
-#include "eager-ternary-nil-vm-32-rc.hpp"
-#include "eager-ternary-nil-mmap.hpp"
-#include "eager-ternary-nil-mmap-32.hpp"
-#include "eager-ternary-nil-mmap-vm.hpp"
-#include "eager-ternary-nil-mmap-vm-32.hpp"
-#include "eager-value-mem-peek.hpp"
-#include "eager-value-heap-peek.hpp"
-#include "eager-ternary-nil-mmap-peek.hpp"
-#include "eager-ternary-nil-mmap-32-peek.hpp"
-#include "eager-graph-nil-mmap-32.hpp"
-#include "lazy-graph-nil-mmap-32.hpp"
-#include "lazy-app-stream.hpp"
+#include "evaluators.hpp"
 #include "evaluator.hpp"
 #include <iostream>
 
@@ -44,58 +23,24 @@ int main(int argc, char *argv[]) {
     std::string arg = argv[i];
     if (arg == "--evaluator" && i + 1 < argc) {
       evaluator = argv[++i];
+    } else if (arg == "--list") {
+      // The roster benchmark/run-one.sh times, so it need not keep its own copy.
+#define PRINT_IF_IN_SUITE(Class, Name, InSuite, L, R) \
+      if (InSuite) std::cout << Name << std::endl;
+      EVALUATORS(PRINT_IF_IN_SUITE)
+#undef PRINT_IF_IN_SUITE
+      return 0;
     } else {
       std::cerr << "Unknown argument: " << arg << std::endl;
       return 1;
     }
   }
 
-  if (evaluator == "eager-value-mem") {
-    return run<EagerValueMem>();
-  } else if (evaluator == "eager-value-heap") {
-    return run<EagerValueHeap>();
-  } else if (evaluator == "eager-ternary") {
-    return run<EagerTernary>();
-  } else if (evaluator == "eager-ternary-ref") {
-    return run<EagerTernaryRef>();
-  } else if (evaluator == "eager-ternary-len") {
-    return run<EagerTernaryLen>();
-  } else if (evaluator == "eager-ternary-vm") {
-    return run<EagerTernaryVM>();
-  } else if (evaluator == "eager-ternary-nil") {
-    return run<EagerTernaryNil>();
-  } else if (evaluator == "eager-ternary-nil-32") {
-    return run<EagerTernaryNil32>();
-  } else if (evaluator == "eager-ternary-nil-vm") {
-    return run<EagerTernaryNilVM>();
-  } else if (evaluator == "eager-ternary-nil-vm-32") {
-    return run<EagerTernaryNilVM32>();
-  } else if (evaluator == "eager-ternary-nil-vm-32-rc") {
-    return run<EagerTernaryNilVM32RC>();
-  } else if (evaluator == "eager-ternary-nil-mmap") {
-    return run<EagerTernaryNilMmap>();
-  } else if (evaluator == "eager-ternary-nil-mmap-32") {
-    return run<EagerTernaryNilMmap32>();
-  } else if (evaluator == "eager-ternary-nil-mmap-vm") {
-    return run<EagerTernaryNilMmapVM>();
-  } else if (evaluator == "eager-ternary-nil-mmap-vm-32") {
-    return run<EagerTernaryNilMmapVM32>();
-  } else if (evaluator == "eager-value-mem-peek") {
-    return run<EagerValueMemPeek>();
-  } else if (evaluator == "eager-value-heap-peek") {
-    return run<EagerValueHeapPeek>();
-  } else if (evaluator == "eager-ternary-nil-mmap-peek") {
-    return run<EagerTernaryNilMmapPeek>();
-  } else if (evaluator == "eager-ternary-nil-mmap-32-peek") {
-    return run<EagerTernaryNilMmap32Peek>();
-  } else if (evaluator == "eager-graph-nil-mmap-32") {
-    return run<EagerGraphNilMmap32>();
-  } else if (evaluator == "lazy-graph-nil-mmap-32") {
-    return run<LazyGraphNilMmap32>();
-  } else if (evaluator == "lazy-app-stream") {
-    return run<LazyAppStream>();
-  } else {
-    std::cerr << "Unknown evaluator: " << evaluator << std::endl;
-    return 1;
-  }
+#define DISPATCH(Class, Name, InSuite, L, R) \
+  if (evaluator == Name) return run<Class>();
+  EVALUATORS(DISPATCH)
+#undef DISPATCH
+
+  std::cerr << "Unknown evaluator: " << evaluator << std::endl;
+  return 1;
 }

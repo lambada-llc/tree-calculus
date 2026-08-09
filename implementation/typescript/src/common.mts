@@ -3,12 +3,12 @@ export function assert_equal<T>(expected: T, actual: T, test_case: string){
   console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${test_case}`);
 }
 
-export function measure<T>(f: () => T): { result: T, elasped_ms: number } {
+export function measure<T>(f: () => T): { result: T, elapsed_ms: number } {
   const before_ms = Date.now();
   const result = f();
   const after_ms = Date.now();
-  const elasped_ms = after_ms - before_ms;
-  return { result, elasped_ms };
+  const elapsed_ms = after_ms - before_ms;
+  return { result, elapsed_ms };
 }
 
 export interface Evaluator<TTree> {

@@ -1,0 +1,6 @@
+# test.sh rewrites these on every run from the *.dag inputs beside them, and
+# nothing reads them back — it compares against the reference implementation.
+*.out.dag
+*.canon.dag
+*.combined.dag
+*.stats
