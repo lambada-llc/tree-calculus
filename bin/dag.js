@@ -413,20 +413,30 @@ var DagModule = class _DagModule {
     return null;
   }
   /**
-   * Keep only the definitions `symbol` is built from, dropping everything else
+   * Keep only the definitions `symbols` are built from, dropping everything else
    * the module happens to carry. Linking a library produces one big module; this
-   * takes a single value back out of it.
+   * takes a value back out of it — or a set of them, which is not the same as
+   * extracting each on its own and concatenating the results: what two of them
+   * share is kept once, and stays one node rather than becoming two.
+   *
+   * Several roots is also how one says "everything but": name what stays and
+   * whatever only the rest reached is gone, which is what strips a library of
+   * its tests. There is no need for a `drop`, because a definition is worth
+   * keeping exactly when something kept is built from it.
    *
    * One backwards pass suffices: a reference resolves to a definition above it,
    * so by the time a line is reached, every line that could need it has been
    * seen. Names are kept as they are — a reference by name says which symbol was
    * used, which an id no longer does.
    */
-  extract(symbol) {
-    const root = this.definition(symbol);
-    if (!root)
-      throw new Error(`unknown symbol: ${symbol}`);
-    const needed = /* @__PURE__ */ new Set([root]);
+  extract(...symbols) {
+    const needed = /* @__PURE__ */ new Set();
+    for (const symbol of symbols) {
+      const root = this.definition(symbol);
+      if (!root)
+        throw new Error(`unknown symbol: ${symbol}`);
+      needed.add(root);
+    }
     const kept = [];
     for (let i = this.lines.length - 1; i >= 0; i--) {
       const line = this.lines[i];
@@ -1005,16 +1015,23 @@ Commands:
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
                           that are not exported are made unique but stay private.
-  extract --symbol <s> [file]
-                          Keep only what <s> is built from, as a DAG naming it.
+  extract --symbol <s>... [file]
+                          Keep only what the named symbols are built from, as a
+                          DAG naming them. Several is not the same as several
+                          extracts: what two of them share is kept once.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
   --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
-  --symbol <s>            Which symbol 'extract' keeps, or 'eval' prints.
-                          'eval' defaults to the last one.
+  --symbol <s>            Which symbol 'extract' keeps \u2014 repeat it for several \u2014
+                          or which one 'eval' prints. 'eval' defaults to the
+                          last one.
+  --except <regex>        Name 'extract's symbols by what they are not: every
+                          symbol the module defines but those matching. How a
+                          library is stripped of its tests, which are the only
+                          thing nothing else is built from.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(", ")}.
                           Defaults to term.
 
@@ -1025,7 +1042,7 @@ function parse_args(argv) {
   if (!COMMANDS.includes(command))
     raise(`expected one of ${COMMANDS.join(", ")}, got ${command}`);
   const files = [];
-  const options = { format: "term" };
+  const options = { symbols: [], format: "term" };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
@@ -1034,7 +1051,9 @@ function parse_args(argv) {
     else if (arg === "--reserved")
       options.reserved = value();
     else if (arg === "--symbol")
-      options.symbol = value();
+      options.symbols.push(value());
+    else if (arg === "--except")
+      options.except = value();
     else if (arg === "--format")
       options.format = value();
     else if (arg.startsWith("--"))
@@ -1070,14 +1089,19 @@ function run(command, files, options) {
       return utf8(DagModule.parse(read_input(files), { absorb_internal_aliases: false }).qualify(prefix, { reserved: (name) => is_label(name) || !!extra?.test(name) }).toString());
     }
     case "extract": {
-      const symbol = options.symbol ?? raise("extract needs --symbol");
-      return utf8(DagModule.parse(read_input(files)).extract(symbol).toString([symbol]));
+      const module2 = DagModule.parse(read_input(files));
+      const excluded = options.except === void 0 ? null : new RegExp(options.except);
+      const matched = excluded === null ? [] : [...new Set(module2.lines.filter((line) => line.length > 1 && is_symbol_name(line[0].symbol)).map((line) => line[0].symbol).filter((name) => !excluded.test(name)))];
+      const symbols = [.../* @__PURE__ */ new Set([...options.symbols, ...matched])];
+      if (!symbols.length)
+        raise("extract needs --symbol or --except");
+      return utf8(module2.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
     }
     case "eval": {
       const text = read_input(files);
       const origin = files.length && files[0] !== "-" ? files[0] : "";
       const format = formatters[options.format] ?? raise(`unrecognized format ${options.format}`);
-      const value = environment3(lazy_stacks_default, text, { origin })(options.symbol ?? last_symbol(text));
+      const value = environment3(lazy_stacks_default, text, { origin })(options.symbols.at(-1) ?? last_symbol(text));
       const out = format.to(value);
       return options.format === "buffer" ? out : new Uint8Array([...out, 10]);
     }

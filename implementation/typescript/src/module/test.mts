@@ -90,6 +90,30 @@ function test_extract() {
 
   assert_throws(() => DagModule.parse('a △\n').extract('nope'), 'unknown symbol: nope',
     'extracting something undefined is an error');
+
+  // Several roots at once. What they share is kept once — `k` is below both,
+  // and appears in the result the one time it was written.
+  const shared = 'k △ △\nleft △ k\nright k △\ndead △ (△ △)\n';
+  assert_equal(
+    'k △ △\nleft △ k\nright k △\n',
+    DagModule.parse(shared).extract('left', 'right').toString(),
+    'two roots keep what both are built from, once');
+  assert_equal(
+    DagModule.parse(shared).extract('left', 'right').toString(),
+    DagModule.parse(shared).extract('right', 'left').toString(),
+    'the order roots are named in does not show');
+
+  // Naming what stays is how one says "everything but": nothing else is built
+  // from `dead`, so nothing keeps it.
+  assert_equal(
+    'k △ △\nleft △ k\nright k △\n',
+    DagModule.parse(shared).extract('k', 'left', 'right').toString(),
+    'dropping a root drops what only it reached');
+
+  assert_equal(
+    '\n',
+    DagModule.parse(shared).extract().toString(),
+    'no roots keeps nothing');
 }
 
 // --- Canonicalizing ---

@@ -128,20 +128,30 @@ export class DagModule {
   }
 
   /**
-   * Keep only the definitions `symbol` is built from, dropping everything else
+   * Keep only the definitions `symbols` are built from, dropping everything else
    * the module happens to carry. Linking a library produces one big module; this
-   * takes a single value back out of it.
+   * takes a value back out of it — or a set of them, which is not the same as
+   * extracting each on its own and concatenating the results: what two of them
+   * share is kept once, and stays one node rather than becoming two.
+   *
+   * Several roots is also how one says "everything but": name what stays and
+   * whatever only the rest reached is gone, which is what strips a library of
+   * its tests. There is no need for a `drop`, because a definition is worth
+   * keeping exactly when something kept is built from it.
    *
    * One backwards pass suffices: a reference resolves to a definition above it,
    * so by the time a line is reached, every line that could need it has been
    * seen. Names are kept as they are — a reference by name says which symbol was
    * used, which an id no longer does.
    */
-  extract(symbol: string): DagModule {
-    const root = this.definition(symbol);
-    if (!root) throw new Error(`unknown symbol: ${symbol}`);
+  extract(...symbols: string[]): DagModule {
+    const needed = new Set<Box>();
+    for (const symbol of symbols) {
+      const root = this.definition(symbol);
+      if (!root) throw new Error(`unknown symbol: ${symbol}`);
+      needed.add(root);
+    }
 
-    const needed = new Set<Box>([root]);
     const kept: Line[] = [];
     for (let i = this.lines.length - 1; i >= 0; i--) {
       const line = this.lines[i];

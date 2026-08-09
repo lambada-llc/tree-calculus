@@ -5,7 +5,7 @@
 import { readFileSync } from "fs";
 import { raise } from "./common.mjs";
 import { evaluator as e, formatters } from "./format/formats.mjs";
-import { DagModule, is_label } from "./module/module.mjs";
+import { DagModule, is_label, is_symbol_name } from "./module/module.mjs";
 import { environment as environment_js } from "./module/env.mjs";
 import { link, interface_of } from "./module/link.mjs";
 import { transformer as transformer_js } from "./module/transform.mjs";
@@ -37,16 +37,23 @@ Commands:
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
                           that are not exported are made unique but stay private.
-  extract --symbol <s> [file]
-                          Keep only what <s> is built from, as a DAG naming it.
+  extract --symbol <s>... [file]
+                          Keep only what the named symbols are built from, as a
+                          DAG naming them. Several is not the same as several
+                          extracts: what two of them share is kept once.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
   --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
-  --symbol <s>            Which symbol 'extract' keeps, or 'eval' prints.
-                          'eval' defaults to the last one.
+  --symbol <s>            Which symbol 'extract' keeps — repeat it for several —
+                          or which one 'eval' prints. 'eval' defaults to the
+                          last one.
+  --except <regex>        Name 'extract's symbols by what they are not: every
+                          symbol the module defines but those matching. How a
+                          library is stripped of its tests, which are the only
+                          thing nothing else is built from.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(', ')}.
                           Defaults to term.
 
@@ -55,7 +62,8 @@ A file argument of '-', or no file at all, reads stdin.`;
 interface Options {
   prefix?: string;
   reserved?: string;
-  symbol?: string;
+  symbols: string[];
+  except?: string;
   format: string;
 }
 
@@ -66,13 +74,14 @@ function parse_args(argv: string[]): { command: string, files: string[], options
   if (!COMMANDS.includes(command)) raise(`expected one of ${COMMANDS.join(', ')}, got ${command}`);
 
   const files: string[] = [];
-  const options: Options = { format: 'term' };
+  const options: Options = { symbols: [], format: 'term' };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
     if (arg === '--prefix') options.prefix = value();
     else if (arg === '--reserved') options.reserved = value();
-    else if (arg === '--symbol') options.symbol = value();
+    else if (arg === '--symbol') options.symbols.push(value());
+    else if (arg === '--except') options.except = value();
     else if (arg === '--format') options.format = value();
     else if (arg.startsWith('--')) raise(`unrecognized option ${arg}`);
     else files.push(arg);
@@ -114,15 +123,28 @@ function run(command: string, files: string[], options: Options): Uint8Array {
     }
 
     case 'extract': {
-      const symbol = options.symbol ?? raise('extract needs --symbol');
-      return utf8(DagModule.parse(read_input(files)).extract(symbol).toString([symbol]));
+      const module = DagModule.parse(read_input(files));
+      // Named definitions are what a reader can ask for; an id is scaffolding
+      // reachable only through the lines that use it, so it is never a root of
+      // its own. The same notion of an interface `partition` works from.
+      const excluded = options.except === undefined ? null : new RegExp(options.except);
+      const matched = excluded === null ? [] : [...new Set(module.lines
+        .filter(line => line.length > 1 && is_symbol_name(line[0].symbol))
+        .map(line => line[0].symbol)
+        .filter(name => !excluded.test(name)))];
+      const symbols = [...new Set([...options.symbols, ...matched])];
+      if (!symbols.length) raise('extract needs --symbol or --except');
+      // A DAG ends in the name of its value, and a set of them has no single
+      // one to end on — so the entry line is written only when one was asked
+      // for, and several produce definitions to be read against, as a library.
+      return utf8(module.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
     }
 
     case 'eval': {
       const text = read_input(files);
       const origin = files.length && files[0] !== '-' ? files[0] : '';
       const format = formatters[options.format] ?? raise(`unrecognized format ${options.format}`);
-      const value = environment(e, text, { origin })(options.symbol ?? last_symbol(text));
+      const value = environment(e, text, { origin })(options.symbols.at(-1) ?? last_symbol(text));
       const out = format.to(value);
       return options.format === 'buffer' ? out : new Uint8Array([...out, 10]);
     }
