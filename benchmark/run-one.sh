@@ -148,10 +148,17 @@ require_node() {
   fi
 }
 
-# --- JavaScript (Node.js, Reference Implementation) ---
-JS_BIN="$REPO_ROOT/bin/main.js"
-if require_node 18 "JavaScript (reference)"; then
-  bench "JavaScript (reference)" node "$JS_BIN" -ternary "${ARGS[@]}"
+# --- JavaScript, one evaluator at a time (needs the TypeScript build) ---
+JS_RUNNER="$(dirname "$0")/js-runner.mjs"
+JS_EVALUATORS="$REPO_ROOT/implementation/typescript/src/evaluator"
+if require_node 18 "JavaScript evaluators"; then
+  for eval in lazy-stacks lazy-stacks-opt; do
+    if [[ -f "$JS_EVALUATORS/$eval.mjs" ]]; then
+      bench "JavaScript $eval" --stdin node "$JS_RUNNER" --evaluator "$eval"
+    else
+      printf "  %-35s SKIP  not built\n" "JavaScript $eval"
+    fi
+  done
 fi
 
 # --- C++ ---

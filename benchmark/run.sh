@@ -62,9 +62,25 @@ echo
 REPO_ROOT="$BENCH_DIR/.."
 
 CPP_BIN="$REPO_ROOT/implementation/cpp/main.exe"
-if [[ ! -x "$CPP_BIN" ]]; then
+# Whether it runs here, not whether it has the executable bit: a binary left
+# behind by a build for another platform has the bit and then fails every case
+# with exit 126, which reads as twenty broken evaluators rather than one stale
+# file.
+if ! printf '0\n' | "$CPP_BIN" >/dev/null 2>&1; then
   printf "building C++... "
   if (cd "$REPO_ROOT/implementation/cpp" && bash compile.sh) 2>/dev/null; then
+    printf "ok\n"
+  else
+    printf "failed (skipping)\n"
+  fi
+fi
+
+# The individual JavaScript evaluators are timed from build output, which is not
+# checked in; only the bundle in bin/ is.
+TS_DIR="$REPO_ROOT/implementation/typescript"
+if [[ ! -f "$TS_DIR/src/evaluator/lazy-stacks.mjs" ]]; then
+  printf "building TypeScript... "
+  if (cd "$TS_DIR" && npm install && npm run build) >/dev/null 2>&1; then
     printf "ok\n"
   else
     printf "failed (skipping)\n"

@@ -16,6 +16,11 @@ Implementation strategies vary along several dimensions:
   * Implicitly via host language (here: JavaScript GC). Canonical example: `{eager,lazy}-value-adt.ts`
   * Explicitly. Canonical example: `eager-value-mem.ts`
 
+A few files pair a strategy with a tuned version of itself, suffixed `-opt`.
+Those reduce identically to the file they are named after — same rules, same
+order, same number of steps — and differ only in how that reduction is carried
+out on the host: what gets allocated, and what the host is asked to do per step.
+
 ## Getting Started
 
 ### Prerequisites
