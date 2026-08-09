@@ -156,6 +156,109 @@ export class DagModule {
   }
 
   /**
+   * Give every shadowed definition a name of its own.
+   *
+   * A reference means the definition above it, so a module can bind one name
+   * twice and every reference still says which of the two it meant. That holds
+   * only while the lines stay in the order they were written, and so is lost by
+   * anything that regroups them. Renaming all but the last definition of each
+   * name says the same thing without leaning on position — references follow,
+   * because they share the box.
+   */
+  private disambiguate(): void {
+    const taken = new Set<string>();
+    const last_definition = new Map<string, Box>();
+    for (const line of this.lines) {
+      for (const b of line) taken.add(b.symbol);
+      if (line.length > 1) last_definition.set(line[0].symbol, line[0]);
+    }
+
+    let n = 0;
+    for (const line of this.lines) {
+      const head = line[0];
+      if (line.length === 1 || last_definition.get(head.symbol) === head) continue;
+      let name;
+      do { name = `${head.symbol}:s${n++}`; } while (taken.has(name));
+      taken.add(name);
+      head.symbol = name;
+    }
+  }
+
+  /**
+   * Split into what the module shares and what each of `roots` has to itself.
+   *
+   * A definition belongs to a root when that root is the only thing that
+   * reaches it. Anything reached by two roots, or by a name outside them, stays
+   * in `shared` — so concatenating `shared` with any one root's part gives back
+   * exactly what `extract` would have produced for that root, and no line is
+   * ever in two parts at once.
+   *
+   * What counts as "outside" is the module's own notion of an interface: a
+   * symbolic name is something a reader can ask for, a numeric id is internal
+   * scaffolding. Every named definition other than a root is therefore treated
+   * as reachable, and every id is reachable only through the lines that use it.
+   *
+   * The point is evaluation order. A module whose expensive parts are named
+   * roots evaluates all of them the moment it is read; partitioned, `shared`
+   * can be read once and each root's part evaluated against it on its own — at
+   * its own cost, at a time of the caller's choosing, and without repeating
+   * whatever two roots have in common.
+   *
+   * One backwards pass suffices, for the reason `extract` gives. Shadowed
+   * definitions are renamed first: a part is read after all of `shared`, so a
+   * name `shared` goes on to bind again would mean the later one by then. That
+   * rewrites this module in place — the parts hand back its own lines, so there
+   * was never a copy to rename instead.
+   */
+  partition(roots: string[]): { shared: DagModule; exclusive: Map<string, DagModule> } {
+    this.disambiguate();
+
+    // A definition's owner: the one root that reaches it, or SHARED for
+    // everything else. `undefined` means nothing has reached it yet.
+    const SHARED = Symbol('shared');
+    const owner = new Map<Box, string | symbol>();
+    const claim = (b: Box, by: string | symbol) => {
+      const had = owner.get(b);
+      owner.set(b, had === undefined || had === by ? by : SHARED);
+    };
+
+    // A name shadowed later on was only scaffolding for what came after, so a
+    // root claims its last definition and the earlier ones are shared.
+    const wanted = new Set(roots);
+    const last_definition = new Map<string, number>();
+    this.lines.forEach((line, i) => {
+      if (line.length > 1 && is_symbol_name(line[0].symbol)) last_definition.set(line[0].symbol, i);
+    });
+    this.lines.forEach((line, i) => {
+      const head = line[0];
+      if (line.length === 1) return claim(head, SHARED); // a terminator is the module's
+      if (!is_symbol_name(head.symbol)) return;
+      const name = head.symbol;
+      claim(head, wanted.has(name) && last_definition.get(name) === i ? name : SHARED);
+    });
+
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      const by = owner.get(line[0]);
+      if (by === undefined) continue; // nothing reaches this definition
+      for (let j = 1; j < line.length; j++) claim(line[j], by);
+    }
+
+    const shared = new DagModule();
+    const exclusive = new Map<string, DagModule>();
+    for (const name of roots) {
+      if (!this.definition(name)) throw new Error(`unknown symbol: ${name}`);
+      exclusive.set(name, new DagModule());
+    }
+
+    for (const line of this.lines) {
+      const by = owner.get(line[0]);
+      (typeof by === 'string' ? exclusive.get(by)! : shared).lines.push(line);
+    }
+    return { shared, exclusive };
+  }
+
+  /**
    * Namespace this module's exports under `prefix`, so that `not` compiled from
    * `bool/bool.lamb` can become `Bool.not` without colliding with any other
    * module's `not`.

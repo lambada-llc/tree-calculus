@@ -168,6 +168,62 @@ function test_link() {
     'linking is deterministic');
 }
 
+function test_partition() {
+  // `one` and `two` each build on the shared `k`, and `two` alone uses `2`.
+  const library = 'k △ △\n1 k △\none 1\n2 k k\ntwo 2\nkept △ k\n';
+  const { shared, exclusive } = DagModule.parse(library).partition(['one', 'two']);
+  assert_equal(
+    'k △ △\nkept △ k\n',
+    shared.toString(),
+    'what a non-root reaches stays shared');
+  assert_equal('1 k △\none 1\n', exclusive.get('one')!.toString(),
+    'a root takes the definitions only it reaches, referring to shared ones by name');
+  assert_equal('2 k k\ntwo 2\n', exclusive.get('two')!.toString(), 'and so does the other');
+
+  // The point of the split: shared + one root reproduces that root's extract.
+  const module = DagModule.parse(library);
+  assert_equal(
+    module.extract('two').toString(['two']),
+    DagModule.parse(module.partition(['two']).shared.toString()
+      + module.partition(['two']).exclusive.get('two')!.toString(['two']))
+      .extract('two').toString(['two']),
+    'shared plus a root is what extracting that root gives');
+
+  assert_equal(
+    'shared △ △\nboth shared shared\none both\ntwo both\n',
+    (({ shared, exclusive }) => shared.toString() + exclusive.get('one')!.toString()
+      + exclusive.get('two')!.toString())(
+      DagModule.parse('shared △ △\nboth shared shared\none both\ntwo both\n')
+        .partition(['one', 'two'])),
+    'what two roots both reach is shared rather than duplicated');
+
+  assert_equal(
+    'a △ △\nterminator a\na\n',
+    (({ shared }) => shared.toString())(
+      DagModule.parse('a △ △\nterminator a\na\n').partition([])),
+    'a module with no roots is entirely shared, terminator included');
+
+  assert_throws(() => DagModule.parse('a △\n').partition(['nope']), 'unknown symbol: nope',
+    'partitioning on something undefined is an error');
+
+  // `a` means the first definition where `one` uses it and the second below —
+  // a distinction position keeps and a split would lose, so the earlier one is
+  // renamed and `one` follows it.
+  const shadowing = DagModule.parse('a △ △\n1 a △\none 1\na △\nkept a\n');
+  const split = shadowing.partition(['one']);
+  assert_equal(
+    'a:s0 △ △\na △\nkept a\n',
+    split.shared.toString(),
+    'a shadowed definition is given a name of its own');
+  assert_equal('1 a:s0 △\none 1\n', split.exclusive.get('one')!.toString(),
+    'and what referred to it says so');
+  assert_same_value(
+    'a △ △\n1 a △\none 1\na △\nkept a\n',
+    split.shared.toString() + split.exclusive.get('one')!.toString(),
+    'one',
+    'renaming preserves the value');
+}
+
 // --- Environments ---
 
 function test_environment() {
@@ -180,6 +236,13 @@ function test_environment() {
     'unbound symbol: nope', 'looking up something undefined is an error');
   assert_throws(() => environment(e, 'x missing\n', { origin: 'some.dag' }), 'some.dag:1:',
     'errors while reading point at the line');
+
+  assert_equal('21100', formatter_ternary.to(e, get.reduce('x sk △\nx\n')),
+    'an expression reduces against the module');
+  assert_throws(() => get('x'), 'unbound symbol: x',
+    'and leaves nothing of its own behind');
+  assert_throws(() => get.reduce('x k △\n'), 'not terminated by a value',
+    'an expression that names no value is an error');
 }
 
 // --- Files ---
@@ -203,6 +266,7 @@ export function test() {
   test_conventions();
   test_qualify();
   test_extract();
+  test_partition();
   test_canonicalize();
   test_interface();
   test_link();

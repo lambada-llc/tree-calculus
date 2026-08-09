@@ -21,7 +21,7 @@ import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import { Evaluator, raise } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
-import { EnvOptions } from "../module/env.mjs";
+import { EnvOptions, Environment } from "../module/env.mjs";
 import { memoize, TransformerOptions } from "../module/transform.mjs";
 
 const SOURCE = 'implementation/cpp/dag-machine/runner.cpp';
@@ -183,9 +183,17 @@ function environment<TTree>(
   e: Evaluator<TTree>,
   text: string,
   _: EnvOptions = {},
-): (symbol: string) => TTree {
+): Environment<TTree> {
   const path = once(() => as_file(text, 'module.dag'));
-  return (symbol: string) => formatter_dag.of(e, ask(path(), `eval-dag ${symbol}`).toString('utf8'));
+  const of_answer = (answer: Buffer) => formatter_dag.of(e, answer.toString('utf8'));
+  const get = (symbol: string) => of_answer(ask(path(), `eval-dag ${symbol}`));
+  // The runner reads the payload in a scope of its own, so this leaves the
+  // loaded module exactly as it found it — see `reduce` in runner.cpp.
+  get.reduce = (text: string) => {
+    const payload = Buffer.from(text, 'utf8');
+    return of_answer(ask(path(), `reduce ${payload.length}`, payload));
+  };
+  return get;
 }
 
 /**

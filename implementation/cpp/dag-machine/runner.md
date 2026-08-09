@@ -25,11 +25,19 @@ newline-terminated; some carry a length-prefixed payload.
 | `eval <symbol>\n`                        | `data <len>\n<bytes>` (`to_string`)   |
 | `eval-dag <symbol>\n`                    | `data <len>\n<bytes>` (reduced DAG)   |
 | `apply <symbol> <byte-len>\n<bytes>`     | `data <len>\n<bytes>` (`to_string`)   |
+| `reduce <byte-len>\n<bytes>`             | `data <len>\n<bytes>` (reduced DAG)   |
 | `reset\n`                                | `ok\n` (drop arena, re-parse bundle)  |
 | `quit\n`                                 | `ok\n` (and exits)                    |
 
 On any failure: `err <message>\n`. `<bytes>` in responses is exactly
 `<len>` raw bytes, no trailing newline (length is exact).
+
+`reduce` takes an expression rather than a symbol: its payload is a DAG,
+read with the loaded module in scope and in a scope of its own, so what
+it defines shadows nothing and is released along with the answer. That is
+what lets a module be loaded apart from the expressions asked of it —
+under the eager evaluator especially, where putting them in the module
+means reading it evaluates every one of them.
 
 State across commands: reduction happens in place, so trees in the env
 get progressively more reduced as commands fire — pure benefit. The

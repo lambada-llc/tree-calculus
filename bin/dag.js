@@ -441,6 +441,108 @@ var DagModule = class _DagModule {
     return out;
   }
   /**
+   * Give every shadowed definition a name of its own.
+   *
+   * A reference means the definition above it, so a module can bind one name
+   * twice and every reference still says which of the two it meant. That holds
+   * only while the lines stay in the order they were written, and so is lost by
+   * anything that regroups them. Renaming all but the last definition of each
+   * name says the same thing without leaning on position — references follow,
+   * because they share the box.
+   */
+  disambiguate() {
+    const taken = /* @__PURE__ */ new Set();
+    const last_definition = /* @__PURE__ */ new Map();
+    for (const line of this.lines) {
+      for (const b of line)
+        taken.add(b.symbol);
+      if (line.length > 1)
+        last_definition.set(line[0].symbol, line[0]);
+    }
+    let n = 0;
+    for (const line of this.lines) {
+      const head = line[0];
+      if (line.length === 1 || last_definition.get(head.symbol) === head)
+        continue;
+      let name;
+      do {
+        name = `${head.symbol}:s${n++}`;
+      } while (taken.has(name));
+      taken.add(name);
+      head.symbol = name;
+    }
+  }
+  /**
+   * Split into what the module shares and what each of `roots` has to itself.
+   *
+   * A definition belongs to a root when that root is the only thing that
+   * reaches it. Anything reached by two roots, or by a name outside them, stays
+   * in `shared` — so concatenating `shared` with any one root's part gives back
+   * exactly what `extract` would have produced for that root, and no line is
+   * ever in two parts at once.
+   *
+   * What counts as "outside" is the module's own notion of an interface: a
+   * symbolic name is something a reader can ask for, a numeric id is internal
+   * scaffolding. Every named definition other than a root is therefore treated
+   * as reachable, and every id is reachable only through the lines that use it.
+   *
+   * The point is evaluation order. A module whose expensive parts are named
+   * roots evaluates all of them the moment it is read; partitioned, `shared`
+   * can be read once and each root's part evaluated against it on its own — at
+   * its own cost, at a time of the caller's choosing, and without repeating
+   * whatever two roots have in common.
+   *
+   * One backwards pass suffices, for the reason `extract` gives. Shadowed
+   * definitions are renamed first: a part is read after all of `shared`, so a
+   * name `shared` goes on to bind again would mean the later one by then. That
+   * rewrites this module in place — the parts hand back its own lines, so there
+   * was never a copy to rename instead.
+   */
+  partition(roots) {
+    this.disambiguate();
+    const SHARED = Symbol("shared");
+    const owner = /* @__PURE__ */ new Map();
+    const claim = (b, by) => {
+      const had = owner.get(b);
+      owner.set(b, had === void 0 || had === by ? by : SHARED);
+    };
+    const wanted = new Set(roots);
+    const last_definition = /* @__PURE__ */ new Map();
+    this.lines.forEach((line, i) => {
+      if (line.length > 1 && is_symbol_name(line[0].symbol))
+        last_definition.set(line[0].symbol, i);
+    });
+    this.lines.forEach((line, i) => {
+      const head = line[0];
+      if (line.length === 1)
+        return claim(head, SHARED);
+      if (!is_symbol_name(head.symbol))
+        return;
+      const name = head.symbol;
+      claim(head, wanted.has(name) && last_definition.get(name) === i ? name : SHARED);
+    });
+    for (let i = this.lines.length - 1; i >= 0; i--) {
+      const line = this.lines[i];
+      const by = owner.get(line[0]);
+      if (by === void 0)
+        continue;
+      for (let j = 1; j < line.length; j++)
+        claim(line[j], by);
+    }
+    const shared = new _DagModule();
+    const exclusive = /* @__PURE__ */ new Map();
+    for (const name of roots) {
+      if (!this.definition(name))
+        throw new Error(`unknown symbol: ${name}`);
+      exclusive.set(name, new _DagModule());
+    }
+    for (const line of this.lines) {
+      const by = owner.get(line[0]);
+      (typeof by === "string" ? exclusive.get(by) : shared).lines.push(line);
+    }
+    return { shared, exclusive };
+  }
+  /**
    * Namespace this module's exports under `prefix`, so that `not` compiled from
    * `bool/bool.lamb` can become `Bool.not` without colliding with any other
    * module's `not`.
@@ -555,22 +657,42 @@ function environment(e, text, options = {}) {
   const { origin = "" } = options;
   const env = { [LEAF]: e.leaf };
   let context = "";
+  const read2 = (text2, scope) => {
+    const get2 = (symbol) => {
+      if (symbol in scope)
+        return scope[symbol];
+      if (symbol in env)
+        return env[symbol];
+      throw new Error(`${context}unbound symbol: ${symbol}`);
+    };
+    let value;
+    let line_number = 0;
+    for (const line of text2.split(/\r?\n/)) {
+      line_number++;
+      context = `${origin ? `${origin}:` : ""}${line_number}: `;
+      const words = line.split(" ");
+      if (words.length === 3)
+        scope[words[0]] = e.apply(get2(words[1]), get2(words[2]));
+      else if (words.length === 2)
+        scope[words[0]] = get2(words[1]);
+      else if (words[0])
+        value = get2(words[0]);
+    }
+    context = "";
+    return value;
+  };
+  read2(text, env);
   const get = (symbol) => {
     if (symbol in env)
       return env[symbol];
-    throw new Error(`${context}unbound symbol: ${symbol}`);
+    throw new Error(`unbound symbol: ${symbol}`);
   };
-  let line_number = 0;
-  for (const line of text.split(/\r?\n/)) {
-    line_number++;
-    context = `${origin ? `${origin}:` : ""}${line_number}: `;
-    const words = line.split(" ");
-    if (words.length === 3)
-      env[words[0]] = e.apply(get(words[1]), get(words[2]));
-    else if (words.length === 2)
-      env[words[0]] = get(words[1]);
-  }
-  context = "";
+  get.reduce = (text2) => {
+    const value = read2(text2, /* @__PURE__ */ Object.create(null));
+    if (value === void 0)
+      throw new Error("dag representation was not terminated by a value");
+    return value;
+  };
   return get;
 }
 
@@ -832,7 +954,13 @@ function transformer2(_, program, options = {}) {
 }
 function environment2(e, text, _ = {}) {
   const path = once(() => as_file(text, "module.dag"));
-  return (symbol) => dag_default.of(e, ask(path(), `eval-dag ${symbol}`).toString("utf8"));
+  const of_answer = (answer) => dag_default.of(e, answer.toString("utf8"));
+  const get = (symbol) => of_answer(ask(path(), `eval-dag ${symbol}`));
+  get.reduce = (text2) => {
+    const payload = Buffer.from(text2, "utf8");
+    return of_answer(ask(path(), `reduce ${payload.length}`, payload));
+  };
+  return get;
 }
 var native = ["1", "eager"].includes(process.env.TREE_CALCULUS_RUNNER ?? "") ? { transformer: transformer2, environment: environment2 } : null;
 

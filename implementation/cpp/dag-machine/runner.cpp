@@ -34,6 +34,10 @@
 //     -> data <len>\n<bytes>                 (reduced env[symbol] as hash-consed DAG text)
 //   apply <symbol> <byte-len>\n<bytes>
 //     -> data <len>\n<bytes>                 (to_string of apply(env[sym], of_string(bytes)))
+//   reduce <byte-len>\n<bytes>
+//     -> data <len>\n<bytes>                 (value of <bytes>, a DAG read against
+//                                             the loaded module, as hash-consed DAG
+//                                             text; defines nothing that outlives it)
 //   reset\n
 //     -> ok\n                                (drop arena, re-parse the loaded bundle)
 //   quit\n
@@ -116,6 +120,14 @@ using Tree = Reducer::Tree;
 static inline void hold(Tree t) { g_e.roots().push_back(t); }
 
 static inline void drop_held() { g_e.roots().pop_back(); }
+
+// Everything held while this is alive is released when it goes out of scope,
+// however the scope is left. For a command that roots an unknown number of
+// trees — reading a DAG roots one per line — and must leave none behind.
+struct HeldScope {
+  const size_t mark = g_e.roots().size();
+  ~HeldScope() { g_e.roots().resize(mark); }
+};
 
 static inline void set_collection_budget(size_t nodes) { g_e.set_budget(nodes); }
 
@@ -322,17 +334,25 @@ using TreeEnv = std::unordered_map<std::string, Tree>;
 // Returns the value of any 1-word (terminator) line if present, else 0.
 // Bundles used in server mode typically have no terminator; one-shot mode
 // expects one.
-static Tree parse_dag_into(std::string_view text, TreeEnv& env) {
+//
+// `outer` is an enclosing scope to resolve names `env` does not define. That is
+// what makes it possible to read an expression *against* a loaded module rather
+// than into it: the expression's own bindings go in a scope of their own, where
+// they shadow nothing that outlives them and can be dropped whole afterwards.
+static Tree parse_dag_into(std::string_view text, TreeEnv& env,
+                           const TreeEnv* outer = nullptr) {
   if (env.empty()) env.emplace("\xe2\x96\xb3", g_e.leaf()); // △
 
   auto get = [&](std::string_view name) -> Tree {
     auto it = env.find(std::string(name));
-    if (it == env.end()) {
-      std::string msg = "unbound variable: ";
-      msg.append(name);
-      die(msg.c_str());
+    if (it != env.end()) return it->second;
+    if (outer) {
+      auto o = outer->find(std::string(name));
+      if (o != outer->end()) return o->second;
     }
-    return it->second;
+    std::string msg = "unbound variable: ";
+    msg.append(name);
+    die(msg.c_str());
   };
 
   size_t i = 0, n = text.size();
@@ -394,6 +414,18 @@ static void write_data(const std::string& s) {
 static void write_err(const std::string& msg) {
   std::fprintf(stdout, "err %s\n", msg.c_str());
   std::fflush(stdout);
+}
+
+// The decimal byte count a payload-carrying command ends in, or -1 if that is
+// not what `s` is.
+static long long payload_length(std::string_view s) {
+  if (s.empty()) return -1;
+  long long n = 0;
+  for (char ch : s) {
+    if (ch < '0' || ch > '9') return -1;
+    n = n * 10 + (ch - '0');
+  }
+  return n;
 }
 
 // Read exactly n bytes from stdin into out (resized).
@@ -479,14 +511,8 @@ static int run_server() {
         size_t sep = rest.rfind(' ');
         if (sep == std::string_view::npos) { write_err("apply: expected <symbol> <len>"); continue; }
         std::string sym(rest.substr(0, sep));
-        std::string_view lenstr = rest.substr(sep + 1);
-        size_t len = 0;
-        bool bad = false;
-        for (char ch : lenstr) {
-          if (ch < '0' || ch > '9') { bad = true; break; }
-          len = len * 10 + (ch - '0');
-        }
-        if (bad) { write_err("apply: bad length"); continue; }
+        const long long len = payload_length(rest.substr(sep + 1));
+        if (len < 0) { write_err("apply: bad length"); continue; }
 
         std::string payload;
         if (!read_exact(payload, len)) { write_err("apply: short read"); return 1; }
@@ -500,6 +526,26 @@ static int run_server() {
         std::string out = to_string_marshal(result);
         drop_held();
         write_data(out);
+        continue;
+      }
+
+      if (verb == "reduce") {
+        const long long len = payload_length(rest);
+        if (len < 0) { write_err("reduce: bad length"); continue; }
+
+        std::string payload;
+        if (!read_exact(payload, len)) { write_err("reduce: short read"); return 1; }
+
+        // Read against the module rather than into it: `local` shadows nothing
+        // and is gone by the next command, and so are the roots the reading
+        // needed. A caller can ask a thousand questions in a row without the
+        // module growing by one binding or the collector losing a thing to
+        // reclaim.
+        TreeEnv local;
+        HeldScope held;
+        const Tree value = parse_dag_into(payload, local, &env);
+        if (!value) { write_err("reduce: not terminated by a value"); continue; }
+        write_data(to_dag(value));
         continue;
       }
 
