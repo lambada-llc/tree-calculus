@@ -7,7 +7,15 @@ encoded on the way in and out, and how a node is laid out in memory:
 | --- | --- | --- |
 | [eager-value](./eager-value/) | [ternary](../../conventions/README.md#ternary) | arity-tagged (`type`, `u`, `v`) — 12 bytes |
 | [eager-nil](./eager-nil/) | [ternary](../../conventions/README.md#ternary) | tagless, arity from null children — 8 bytes |
+| [eager-nil-vm](./eager-nil-vm/) | [ternary](../../conventions/README.md#ternary) | tagless — 8 bytes; iterative, frames in memory instead of recursion |
 | [min-bin](./min-bin/) | [minimalist binary](../../conventions/README.md#minimalist-binary) | arity-tagged |
+
+All but `eager-nil-vm` recurse on the machine stack, which caps the tree
+depth and reduction depth they can handle at whatever stack the engine
+grants (under Node, a `RuntimeError` at roughly 10⁴–10⁵ frames — several of
+[the benchmark workloads](../../benchmark/) exceed it). `eager-nil-vm` keeps
+its frames in linear memory and has no such cap; it is the variant to reach
+for when depth is unknown.
 
 Each variant's own README covers only what is particular to it. Everything
 below applies to all of them.
@@ -21,7 +29,7 @@ therefore the program and the rest are its arguments.
 ## Usage
 
 Any WASI-compatible runtime. The `eager-*` variants also ship a `main.mjs` that
-runs the same module under Node.
+runs the same module under Node (18+).
 
 ```sh
 # 21100 is the identity tree, so this prints 10 back
@@ -33,6 +41,15 @@ cd eager-value
 cd ../min-bin
 { echo 001010111; echo 1; } | wasmtime main.wasm
 ```
+
+`main.mjs` does not use `node:wasi`: the modules import only `fd_read` and
+`fd_write`, and [run.mjs](./run.mjs) provides those two as plain JS. The
+experimental `node:wasi` binding segfaults nondeterministically (~40% of runs
+on Node 22, macOS and Linux alike, on any input — the long run of `exit 139`
+rows in the benchmark logs), and a plain import object has none of that,
+needs no minimum Node version beyond WASM itself, and turns traps into
+catchable `RuntimeError`s instead of crashes. The `.wasm` binaries are
+unchanged and remain runnable under any real WASI runtime.
 
 Further examples, given in both encodings. A leaf is `0` in ternary and `1` in
 binary; a two-leaf fork is `200` and `00111`:

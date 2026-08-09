@@ -1,12 +1,6 @@
 #!/usr/bin/env node
-// Node.js WASI runner for main.wasm
+// Node runner for main.wasm — see ../run.mjs
 
-import { WASI } from "node:wasi";
-import { readFile } from "node:fs/promises";
+import { run } from "../run.mjs";
 
-const wasi = new WASI({ version: "preview1" });
-const { instance } = await WebAssembly.instantiate(
-  await readFile(new URL("./main.wasm", import.meta.url)),
-  wasi.getImportObject()
-);
-wasi.start(instance);
+await run(new URL("./main.wasm", import.meta.url));

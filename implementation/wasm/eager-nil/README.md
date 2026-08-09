@@ -45,3 +45,11 @@ Two other things that did not explain anything, in case they look tempting:
 alignment (padding the tagged node to an aligned 16 bytes is no faster under
 wasmtime than the unaligned 12) and arena growth (preallocating 1 GB so
 `memory.grow` never runs changes no result above).
+
+## Depth
+
+Reduction, parsing and printing all recurse on the machine stack, so workload
+depth is capped by whatever stack the engine grants (under Node, roughly
+10⁴–10⁵ frames). [../eager-nil-vm](../eager-nil-vm/) keeps this variant's node
+representation but moves the frames into linear memory, when that cap is the
+problem.
