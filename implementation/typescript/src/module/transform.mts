@@ -14,7 +14,7 @@
 // invalidates everything.
 
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { resolve } from "path";
 import { Evaluator, marshal } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
@@ -46,7 +46,18 @@ export function memoize(
   const program_hash = sha256(program);
   return (input: string): string => {
     const path = resolve(cache_dir, sha256(`${program_hash}\n${input}`));
-    if (!existsSync(path)) writeFileSync(path, run(input));
+    if (!existsSync(path)) {
+      // Through a temporary and a rename, so a parallel writer filling the
+      // same cache never shows a reader half an entry.
+      const temporary = `${path}.${process.pid}.tmp`;
+      try {
+        writeFileSync(temporary, run(input));
+        renameSync(temporary, path);
+      } catch (error) {
+        rmSync(temporary, { force: true });
+        throw error;
+      }
+    }
     return readFileSync(path, 'utf8');
   };
 }

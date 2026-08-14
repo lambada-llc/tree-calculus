@@ -85,6 +85,7 @@
 // Build:
 //   c++ -O3 -std=c++17 -pthread [-DRUNNER_EAGER] -o runner runner.cpp
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -331,6 +332,11 @@ static Tree of_string(std::string_view s) {
 
 using TreeEnv = std::unordered_map<std::string, Tree>;
 
+// The bindings of the loaded module in definition order — what `dump` walks.
+// The map alone cannot say what order the module said things in, and a dump
+// that scrambled definition order would not be the same module.
+static std::vector<std::pair<std::string, Tree>> g_env_order;
+
 // Returns the value of any 1-word (terminator) line if present, else 0.
 // Bundles used in server mode typically have no terminator; one-shot mode
 // expects one.
@@ -340,7 +346,8 @@ using TreeEnv = std::unordered_map<std::string, Tree>;
 // than into it: the expression's own bindings go in a scope of their own, where
 // they shadow nothing that outlives them and can be dropped whole afterwards.
 static Tree parse_dag_into(std::string_view text, TreeEnv& env,
-                           const TreeEnv* outer = nullptr) {
+                           const TreeEnv* outer = nullptr,
+                           std::vector<std::pair<std::string, Tree>>* order = nullptr) {
   if (env.empty()) env.emplace("\xe2\x96\xb3", g_e.leaf()); // △
 
   auto get = [&](std::string_view name) -> Tree {
@@ -380,8 +387,14 @@ static Tree parse_dag_into(std::string_view text, TreeEnv& env,
       // A binding is a root for as long as the module is loaded. Collection does
       // not move anything, so registering it once is all it ever needs.
       hold(value);
+      // `~` names are a dump's structural scaffolding (see dump_module): part
+      // of the module's environment so aliases resolve, but not part of what
+      // it says — a re-dump builds scaffolding of its own.
+      if (order && tok[0][0] != '~') order->emplace_back(std::string(tok[0]), value);
     } else if (nt == 2) {
-      env[std::string(tok[0])] = get(tok[1]);
+      const Tree value = get(tok[1]);
+      env[std::string(tok[0])] = value;
+      if (order && tok[0][0] != '~') order->emplace_back(std::string(tok[0]), value);
     } else if (nt == 1) {
       return get(tok[0]);
     }
@@ -444,9 +457,92 @@ static bool read_exact(std::string& out, size_t n) {
 // so far becomes invalid, which is why this only ever runs between commands.
 static void load_bundle(TreeEnv& env, const std::string& bundle_path) {
   env.clear();
+  g_env_order.clear();
   g_e.clear();
-  parse_dag_into(read_file(bundle_path.c_str()), env);
+  parse_dag_into(read_file(bundle_path.c_str()), env, nullptr, &g_env_order);
 }
+
+#ifdef RUNNER_EAGER
+// The loaded module with every binding in the state eager loading left it:
+// fully reduced. Rendered as one hash-consed DAG whose every application is a
+// value being *built* (△ applied to a child is a stem, a stem applied to a
+// child is a fork), re-loading it costs parsing and interning but no
+// reduction — which is what makes the dump worth caching across processes.
+//
+// Structural lines use a `~` id space of their own so they can never collide
+// with the module's names, and each binding is then an alias into it, in
+// definition order, so the reload defines exactly what the original did.
+//
+// Only the eager runner offers this: under the lazy one a binding may have no
+// normal form, and rendering it here would be the divergence that evaluator
+// exists to avoid.
+static std::string dump_module() {
+  std::string out;
+  out.reserve(64 << 20);
+  std::unordered_map<Tree, uint32_t> id; // arena node -> structural line id
+  uint32_t next = 0;
+  std::vector<Tree> todo;
+
+  auto ref = [&](Tree t, std::string& to) {
+    if (t == 1) { to += "\xe2\x96\xb3"; return; } // △
+    to += '~';
+    to += std::to_string(id.at(t));
+  };
+
+  // Bottom-up: a node is emitted once both children (and for a fork, the stem
+  // of its left child) are. The stem is interned on the way — hash-consing
+  // makes that the same node every fork over this child shares.
+  auto emit = [&](Tree root) {
+    if (root == 1 || id.count(root)) return;
+    todo.push_back(root);
+    while (!todo.empty()) {
+      const Tree at = todo.back();
+      if (at == 1 || id.count(at)) { todo.pop_back(); continue; }
+      const Shape s = shape(at);
+      Tree stem_of = 0; // fork only: the "△ u" node its line applies to v
+      bool ready = true;
+      auto need = [&](Tree child) {
+        if (child != 1 && !id.count(child)) { todo.push_back(child); ready = false; }
+      };
+      if (s.arity == 1) {
+        need(s.u);
+      } else {
+        need(s.u);
+        need(s.v);
+        if (ready) {
+          stem_of = g_e.stem(s.u); // interned: every fork over this child shares it
+          need(stem_of);
+        }
+      }
+      if (!ready) continue;
+      todo.pop_back();
+      const uint32_t line = next++;
+      out += '~';
+      out += std::to_string(line);
+      out += ' ';
+      if (s.arity == 1) {          // ~i △ u   — apply(△, u) reloads as stem(u)
+        out += "\xe2\x96\xb3 ";
+        ref(s.u, out);
+      } else {                     // ~i (△ u) v — apply(stem u, v) reloads as fork(u, v)
+        ref(stem_of, out);
+        out += ' ';
+        ref(s.v, out);
+      }
+      out += '\n';
+      id.emplace(at, line);
+    }
+  };
+
+  for (const auto& [name, value] : g_env_order) {
+    emit(value);
+    out += name;
+    out += ' ';
+    ref(value, out);
+    out += '\n';
+  }
+  return out;
+}
+#endif
 
 // Collection budget, in nodes. 0 lets the arena grow unchecked. The default keeps
 // peak memory below the hard limits typical hosted CI builders impose (Cloudflare
@@ -464,6 +560,51 @@ static int run_server() {
   TreeEnv env;
   std::string bundle_path; // remembered for `reset`
   bool loaded = false;
+
+  // RUNNER_STATS=1: per-command wall time and evaluator counters on stderr.
+  const bool stats = [] {
+    const char* s = std::getenv("RUNNER_STATS");
+    return s && *s && std::strcmp(s, "0") != 0;
+  }();
+  struct CommandStats {
+#ifdef RUNNER_EAGER
+    Reducer::Stats before;
+#endif
+    std::chrono::steady_clock::time_point start;
+    std::string what;
+    bool armed = false;
+    void begin(const std::string& line) {
+      armed = true;
+      what = line.substr(0, 48);
+#ifdef RUNNER_EAGER
+      before = g_e.stats_counters;
+#endif
+      start = std::chrono::steady_clock::now();
+    }
+    ~CommandStats() { flush(); }
+    void flush() {
+      if (!armed) return;
+      armed = false;
+      const double ms = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start).count();
+#ifdef RUNNER_EAGER
+      const auto& now = g_e.stats_counters;
+      std::fprintf(stderr,
+          "runner-stats: %8.1fms steps=%llu hits=%llu puts=%llu gcs=%llu marked=%llu "
+          "arena=%zu | %s\n",
+          ms,
+          (unsigned long long)(now.steps - before.steps),
+          (unsigned long long)(now.memo_hits - before.memo_hits),
+          (unsigned long long)(now.memo_puts - before.memo_puts),
+          (unsigned long long)(now.gcs - before.gcs),
+          (unsigned long long)(now.gc_marked - before.gc_marked),
+          g_e.allocated(), what.c_str());
+#else
+      std::fprintf(stderr, "runner-stats: %8.1fms arena=%zu | %s\n",
+                   ms, g_e.allocated(), what.c_str());
+#endif
+    }
+  };
 
   std::string line;
   while (true) {
@@ -487,6 +628,8 @@ static int run_server() {
     }
 
     try {
+      CommandStats cs;
+      if (stats) cs.begin(line);
       if (verb == "load" || verb == "reset") {
         if (verb == "load") bundle_path = std::string(rest);
         if (bundle_path.empty()) { write_err("no bundle loaded"); continue; }
@@ -498,6 +641,15 @@ static int run_server() {
       }
 
       if (!loaded) { write_err("no bundle loaded"); continue; }
+
+      if (verb == "dump") {
+#ifdef RUNNER_EAGER
+        write_data(dump_module());
+#else
+        write_err("dump: only the eager runner holds a module in dumpable form");
+#endif
+        continue;
+      }
 
       if (verb == "eval" || verb == "eval-dag") {
         std::string sym(rest);

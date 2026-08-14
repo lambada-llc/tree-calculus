@@ -26,6 +26,7 @@ newline-terminated; some carry a length-prefixed payload.
 | `eval-dag <symbol>\n`                    | `data <len>\n<bytes>` (reduced DAG)   |
 | `apply <symbol> <byte-len>\n<bytes>`     | `data <len>\n<bytes>` (`to_string`)   |
 | `reduce <byte-len>\n<bytes>`             | `data <len>\n<bytes>` (reduced DAG)   |
+| `dump\n`                                 | `data <len>\n<bytes>` (evaluated env) |
 | `reset\n`                                | `ok\n` (drop arena, re-parse bundle)  |
 | `quit\n`                                 | `ok\n` (and exits)                    |
 
@@ -38,6 +39,17 @@ it defines shadows nothing and is released along with the answer. That is
 what lets a module be loaded apart from the expressions asked of it —
 under the eager evaluator especially, where putting them in the module
 means reading it evaluates every one of them.
+
+`dump` (eager only) renders the loaded module back out as one
+hash-consed DAG whose every binding is in the state eager loading left
+it: fully reduced. Its structural lines live in a `~` id space of their
+own, and every application in them merely *builds* a value — △ applied
+to a child is a stem, a stem applied to a child is a fork — so loading a
+dump costs parsing and interning but no reduction. That is what the
+TypeScript runtime's module cache keeps (see `TREE_CALCULUS_CACHE` in
+`implementation/typescript/src/runner/native.mts`): evaluating a
+module's bindings is paid once per module version, not once per process
+that reads it.
 
 State across commands: reduction happens in place, so trees in the env
 get progressively more reduced as commands fire — pure benefit. The
@@ -101,6 +113,14 @@ Under `-DRUNNER_EAGER` the same setting also sizes the memo, which is the
 rest of what a collection has to bound; a tighter budget therefore costs
 a little more re-reduction as well as more sweeps.
 
+#### `RUNNER_STATS` *(default: off)*
+
+Any non-`0` value makes server mode print one line per command to
+stderr: wall time, and under `-DRUNNER_EAGER` the evaluator's counters
+for that command (reduction steps, memo hits and writes, collections and
+what they marked, arena high water). This is how one finds out where a
+build's time actually goes before optimizing anything.
+
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
 `runner` runs all real work on a worker pthread with this stack size,
@@ -109,6 +129,23 @@ thousands of frames deep on heavy benchmark suites (`Poly.Bench`,
 `Nat.Bench`). Bump this if you hit a `runner: pthread_create(stack=…): …`
 error or a SIGSEGV during reduction. The eager evaluator keeps its
 continuations on the heap and does not depend on it.
+
+### Read by the TypeScript runtime that drives `runner`
+
+#### `TREE_CALCULUS_CACHE` *(default: unset — no caching)*
+
+A directory for the runtime's reduction caches, shared freely between
+builds, branches and parallel processes because every entry is
+content-addressed: evaluated modules under `module-v1/` (what `dump`
+returns, keyed by module text, re-loadable without reduction — plus a
+fingerprint sidecar under `module-fp-v1/` that lets the *next* version
+of a module alias every binding it did not change into the previous
+dump instead of re-evaluating it), and per-term results under
+`reduce-v1/` (what `eval-dag`/`reduce` returned, keyed by a Merkle
+fingerprint of the term, so an expect test whose term did not change is
+answered without spawning the runner at all). Reduction is
+deterministic, so a stale entry cannot exist, only a missing one; using
+an entry refreshes its mtime, which is what lets a warmer prune by age.
 
 ### Read by the build scripts that drive `runner`
 
