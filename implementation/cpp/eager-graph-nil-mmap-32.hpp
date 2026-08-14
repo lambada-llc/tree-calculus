@@ -87,9 +87,16 @@ private:
   static constexpr size_t ARENA_BYTES = ARENA_NODES * 8;
 
   // Smallest table either side of the memory management ever shrinks to, and
-  // the largest the memo is allowed to reach whatever the budget says.
+  // the largest the memo is allowed to reach whatever the budget says — the
+  // smaller cap applying when no budget was set (see size_memo).
   static constexpr size_t MIN_TABLE = size_t(1) << 12;
-  static constexpr size_t MAX_MEMO = size_t(1) << 21;
+  static constexpr size_t MAX_MEMO = size_t(1) << 24;
+  static constexpr size_t MIN_MEMO_CAP = size_t(1) << 21;
+
+  // A step that resolved in fewer rule applications than this is cheaper to
+  // redo than to let its entry evict a slower one from the memo (see the
+  // MEMOIZE pop in apply).
+  static constexpr uint32_t MEMO_MIN_STEPS = 16;
 
   struct Node {
     uint32_t u;
@@ -117,6 +124,7 @@ private:
     FrameTag tag;
     uint32_t arg1;
     uint32_t arg2; // 0 on an APPLY_TO frame, which mark() ignores
+    uint32_t meta; // MEMOIZE: low bits of the step counter at push
   };
 
   /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
@@ -131,6 +139,16 @@ private:
   Tree _free = 0;      // head of the free list, chained through v
   size_t _live = 0;    // what the last collection found, for sizing the next one
   size_t _budget;      // collect once _head reaches this
+
+public:
+  // Counters for RUNNER_STATS; incrementing them is noise next to the memory
+  // traffic they count, so they are unconditional.
+  struct Stats {
+    uint64_t steps = 0, memo_hits = 0, memo_puts = 0, gcs = 0, gc_marked = 0;
+  };
+  Stats stats_counters;
+
+private:
   // The continuations being unwound, reused across calls. Nested apply() calls
   // take the region above the size they found, so an outer reduction's frames
   // stay where they are — and stay roots — while an inner one runs.
@@ -220,13 +238,21 @@ private:
     }
   }
 
-  Tree memo_get(uint32_t a, uint32_t b) const {
+  Tree memo_get(uint32_t a, uint32_t b) {
     const Memo &m = _memo[hash(a, b) & _memo_mask];
-    return (m.a == a && m.b == b) ? m.r : 0; // no tree is index 0, so 0 is "miss"
+    if (m.a == a && m.b == b) { ++stats_counters.memo_hits; return m.r; }
+    return 0; // no tree is index 0, so 0 is "miss"
   }
 
   void memo_put(uint32_t a, uint32_t b, uint32_t r) {
+    ++stats_counters.memo_puts;
     _memo[hash(a, b) & _memo_mask] = {a, b, r};
+  }
+
+  /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
+   * are permanent (padding and the shared leaf), so they count as live. */
+  bool marked(Tree at) const {
+    return at < 2 || (_arena[at].u & MARK);
   }
 
   /** Set MARK on everything reachable from x. Iterative: the live set is deep. */
@@ -289,13 +315,18 @@ private:
 
   /**
    * Size the memo to the budget, since it is the rest of what a collection
-   * bounds: a slot per sixty-four nodes of arena, which at 12 bytes a slot is
-   * about a fifth of what the nodes cost. Capped, because a cache stops paying
-   * for itself well before it is the size of the thing it is caching, and
-   * direct-mapped, so the capacity is exactly what it occupies.
+   * bounds: a slot per eight nodes of arena, which at 12 bytes a slot is
+   * comparable to what the nodes cost — a long-lived module build is exactly
+   * the workload where remembering more reductions beats touching less memory.
+   * Capped, because a cache stops paying for itself well before it is the size
+   * of the thing it is caching, and direct-mapped, so the capacity is exactly
+   * what it occupies. An unbudgeted evaluator (a one-shot benchmark run that
+   * never calls set_budget) keeps the small cap: it exits before a large memo
+   * pays for its footprint.
    */
   void size_memo() {
-    const size_t capacity = std::min(round_up_pow2(_budget / 64), MAX_MEMO);
+    const size_t cap = _budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP;
+    const size_t capacity = std::min(round_up_pow2(_budget / 8), cap);
     _memo.assign(capacity, Memo{0, 0, 0});
     _memo_mask = capacity - 1;
   }
@@ -382,13 +413,26 @@ public:
       mark(f.arg1);
       mark(f.arg2);
     }
+    // Between mark and sweep is the one moment liveness is written on the
+    // nodes themselves, which is what lets the memo be filtered rather than
+    // dropped: nothing moves, so an entry whose operands and result all
+    // survived still says exactly what it said, and an entry any of whose
+    // nodes is about to be swept must go — the index may be reused. What the
+    // filter keeps is reduction work; re-earning it was the old cost of every
+    // collection.
+    for (Memo &m : _memo) {
+      if (!m.a) continue;
+      if (marked(m.a) && marked(m.b) && marked(m.r)) continue;
+      m = {0, 0, 0};
+    }
     sweep();
+    ++stats_counters.gcs;
+    stats_counters.gc_marked += _live;
     // Re-laid at the size it already had rather than at the size of what
     // survived: the arena keeps its high-water mark, so the free list will fill
     // back up to about here before the next collection, and shrinking now only
     // buys a run of rehashes on the way back.
     rebuild_interned(_interned_mask + 1);
-    std::fill(_memo.begin(), _memo.end(), Memo{0, 0, 0});
   }
 
   /** The arena's high-water mark in nodes, which is what it costs in memory. */
@@ -444,6 +488,7 @@ public:
     try {
     reduce: // ---- evaluate apply(a, b) ----
       {
+        ++stats_counters.steps;
         collect_if_over_budget(a, b);
 
         const Node an = _arena[a];
@@ -509,7 +554,10 @@ public:
         if (f.tag == MEMOIZE) {
           // A tail step (`b = △d`) shares its result with the step it became,
           // so consecutive MEMOIZE frames all record the same normal form.
-          memo_put(f.arg1, f.arg2, result);
+          // Steps that resolved in a handful of rules are cheaper to redo than
+          // to let their entries evict a slower one from the memo.
+          if ((uint32_t)stats_counters.steps - f.meta >= MEMO_MIN_STEPS)
+            memo_put(f.arg1, f.arg2, result);
           continue;
         }
         if (f.tag == APPLY_TO) {
