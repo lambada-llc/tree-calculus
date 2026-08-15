@@ -84,6 +84,41 @@ check "the changed module was dumped too" 2 "$entries"
 # The lazy runner answers a question nobody cached yet, over the same cache.
 check "lazy runner matches Node" "$(oracle "$M1" p3)" "$(evaluate 1 "$M1" p3)"
 
+# The wire protocol itself. Everything above asks for a symbol; `bind` — how
+# host text becomes an argument, and the half of `transformer` no oracle here
+# covers — is only reached by spelling a request out. The runtime built the
+# executable next to its source on its way through the checks above.
+#
+# `id` is fork(stem(stem △), △), applied to a string it marshalled itself, so a
+# round trip exercises marshalling in both directions.
+cat > "$CACHE/id.dag" <<'EOF'
+s △ △
+u △ s
+su △ u
+id su △
+EOF
+request=$'~r id ~x\n~r\n'
+# No `quit`: end on EOF and the answer, which carries no trailing newline of
+# its own, is the last line of the transcript.
+transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
+               printf 'bind ~x 5\n'; printf 'hello'
+               printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
+             } | "$DIR/runner-eager.exe" -s)
+check "bind and reduce string round-trip" "hello" "${transcript##*$'\n'}"
+
+# A request scope ends with its request, successful or not, so nothing it bound
+# is still there for the next one.
+again=$'~x\n'
+transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
+               printf 'bind ~x 5\n'; printf 'hello'
+               printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
+               printf 'reduce dag %d\n' "${#again}"; printf '%s' "$again"
+             } | "$DIR/runner-eager.exe" -s)
+# Split on the answer rather than on a newline: `data` is exactly its length,
+# so what follows an answer shares a line with it.
+check "a binding does not outlive its request" \
+  "err unbound variable: ~x" "${transcript##*hello}"
+
 echo ""
 echo "runner: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

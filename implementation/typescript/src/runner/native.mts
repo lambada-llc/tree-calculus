@@ -150,6 +150,31 @@ function ask(path: string, command: string, payload?: Buffer): Buffer {
   return send(command, payload);
 }
 
+/**
+ * Reduce `expression` — DAG text ending in the value wanted — against `path`,
+ * rendered as `format`.
+ *
+ * The runner takes one kind of question, so this is the only shape a question
+ * has here: a symbol is a one-word DAG, and applying something to host data is
+ * `bound` below plus a payload that mentions it.
+ */
+function reduced(path: string, format: 'dag' | 'string', expression: string): Buffer {
+  const payload = Buffer.from(expression, 'utf8');
+  return ask(path, `reduce ${format} ${payload.length}`, payload);
+}
+
+/**
+ * `text` as a tree-calculus string, under a name the next `reduced` can use.
+ *
+ * `~` because a module never exports such a name — it is what the runner's own
+ * dumps use for scaffolding, for the same reason.
+ */
+function bound(path: string, name: string, text: string): string {
+  const payload = Buffer.from(text, 'utf8');
+  ask(path, `bind ${name} ${payload.length}`, payload);
+  return name;
+}
+
 /** What a DAG ends on: the value `load` leaves in the environment under that name. */
 function terminator(text: string): string {
   const lines = text.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
@@ -343,8 +368,9 @@ function transformer<TTree>(
   const path = loadable(program, 'program.dag');
   const symbol = once(() => terminator(program));
   return memoize((input: string) => {
-    const payload = Buffer.from(input, 'utf8');
-    return ask(path(), `apply ${symbol()} ${payload.length}`, payload).toString('utf8');
+    const argument = bound(path(), '~input', input);
+    return reduced(path(), 'string', `~result ${symbol()} ${argument}\n~result\n`)
+      .toString('utf8');
   }, program, options);
 }
 
@@ -360,19 +386,18 @@ function environment<TTree>(
   // (see `answered`). Lazy: a run whose every answer is already on disk never
   // fingerprints the module, spawns the runner, or evaluates a thing.
   const fingerprints = once(() => fingerprint(text).fingerprints);
+  // A symbol is a DAG of one word, so both halves of this interface are the
+  // same request with a different payload.
   const get = (symbol: string) => of_answer(answered(
     REDUCE_STORE,
     () => fingerprints().get(symbol),
-    () => ask(path(), `eval-dag ${symbol}`)));
+    () => reduced(path(), 'dag', `${symbol}\n`)));
   // The runner reads the payload in a scope of its own, so this leaves the
   // loaded module exactly as it found it — see `reduce` in runner.cpp.
-  get.reduce = (text: string) => {
-    const payload = Buffer.from(text, 'utf8');
-    return of_answer(answered(
-      REDUCE_STORE,
-      () => fingerprint(text, name => fingerprints().get(name)).value,
-      () => ask(path(), `reduce ${payload.length}`, payload)));
-  };
+  get.reduce = (text: string) => of_answer(answered(
+    REDUCE_STORE,
+    () => fingerprint(text, name => fingerprints().get(name)).value,
+    () => reduced(path(), 'dag', text)));
   return get;
 }
 

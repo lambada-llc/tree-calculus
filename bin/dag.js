@@ -1040,6 +1040,15 @@ function ask(path, command, payload) {
   }
   return send(command, payload);
 }
+function reduced(path, format, expression) {
+  const payload = Buffer.from(expression, "utf8");
+  return ask(path, `reduce ${format} ${payload.length}`, payload);
+}
+function bound(path, name, text) {
+  const payload = Buffer.from(text, "utf8");
+  ask(path, `bind ${name} ${payload.length}`, payload);
+  return name;
+}
 function terminator(text) {
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const words = (lines[lines.length - 1] ?? "").split(/\s+/);
@@ -1179,19 +1188,19 @@ function transformer2(_, program, options = {}) {
   const path = loadable(program, "program.dag");
   const symbol = once(() => terminator(program));
   return memoize((input) => {
-    const payload = Buffer.from(input, "utf8");
-    return ask(path(), `apply ${symbol()} ${payload.length}`, payload).toString("utf8");
+    const argument = bound(path(), "~input", input);
+    return reduced(path(), "string", `~result ${symbol()} ${argument}
+~result
+`).toString("utf8");
   }, program, options);
 }
 function environment2(e, text, _ = {}) {
   const path = loadable(text, "module.dag");
   const of_answer = (answer) => dag_default.of(e, answer.toString("utf8"));
   const fingerprints = once(() => fingerprint(text).fingerprints);
-  const get = (symbol) => of_answer(answered(REDUCE_STORE, () => fingerprints().get(symbol), () => ask(path(), `eval-dag ${symbol}`)));
-  get.reduce = (text2) => {
-    const payload = Buffer.from(text2, "utf8");
-    return of_answer(answered(REDUCE_STORE, () => fingerprint(text2, (name) => fingerprints().get(name)).value, () => ask(path(), `reduce ${payload.length}`, payload)));
-  };
+  const get = (symbol) => of_answer(answered(REDUCE_STORE, () => fingerprints().get(symbol), () => reduced(path(), "dag", `${symbol}
+`)));
+  get.reduce = (text2) => of_answer(answered(REDUCE_STORE, () => fingerprint(text2, (name) => fingerprints().get(name)).value, () => reduced(path(), "dag", text2)));
   return get;
 }
 var native = ["1", "eager"].includes(process.env.TREE_CALCULUS_RUNNER ?? "") ? { transformer: transformer2, environment: environment2 } : null;

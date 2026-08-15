@@ -18,18 +18,44 @@ trailing newline (matching `console.log`).
 reads commands from stdin, writes responses to stdout. Commands are
 newline-terminated; some carry a length-prefixed payload.
 
-| request                                  | response                              |
-| ---------------------------------------- | ------------------------------------- |
-| `load <path>\n`                          | `ok\n` (replaces env)                 |
-| `eval <symbol>\n`                        | `data <len>\n<bytes>` (`to_string`)   |
-| `eval-dag <symbol>\n`                    | `data <len>\n<bytes>` (reduced DAG)   |
-| `apply <symbol> <byte-len>\n<bytes>`     | `data <len>\n<bytes>` (`to_string`)   |
-| `reduce <byte-len>\n<bytes>`             | `data <len>\n<bytes>` (reduced DAG)   |
-| `dump\n`                                 | `data <len>\n<bytes>` (evaluated env) |
-| `quit\n`                                 | `ok\n` (and exits)                    |
+| request                                      | response                              |
+| -------------------------------------------- | ------------------------------------- |
+| `load <path>\n`                              | `ok\n` (replaces env)                 |
+| `bind <name> <byte-len>\n<bytes>`            | `ok\n` (until the next `reduce`)      |
+| `reduce <dag\|string> <byte-len>\n<bytes>`   | `data <len>\n<bytes>`                 |
+| `dump\n`                                     | `data <len>\n<bytes>` (evaluated env) |
+| `quit\n`                                     | `ok\n` (and exits)                    |
 
 On any failure: `err <message>\n`. `<bytes>` in responses is exactly
 `<len>` raw bytes, no trailing newline (length is exact).
+
+Two commands do the work, because there are two questions: *what* to
+reduce, and *how* to render it.
+
+`reduce`'s payload is a DAG, read with the loaded module in scope and in
+a scope of its own, so what it defines shadows nothing and is released
+along with the answer. That is what lets a module be loaded apart from
+the expressions asked of it — under the eager evaluator especially,
+where putting them in the module means reading it evaluates every one of
+them.
+
+A name in the module is a DAG of one word, so looking a symbol up needs
+no command of its own:
+
+    reduce dag 8\nBool.not\n          the symbol's value, as a DAG
+    reduce string 8\nGreeting\n       the same, marshalled as a string
+
+`bind` is how host data gets in. Its payload is marshalled as a
+tree-calculus string and bound under `<name>` in that same request
+scope, so a payload mentioning it applies the module to it:
+
+    bind ~src 5\nx = △
+    reduce string 33\n~r Lambada.compile_to_dag ~src\n~r\n
+
+Bindings last until the next `reduce`, successful or not — a request
+scope ends when the request does. Names beginning with `~` are the
+convention for this scaffolding, since nothing a module exports uses
+them.
 
 An `err` is recoverable only where the framing was understood. A command
 carrying a payload whose length could not be read leaves that payload in
@@ -45,13 +71,6 @@ disk and a cached dump is re-loaded by path, so a module the runner can
 open by name is the thing being cached. Clients holding module text in
 memory write it to a file first (see `as_file` in
 `implementation/typescript/src/runner/native.mts`).
-
-`reduce` takes an expression rather than a symbol: its payload is a DAG,
-read with the loaded module in scope and in a scope of its own, so what
-it defines shadows nothing and is released along with the answer. That is
-what lets a module be loaded apart from the expressions asked of it —
-under the eager evaluator especially, where putting them in the module
-means reading it evaluates every one of them.
 
 `dump` (eager only) renders the loaded module back out as one
 hash-consed DAG whose every binding is in the state eager loading left
@@ -111,7 +130,7 @@ plus whatever the request itself is holding — and sweeps the rest onto a
 free list. `0` lets the arena grow unchecked.
 
 This runs from *inside* the reduction loop, not between commands: a
-single `eval-dag` can allocate a thousand times what it keeps, so peak
+single `reduce` can allocate a thousand times what it keeps, so peak
 memory tracks this setting rather than the size of the heaviest test.
 Nothing moves, so the reduction already written into the bundle's nodes
 survives — which is the sharing that makes a long-lived server worth
@@ -154,7 +173,7 @@ returns, keyed by module text, re-loadable without reduction — plus a
 fingerprint sidecar under `module-fp-v1/` that lets the *next* version
 of a module alias every binding it did not change into the previous
 dump instead of re-evaluating it), and per-term results under
-`reduce-v1/` (what `eval-dag`/`reduce` returned, keyed by a Merkle
+`reduce-v1/` (what `reduce` returned, keyed by a Merkle
 fingerprint of the term, so an expect test whose term did not change is
 answered without spawning the runner at all). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
