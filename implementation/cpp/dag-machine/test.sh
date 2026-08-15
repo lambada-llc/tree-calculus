@@ -7,6 +7,10 @@ MAIN_JS="$DIR/../../typescript/main.js"
 # Compile
 "$DIR/compile.sh"
 
+# The runner has an end-to-end suite of its own: native evaluators and the
+# reduction cache against the pure-Node evaluator as oracle.
+"$DIR/test-runner.sh"
+
 pass=0
 fail=0
 
