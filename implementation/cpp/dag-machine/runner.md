@@ -14,7 +14,6 @@ trailing newline (matching `console.log`).
 ### Server
 
     runner -s
-    runner --server
 
 reads commands from stdin, writes responses to stdout. Commands are
 newline-terminated; some carry a length-prefixed payload.
@@ -27,11 +26,25 @@ newline-terminated; some carry a length-prefixed payload.
 | `apply <symbol> <byte-len>\n<bytes>`     | `data <len>\n<bytes>` (`to_string`)   |
 | `reduce <byte-len>\n<bytes>`             | `data <len>\n<bytes>` (reduced DAG)   |
 | `dump\n`                                 | `data <len>\n<bytes>` (evaluated env) |
-| `reset\n`                                | `ok\n` (drop arena, re-parse bundle)  |
 | `quit\n`                                 | `ok\n` (and exits)                    |
 
 On any failure: `err <message>\n`. `<bytes>` in responses is exactly
 `<len>` raw bytes, no trailing newline (length is exact).
+
+An `err` is recoverable only where the framing was understood. A command
+carrying a payload whose length could not be read leaves that payload in
+the stream, where it would be read as commands; the server reports and
+exits rather than answer nonsense to everything after it. A `load` that
+fails leaves no module loaded — half of one would answer `unbound` to
+every symbol it did not reach, which reads as a broken bundle rather
+than a failed load.
+
+`load` names a path where every other command carries its payload
+inline. That is deliberate: the module cache is content-addressed on
+disk and a cached dump is re-loaded by path, so a module the runner can
+open by name is the thing being cached. Clients holding module text in
+memory write it to a file first (see `as_file` in
+`implementation/typescript/src/runner/native.mts`).
 
 `reduce` takes an expression rather than a symbol: its payload is a DAG,
 read with the loaded module in scope and in a scope of its own, so what

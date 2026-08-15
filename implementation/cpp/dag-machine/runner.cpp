@@ -38,13 +38,16 @@
 //     -> data <len>\n<bytes>                 (value of <bytes>, a DAG read against
 //                                             the loaded module, as hash-consed DAG
 //                                             text; defines nothing that outlives it)
-//   reset\n
-//     -> ok\n                                (drop arena, re-parse the loaded bundle)
 //   quit\n
 //     -> ok\n                                (and exits)
 //
 // On any failure: err <message>\n. <bytes> in responses is exactly
 // <len> raw bytes (no trailing newline, since the length is exact).
+//
+// An err is recoverable only where the framing was understood. A command
+// carrying a payload whose length could not be read leaves that payload in the
+// stream, where it would be read as commands; the server reports and exits
+// rather than answer nonsense to everything after it.
 //
 // Reduction
 //
@@ -455,6 +458,11 @@ static bool read_exact(std::string& out, size_t n) {
 
 // Drop the arena and rebuild env from the bundle on disk. Every Tree handed out
 // so far becomes invalid, which is why this only ever runs between commands.
+//
+// One rule if it fails, whether the file could not be read or the DAG did not
+// resolve: the server has no module. Half of one would answer `unbound` to
+// every symbol it did not reach, which reads as a broken bundle rather than a
+// failed load.
 static void load_bundle(TreeEnv& env, const std::string& bundle_path) {
   env.clear();
   g_env_order.clear();
@@ -558,7 +566,6 @@ static size_t collection_budget_nodes() {
 // process.
 static int run_server() {
   TreeEnv env;
-  std::string bundle_path; // remembered for `reset`
   bool loaded = false;
 
   // RUNNER_STATS=1: per-command wall time and evaluator counters on stderr.
@@ -630,10 +637,9 @@ static int run_server() {
     try {
       CommandStats cs;
       if (stats) cs.begin(line);
-      if (verb == "load" || verb == "reset") {
-        if (verb == "load") bundle_path = std::string(rest);
-        if (bundle_path.empty()) { write_err("no bundle loaded"); continue; }
-        load_bundle(env, bundle_path);
+      if (verb == "load") {
+        loaded = false; // until it is; see load_bundle
+        load_bundle(env, std::string(rest));
         loaded = true;
         std::fputs("ok\n", stdout);
         std::fflush(stdout);
@@ -660,11 +666,13 @@ static int run_server() {
       }
 
       if (verb == "apply") {
+        // A length we cannot read is as unrecoverable as a short read: the
+        // payload is already in the stream and would be parsed as commands.
         size_t sep = rest.rfind(' ');
-        if (sep == std::string_view::npos) { write_err("apply: expected <symbol> <len>"); continue; }
+        if (sep == std::string_view::npos) { write_err("apply: expected <symbol> <len>"); return 1; }
         std::string sym(rest.substr(0, sep));
         const long long len = payload_length(rest.substr(sep + 1));
-        if (len < 0) { write_err("apply: bad length"); continue; }
+        if (len < 0) { write_err("apply: bad length"); return 1; }
 
         std::string payload;
         if (!read_exact(payload, len)) { write_err("apply: short read"); return 1; }
@@ -683,7 +691,7 @@ static int run_server() {
 
       if (verb == "reduce") {
         const long long len = payload_length(rest);
-        if (len < 0) { write_err("reduce: bad length"); continue; }
+        if (len < 0) { write_err("reduce: bad length"); return 1; } // see `apply`
 
         std::string payload;
         if (!read_exact(payload, len)) { write_err("reduce: short read"); return 1; }
@@ -722,8 +730,7 @@ static void* worker_main(void* p) {
 
   set_collection_budget(collection_budget_nodes());
 
-  if (argc == 2 && (std::strcmp(argv[1], "-s") == 0 ||
-                    std::strcmp(argv[1], "--server") == 0)) {
+  if (argc == 2 && std::strcmp(argv[1], "-s") == 0) {
     w->result = run_server();
     return nullptr;
   }
@@ -732,7 +739,7 @@ static void* worker_main(void* p) {
     std::fprintf(stderr,
                  "Usage:\n"
                  "  %s <dag-file> <string>     one-shot apply\n"
-                 "  %s -s | --server           stdin/stdout server mode\n",
+                 "  %s -s                      stdin/stdout server mode\n",
                  argv[0], argv[0]);
     w->result = 1;
     return nullptr;
