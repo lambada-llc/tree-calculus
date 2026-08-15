@@ -1,7 +1,12 @@
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 import { assert_equal, Evaluator } from "../common.mjs";
 import { DagModule, box, is_private, is_label } from "./module.mjs";
 import { environment } from "./env.mjs";
 import { link, order, interface_of, DuplicateExportError, DependencyCycleError } from "./link.mjs";
+import { fingerprint } from "./fingerprint.mjs";
+import { store } from "./cache.mjs";
 import { to_file, of_file } from "../format/file.mjs";
 import formatter_ternary from "../format/ternary.mjs";
 
@@ -269,6 +274,71 @@ function test_environment() {
     'an expression that names no value is an error');
 }
 
+// --- Fingerprints ---
+
+function test_fingerprint() {
+  const hex = (b?: Buffer) => b?.toString('hex') ?? null;
+
+  // A fingerprint addresses the term, not the DAG around it: however a term is
+  // spelled — different ids, extra aliases, more or less sharing — it keeps
+  // its address. That is the property the reduction cache stands on.
+  assert_equal(
+    hex(fingerprint('a △ △\nx a △\nx\n').value),
+    hex(fingerprint('1 △ △\n2 1 △\nalso 2\nalso\n').value),
+    'the same term fingerprints the same, whatever the lines look like');
+  assert_equal(
+    false,
+    hex(fingerprint('x △ △\nx\n').value) === hex(fingerprint('y △ (△ △)\ny\n').value),
+    'different terms fingerprint differently');
+  assert_equal(
+    hex(fingerprint('k △ △\nk\n').fingerprints.get('k')),
+    hex(fingerprint('k △ △\nalias k\nalias\n').value),
+    'an alias is the term it names');
+
+  // References mean the definition above them, so a rebound name tells the
+  // uses before and after apart.
+  const shadowed = fingerprint('a △ △\nbefore a a\na △ a\nafter a a\n').fingerprints;
+  assert_equal(
+    false,
+    hex(shadowed.get('before')) === hex(shadowed.get('after')),
+    'a use before a rebinding is not a use after it');
+
+  // An expression read against a module resolves what it does not define
+  // through `outer`, exactly as reduction scopes it.
+  const module = fingerprint('lib △ △\n').fingerprints;
+  assert_equal(
+    hex(fingerprint('own lib △\nown\n', name => module.get(name)).value),
+    hex(fingerprint('lib △ △\nown lib △\nown\n').value),
+    'outer resolution sees the module');
+  assert_throws(() => fingerprint('x missing △\nx\n'), 'unbound symbol: missing',
+    'a name nobody defines is an error, not a guess');
+}
+
+// --- The cache store ---
+
+function test_cache_store() {
+  const had = process.env.TREE_CALCULUS_CACHE;
+  const directory = mkdtempSync(join(tmpdir(), 'tc-cache-test-'));
+  try {
+    delete process.env.TREE_CALCULUS_CACHE;
+    assert_equal(null, store('reduce-test') as unknown, 'no cache directory, no store');
+
+    process.env.TREE_CALCULUS_CACHE = directory;
+    const st = store('reduce-test')!;
+    const key = Buffer.from('00ff', 'hex');
+    assert_equal(false, st.has(key), 'a fresh store is empty');
+    assert_equal(null, st.get(key), 'and get says so too');
+    st.put(key, 'payload');
+    assert_equal(true, st.has(key), 'a put entry is found');
+    assert_equal('payload', st.get(key)!.toString('utf8'), 'and comes back whole');
+    assert_equal(true, st.path(key).endsWith('00ff'), 'entries are named by their key');
+  } finally {
+    if (had === undefined) delete process.env.TREE_CALCULUS_CACHE;
+    else process.env.TREE_CALCULUS_CACHE = had;
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 // --- Files ---
 
 function test_file() {
@@ -295,5 +365,7 @@ export function test() {
   test_interface();
   test_link();
   test_environment();
+  test_fingerprint();
+  test_cache_store();
   test_file();
 }
