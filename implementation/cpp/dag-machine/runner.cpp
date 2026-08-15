@@ -28,18 +28,25 @@
 //
 //   load <path>\n
 //     -> ok\n                                (replaces env)
-//   eval <symbol>\n
-//     -> data <len>\n<bytes>                 (to_string of env[symbol])
-//   eval-dag <symbol>\n
-//     -> data <len>\n<bytes>                 (reduced env[symbol] as hash-consed DAG text)
-//   apply <symbol> <byte-len>\n<bytes>
-//     -> data <len>\n<bytes>                 (to_string of apply(env[sym], of_string(bytes)))
-//   reduce <byte-len>\n<bytes>
+//   bind <name> <byte-len>\n<bytes>
+//     -> ok\n                                (of_string(bytes) as <name>, for the
+//                                             next reduce and no longer)
+//   reduce <dag|string> <byte-len>\n<bytes>
 //     -> data <len>\n<bytes>                 (value of <bytes>, a DAG read against
-//                                             the loaded module, as hash-consed DAG
-//                                             text; defines nothing that outlives it)
+//                                             the loaded module and whatever was
+//                                             bound, rendered as asked)
+//   dump\n
+//     -> data <len>\n<bytes>                 (the evaluated module; eager only)
 //   quit\n
 //     -> ok\n                                (and exits)
+//
+// Two commands, because there are two questions: what to reduce, and how to
+// render it. A name in the module is a payload of one word, so looking a symbol
+// up needs no command of its own; applying the module's compiler to a source
+// file is `bind` followed by a payload that mentions both. Earlier versions
+// spelled those `eval`, `eval-dag` and `apply` — three verbs covering four of
+// the six cells that <what> x <how> actually has, which is why asking for a
+// string that was not already a symbol had no spelling at all.
 //
 // On any failure: err <message>\n. <bytes> in responses is exactly
 // <len> raw bytes (no trailing newline, since the length is exact).
@@ -121,17 +128,10 @@ using Tree = Reducer::Tree;
 // reclaim the same way — a non-moving mark-and-sweep from a root set the caller
 // keeps filled — so everything below this point is written once, against
 // whichever is in play.
+// Rooting is push-only: a request roots an unknown number of trees — reading a
+// DAG roots one per line — and releases them all at once by truncating back to
+// where the module's own roots end. See `end_request` in run_server.
 static inline void hold(Tree t) { g_e.roots().push_back(t); }
-
-static inline void drop_held() { g_e.roots().pop_back(); }
-
-// Everything held while this is alive is released when it goes out of scope,
-// however the scope is left. For a command that roots an unknown number of
-// trees — reading a DAG roots one per line — and must leave none behind.
-struct HeldScope {
-  const size_t mark = g_e.roots().size();
-  ~HeldScope() { g_e.roots().resize(mark); }
-};
 
 static inline void set_collection_budget(size_t nodes) { g_e.set_budget(nodes); }
 
@@ -351,7 +351,10 @@ static std::vector<std::pair<std::string, Tree>> g_env_order;
 static Tree parse_dag_into(std::string_view text, TreeEnv& env,
                            const TreeEnv* outer = nullptr,
                            std::vector<std::pair<std::string, Tree>>* order = nullptr) {
-  if (env.empty()) env.emplace("\xe2\x96\xb3", g_e.leaf()); // △
+  // The leaf is in every scope. Unconditionally, not just an empty one: a
+  // scratch scope that `bind` has already put something in is still a scope a
+  // DAG may spell △ in.
+  env.try_emplace("\xe2\x96\xb3", g_e.leaf()); // △
 
   auto get = [&](std::string_view name) -> Tree {
     auto it = env.find(std::string(name));
@@ -568,6 +571,30 @@ static int run_server() {
   TreeEnv env;
   bool loaded = false;
 
+  // The scope a request builds for itself. `bind` puts marshalled arguments in
+  // it, `reduce` reads its payload into it, and the answer ends it — so what a
+  // request defines shadows nothing that outlives it, and a caller can ask a
+  // thousand questions without the module growing by one binding.
+  TreeEnv scratch;
+  // Everything the module rooted sits below this; everything the request rooted
+  // sits above it, and is released with the scratch scope.
+  size_t scratch_floor = 0;
+  const auto end_request = [&] {
+    scratch.clear();
+    g_e.roots().resize(scratch_floor);
+  };
+
+  // The one thing this server does: reduce a DAG read against the module, and
+  // render the value it ends on. Every command below is a way of spelling a
+  // payload for it.
+  const auto answer = [&](std::string_view format, std::string_view payload) {
+    const Tree value = parse_dag_into(payload, scratch, &env);
+    if (!value) die("not terminated by a value");
+    if (format == "dag") return to_dag(value);
+    if (format == "string") return to_string_marshal(value);
+    die("unrecognized format (expected dag or string)");
+  };
+
   // RUNNER_STATS=1: per-command wall time and evaluator counters on stderr.
   const bool stats = [] {
     const char* s = std::getenv("RUNNER_STATS");
@@ -641,6 +668,9 @@ static int run_server() {
         loaded = false; // until it is; see load_bundle
         load_bundle(env, std::string(rest));
         loaded = true;
+        // The module's own roots are what a request is now measured against.
+        scratch.clear();
+        scratch_floor = g_e.roots().size();
         std::fputs("ok\n", stdout);
         std::fflush(stdout);
         continue;
@@ -657,55 +687,39 @@ static int run_server() {
         continue;
       }
 
-      if (verb == "eval" || verb == "eval-dag") {
-        std::string sym(rest);
-        auto it = env.find(sym);
-        if (it == env.end()) { write_err("unbound: " + sym); continue; }
-        write_data(verb == "eval" ? to_string_marshal(it->second) : to_dag(it->second));
-        continue;
-      }
-
-      if (verb == "apply") {
+      if (verb == "bind") {
         // A length we cannot read is as unrecoverable as a short read: the
         // payload is already in the stream and would be parsed as commands.
-        size_t sep = rest.rfind(' ');
-        if (sep == std::string_view::npos) { write_err("apply: expected <symbol> <len>"); return 1; }
-        std::string sym(rest.substr(0, sep));
+        const size_t sep = rest.rfind(' ');
+        if (sep == std::string_view::npos) { write_err("bind: expected <name> <len>"); return 1; }
         const long long len = payload_length(rest.substr(sep + 1));
-        if (len < 0) { write_err("apply: bad length"); return 1; }
-
+        if (len < 0) { write_err("bind: bad length"); return 1; }
         std::string payload;
-        if (!read_exact(payload, len)) { write_err("apply: short read"); return 1; }
+        if (!read_exact(payload, len)) { write_err("bind: short read"); return 1; }
 
-        auto it = env.find(sym);
-        if (it == env.end()) { write_err("unbound: " + sym); continue; }
-        // The argument and the application are the caller's, not the bundle's, so
-        // they need rooting for as long as the answer is being computed.
-        const Tree result = g_e.apply(it->second, of_string(payload));
-        hold(result);
-        std::string out = to_string_marshal(result);
-        drop_held();
-        write_data(out);
+        const Tree value = of_string(payload);
+        hold(value); // the request's, until the request ends
+        scratch[std::string(rest.substr(0, sep))] = value;
+        std::fputs("ok\n", stdout);
+        std::fflush(stdout);
         continue;
       }
 
       if (verb == "reduce") {
-        const long long len = payload_length(rest);
-        if (len < 0) { write_err("reduce: bad length"); return 1; } // see `apply`
-
+        const size_t sep = rest.find(' ');
+        if (sep == std::string_view::npos) { write_err("reduce: expected <format> <len>"); return 1; }
+        const long long len = payload_length(rest.substr(sep + 1));
+        if (len < 0) { write_err("reduce: bad length"); return 1; }
         std::string payload;
         if (!read_exact(payload, len)) { write_err("reduce: short read"); return 1; }
 
-        // Read against the module rather than into it: `local` shadows nothing
-        // and is gone by the next command, and so are the roots the reading
-        // needed. A caller can ask a thousand questions in a row without the
-        // module growing by one binding or the collector losing a thing to
-        // reclaim.
-        TreeEnv local;
-        HeldScope held;
-        const Tree value = parse_dag_into(payload, local, &env);
-        if (!value) { write_err("reduce: not terminated by a value"); continue; }
-        write_data(to_dag(value));
+        try {
+          write_data(answer(rest.substr(0, sep), payload));
+        } catch (...) {
+          end_request(); // an answer that failed still ends its request
+          throw;
+        }
+        end_request();
         continue;
       }
 
