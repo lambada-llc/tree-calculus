@@ -6,39 +6,123 @@ form in one go, `step` performs exactly one rewrite, so a reduction can be
 observed term by term -- see `trace` / `trace_sampled`.
 '''
 
-from tree_calculus import format_term
+from tree_calculus import format_term, parse_ternary
 
+
+# --- rule 2, with optional peeks (--peek) ---
+# The three shortcuts that avoid duplicating c into (x c) (b c): x = K yields
+# c outright (b c is never built), and an eliminator (K f) as x or b collapses
+# its application to f. Each is a contraction of the plain sequence, so normal
+# forms agree; only the step granularity changes.
+
+peek = False
+
+def _apply(f, a):
+    '''f applied to a, collapsing an eliminator: (K f) a -> f.'''
+    return f[1] if len(f) == 2 and f[0] == () else f + (a,)
+
+def _rule2(x, b, c, w):
+    if not peek:
+        return x + (c, b + (c,)) + w
+    if x == ((),):                  # x = K: -> c
+        return c + w
+    return _apply(x, c) + (_apply(b, c),) + w
 
 # --- single-step reduction (normal order, leftmost-outermost) ---
 # `step` returns the next term, or None if `t` is already a normal form. It
 # mirrors `apply` rule by rule, but stops after a single rewrite.
+# `_fire` is the head rewrite itself, for a head whose rule is determined.
+
+def _fire(t):
+    a, b, c, *w = t
+    w = tuple(w)
+    if a == ():                     # rule 1: △ △ b c -> b
+        return b + w
+    if len(a) == 1:                 # rule 2: △ (△ x) b c -> (x c) (b c)
+        (x,) = a
+        return _rule2(x, b, c, w)
+    x, y = a                        # rule 3: △ (△ x y) b c, by shape of c
+    if c == ():                     # 3a: c = △     -> x
+        return x + w
+    if len(c) == 1:                 # 3b: c = △ u   -> (y u)
+        (u,) = c
+        return y + (u,) + w
+    u, v = c                        # 3c: c = △ u v -> (b u v)
+    return b + (u, v) + w
 
 def step(t):
     if len(t) >= 3:
-        a, b, c, *w = t
-        w = tuple(w)
+        a, c = t[0], t[2]
         if len(a) >= 3:                 # function not a value yet: reduce it
             return (step(a),) + t[1:]
-        if a == ():                     # rule 1: △ △ b c -> b
-            return b + w
-        if len(a) == 1:                 # rule 2: △ (△ x) b c -> (x c) (b c)
-            (x,) = a
-            return x + (c, b + (c,)) + w
-        x, y = a                        # rule 3: △ (△ x y) b c, by shape of c
-        if len(c) >= 3:                 # argument not a value yet: reduce it
-            return (a, b, step(c)) + w
-        if c == ():                     # 3a: c = △     -> x
-            return x + w
-        if len(c) == 1:                 # 3b: c = △ u   -> (y u)
-            (u,) = c
-            return y + (u,) + w
-        u, v = c                        # 3c: c = △ u v -> (b u v)
-        return b + (u, v) + w
+        if len(a) == 2 and len(c) >= 3: # rule-3 argument not a value yet
+            return t[:2] + (step(c),) + t[3:]
+        return _fire(t)
     for i, e in enumerate(t):           # a value: reduce the leftmost child that can
         s = step(e)
         if s is not None:
             return t[:i] + (s,) + t[i+1:]
     return None
+
+# --- applicative order (leftmost-innermost, an eager evaluator's discipline) ---
+# Arguments are values before a rule fires, so values are duplicated rather
+# than pending work: terms stay near the sizes an eager evaluator would see.
+# Terms that are only weakly normalizing (the __wn family) diverge under this
+# order; the default root-first `step` reaches their normal form.
+
+def step_applicative(t):
+    for i, e in enumerate(t):
+        s = step_applicative(e)
+        if s is not None:
+            return t[:i] + (s,) + t[i+1:]
+    return _fire(t) if len(t) >= 3 else None
+
+# --- shrink-eager order (--shrink-eager) ---
+# Only rule 2 with a non-leaf argument can grow a term; every other fire
+# shrinks it without duplicating anything, so firing shrink redexes first --
+# biggest drop first, the growing rule 2 leftmost-outermost only when nothing
+# shrinks -- keeps every intermediate at most as large as under root-first
+# order (a residual argument makes that pointwise). Same normal forms; the
+# leftmost growing pick is not proven normalizing, so pair with --limit if in
+# doubt (min-growth picks provably diverge on the __wn family).
+
+def _drop(t):
+    '''Node-count decrease of firing a shrink redex (context-free).'''
+    a, b, c = t[0], t[1], t[2]
+    if a == ():                     # rule 1 drops c
+        return 2 + nodes(c)
+    if len(a) == 1:                 # rule 2 on a leaf duplicates only the leaf
+        return 1
+    x, y = a
+    if c == ():                     # 3a drops y and b
+        return 3 + nodes(y) + nodes(b)
+    if len(c) == 1:                 # 3b drops x and b
+        return 3 + nodes(x) + nodes(b)
+    return 3 + nodes(x) + nodes(y)  # 3c drops x and y
+
+def step_shrink_eager(t):
+    best = grow = None              # (drop, path) of best shrink / first grow
+    def walk(t, path):
+        nonlocal best, grow
+        if len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3):
+            if len(t[0]) != 1 or t[2] == ():
+                d = _drop(t)
+                if best is None or d > best[0]:
+                    best = (d, path)
+            elif grow is None:
+                grow = path
+        for i, e in enumerate(t):
+            walk(e, path + (i,))
+    walk(t, ())
+    target = best[1] if best else grow
+    if target is None:
+        return None
+    def fire_at(t, path):
+        if not path:
+            return _fire(t)
+        i = path[0]
+        return t[:i] + (fire_at(t[i], path[1:]),) + t[i+1:]
+    return fire_at(t, target)
 
 def count_steps(t):
     n = 0
@@ -54,6 +138,11 @@ def trace(t):
         if s is None:
             return t
         t = s
+
+def nodes(t):
+    '''Number of nodes: a term is △ applied to its elements, so one node plus
+    the nodes of each element.'''
+    return 1 + sum(map(nodes, t))
 
 def trace_sampled(t, max_states=10, width=200):
     '''Like `trace`, but for long reductions: print only every k-th term (so at
@@ -71,4 +160,32 @@ def trace_sampled(t, max_states=10, width=200):
             return t
         if i % k == 0:
             print(show(t))
+        t = s; i += 1
+
+
+if __name__ == '__main__':
+    # Trace a reduction: stdin is whitespace-separated ternary terms, applied
+    # left-associatively; each step prints "<step> <nodes>" (--terms appends
+    # the full term in △ notation).
+    import argparse, sys
+    sys.setrecursionlimit(1_000_000)
+    p = argparse.ArgumentParser(description='Trace a reduction step by step.')
+    p.add_argument('--terms', action='store_true', help='also print each term')
+    p.add_argument('--limit', type=int, help='stop after this many steps')
+    p.add_argument('--eager', action='store_true', help='applicative instead of root-first order')
+    p.add_argument('--peek', action='store_true', help='rule-2 shortcuts that avoid duplicating the argument')
+    p.add_argument('--shrink-eager', action='store_true', help='shrinking fires first; smallest intermediate terms')
+    a = p.parse_args()
+    peek = a.peek
+    step = step_applicative if a.eager else step_shrink_eager if a.shrink_eager else step
+    t = ()
+    for i, line in enumerate(sys.stdin.read().split()):
+        u = parse_ternary(line)
+        t = u if i == 0 else t + (u,)
+    i = 0
+    while True:
+        print(f'{i} {nodes(t)} {format_term(t)}' if a.terms else f'{i} {nodes(t)}')
+        s = step(t)
+        if s is None or (a.limit is not None and i >= a.limit):
+            break
         t = s; i += 1

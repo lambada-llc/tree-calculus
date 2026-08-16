@@ -10,7 +10,8 @@ import sys
 import unittest
 
 from tree_calculus import reduce, parse_term, format_term
-from stepper import step, trace_sampled
+from stepper import step, step_shrink_eager, count_steps, trace_sampled
+import stepper
 
 sys.setrecursionlimit(1_000_000)
 
@@ -75,13 +76,43 @@ class TreeCalculusTests(unittest.TestCase):
     def test_step_agrees_with_reduce(self):
         leaf, stem, fork = (), ((),), ((), ())
         vals = [leaf, stem, fork, (stem,), (stem, leaf), (fork, leaf)]
-        for f in vals:
-            for a in vals:
-                t = f + (a,)                      # f applied to a (unreduced)
-                stepped = t
-                while (s := step(stepped)) is not None:
-                    stepped = s
-                self.assertEqual(stepped, reduce(t))
+        for peek in [False, True]:
+            stepper.peek = peek
+            try:
+                for f in vals:
+                    for a in vals:
+                        t = f + (a,)              # f applied to a (unreduced)
+                        stepped = t
+                        while (s := step(stepped)) is not None:
+                            stepped = s
+                        self.assertEqual(stepped, reduce(t))
+            finally:
+                stepper.peek = False
+
+    def test_shrink_eager_same_normal_form_smaller_peak(self):
+        t = size + (parse_term('△ △ △'),)
+        def run(stepfn):
+            u, peak = t, node_count(t)
+            while (s := stepfn(u)) is not None:
+                u = s
+                peak = max(peak, node_count(u))
+            return u, peak
+        nf, peak = run(step_shrink_eager)
+        self.assertEqual(nf, reduce(t))
+        self.assertLessEqual(peak, run(step)[1])
+
+    def test_peek_same_normal_form_fewer_steps(self):
+        t = size + (parse_term('△ △ △'),)
+        plain = count_steps(t)
+        stepper.peek = True
+        try:
+            stepped = t
+            while (s := step(stepped)) is not None:
+                stepped = s
+            self.assertEqual(stepped, reduce(t))
+            self.assertLess(count_steps(t), plain)
+        finally:
+            stepper.peek = False
 
     def test_trace_size_small(self):
         # size of △ △ △ (a single fork, 3 nodes) is 3 = △ (△ (△ △)).
