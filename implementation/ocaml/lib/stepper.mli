@@ -33,9 +33,23 @@ val step : t -> t -> t option
     still an [App] (not a value), or the rule-3 argument [b] is still an [App]
     (its leaf/stem/fork shape is not known yet). *)
 
+val step_peek : t -> t -> t option
+(** Like [step], but rule 2 (△ (△ x) y @ z → (x z) (y z)) has the three peeks
+    that avoid duplicating [z]: [x = K] yields [z] outright (y z is never
+    built), and an eliminator (K f) as [x] or [y] collapses its application to
+    [f]. Anything else takes the plain rule-2 reduct. Every peek is a
+    contraction of the canonical normal-order sequence, so normal forms agree
+    with [step]; only the step granularity differs. *)
+
 val step_anywhere : t -> t option
 (** Reduce the leftmost-outermost active application anywhere in the term by one
     step. [None] iff the term is already a value (a normal form). *)
 
+val step_anywhere_peek : t -> t option
+(** [step_anywhere] with [step_peek] as the rule set. *)
+
 val reduce : t -> t
 (** Apply [step_anywhere] until no application is active. *)
+
+val reduce_peek : t -> t
+(** Apply [step_anywhere_peek] until no application is active. *)

@@ -32,26 +32,48 @@ let step a b =
   | Fork (Fork (_, _), y), Fork (u, v) -> Some (App (App (y, u), v)) (* 3c *)
   | Fork (Fork _, _), App _ -> None (* rule-3 argument not a value yet *)
 
+(* Rule 2 with the three peeks that avoid duplicating z into (x z) (y z):
+ * x = K yields z outright (y z is never built), and an eliminator (K f) in
+ * either position collapses its application to f. Each peek is a contraction
+ * of the canonical normal-order sequence, so normal forms agree with [step]. *)
+let peek_rule_2 x y z =
+  let app f a = match f with Fork (Leaf, f) -> f | _ -> App (f, a) in
+  match x with Stem Leaf -> z | _ -> App (app x z, app y z)
+
+let step_peek a b =
+  match a with Fork (Stem x, y) -> Some (peek_rule_2 x y b) | _ -> step a b
+
 (* Leftmost-outermost: try the application here first, then recurse into the
  * function, then the argument. This is normal order, so it reaches a normal
  * form whenever one exists. Values (Stem/Fork) may still hold residual
  * applications, so we descend into them too. *)
-let rec step_anywhere = function
-  | Leaf -> None
-  | Stem a -> Option.map (fun a -> Stem a) (step_anywhere a)
-  | Fork (a, b) -> (
-      match step_anywhere a with
-      | Some a -> Some (Fork (a, b))
-      | None -> Option.map (fun b -> Fork (a, b)) (step_anywhere b))
-  | App (a, b) -> (
-      match step a b with
-      | Some _ as reduced -> reduced
-      | None -> (
-          match step_anywhere a with
-          | Some a -> Some (App (a, b))
-          | None -> Option.map (fun b -> App (a, b)) (step_anywhere b)))
+let step_anywhere_with step =
+  let rec go = function
+    | Leaf -> None
+    | Stem a -> Option.map (fun a -> Stem a) (go a)
+    | Fork (a, b) -> (
+        match go a with
+        | Some a -> Some (Fork (a, b))
+        | None -> Option.map (fun b -> Fork (a, b)) (go b))
+    | App (a, b) -> (
+        match step a b with
+        | Some _ as reduced -> reduced
+        | None -> (
+            match go a with
+            | Some a -> Some (App (a, b))
+            | None -> Option.map (fun b -> App (a, b)) (go b)))
+  in
+  go
 
-let rec reduce e = match step_anywhere e with Some e -> reduce e | None -> e
+let step_anywhere = step_anywhere_with step
+let step_anywhere_peek = step_anywhere_with step_peek
+
+let reduce_with step_anywhere =
+  let rec go e = match step_anywhere e with Some e -> go e | None -> e in
+  go
+
+let reduce = reduce_with step_anywhere
+let reduce_peek = reduce_with step_anywhere_peek
 
 (* inline tests *)
 
@@ -93,7 +115,7 @@ let trace e =
 
 (* Number of [step_anywhere] steps to a normal form, for demonstrating the
    stepwise behaviour with values we can verify by hand. *)
-let count_steps e =
+let count_steps ?(step_anywhere = step_anywhere) e =
   let rec go n e =
     match step_anywhere e with Some e -> go (n + 1) e | None -> n
   in
@@ -125,7 +147,7 @@ let trace_sampled ?(max_states = 10) ?(width = 200) e =
   go 0 e
 
 (* The stepper, run to termination, must agree with the eager reducer. *)
-let agrees_with_reducer a b =
+let agrees_with_reducer ?(reduce = reduce) a b =
   let via_stepper = to_tree (reduce (App (of_tree a, of_tree b))) in
   let reference = Tree.apply a b in
   Sexp.equal (Sexp_of.sexp_of_t via_stepper) (Sexp_of.sexp_of_t reference)
@@ -304,11 +326,13 @@ let%expect_test "stepper agrees with Tree.apply" =
       Tree.Leaf; Tree.Stem Tree.Leaf; Tree.Fork (Tree.Leaf, Tree.Leaf); not_tree;
     ]
   in
-  let all =
+  let all reduce =
     List.for_all funcs ~f:(fun f ->
-        List.for_all args ~f:(fun a -> agrees_with_reducer f a))
+        List.for_all args ~f:(fun a -> agrees_with_reducer ~reduce f a))
   in
-  print_s [%sexp (all : bool)];
+  print_s [%sexp (all reduce : bool)];
+  [%expect {| true |}];
+  print_s [%sexp (all reduce_peek : bool)];
   [%expect {| true |}]
 
 let%expect_test "stepper agrees with reducer on a recursive program" =
@@ -326,3 +350,33 @@ let%expect_test "stepper agrees with reducer on a recursive program" =
   in
   print_s [%sexp (List.for_all [ 0; 1; 2; 3; 4 ] ~f:same : bool)];
   [%expect {| true |}]
+
+let%expect_test "peek variant: same normal forms, fewer steps" =
+  (* The three peeks on hand-checkable values, with y = △ (△ △) and z = △ △.
+     x = K: canonical takes 3 steps (rule 2, 0b, 1) and builds y z only to
+     discard it; peek collapses to z in one, never building y z. *)
+  let y = Stem (Stem Leaf) and z = Stem Leaf in
+  print_s [%sexp (count_steps (App (Fork (Stem (Stem Leaf), y), z)) : int)];
+  [%expect {| 3 |}];
+  let show x = print_endline (to_notation (Option.value_exn (step_peek (Fork (Stem x, y)) z))) in
+  show (Stem Leaf);
+  [%expect {| △ △ |}];
+  (* x an eliminator K f (f = △ △): f applied to y z, z not duplicated. *)
+  show (Fork (Leaf, Stem Leaf));
+  [%expect {| △ △ (△ (△ △) (△ △)) |}];
+  (* y an eliminator K g: symmetric, x z applied to g. *)
+  print_endline (to_notation (Option.value_exn (step_peek (Fork (Stem Leaf, Fork (Leaf, Stem Leaf))) z)));
+  [%expect {| △ (△ △) (△ △) |}];
+  (* Step counts on the size program: same results as the canonical stepper,
+     via a compressed sequence. *)
+  List.iter [ "△"; "△ △ △"; "△ (△ △) (△ △)" ] ~f:(fun s ->
+      let t = App (size, parse s) in
+      printf "size (%s): canonical %d, peek %d, both => %s\n" s (count_steps t)
+        (count_steps ~step_anywhere:step_anywhere_peek t)
+        (to_notation (reduce_peek t)));
+  [%expect
+    {|
+    size (△): canonical 525, peek 523, both => △ △
+    size (△ △ △): canonical 666, peek 623, both => △ (△ (△ △))
+    size (△ (△ △) (△ △)): canonical 784, peek 707, both => △ (△ (△ (△ (△ △))))
+    |}]
