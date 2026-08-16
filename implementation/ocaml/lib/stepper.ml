@@ -75,6 +75,46 @@ let reduce_with step_anywhere =
 let reduce = reduce_with step_anywhere
 let reduce_peek = reduce_with step_anywhere_peek
 
+let rec nodes = function
+  | Leaf -> 1
+  | Stem a -> 1 + nodes a
+  | Fork (a, b) | App (a, b) -> 1 + nodes a + nodes b
+
+(* Shrink-eager: fire the active application that shrinks the term most. Only
+ * rule 2 grows a term (by the size of the argument it duplicates); every other
+ * rule shrinks without duplicating, and contracting such a redex early can
+ * only make every later term smaller (a residual argument). When nothing
+ * shrinks, fall back to the leftmost-outermost active application -- not
+ * proven normalizing, so [step_anywhere] stays the safe default. *)
+let step_shrink_eager t =
+  let candidates = ref [] in
+  let rec go ctx t =
+    match t with
+    | Leaf -> ()
+    | Stem a -> go (fun a -> ctx (Stem a)) a
+    | Fork (a, b) ->
+        go (fun a' -> ctx (Fork (a', b))) a;
+        go (fun b' -> ctx (Fork (a, b'))) b
+    | App (a, b) ->
+        (match step a b with
+        | Some r -> candidates := (ctx r, nodes r - nodes t) :: !candidates
+        | None -> ());
+        go (fun a' -> ctx (App (a', b))) a;
+        go (fun b' -> ctx (App (a, b'))) b
+  in
+  go (fun x -> x) t;
+  match List.rev !candidates with
+  | [] -> None
+  | ((leftmost, _) :: _) as cs ->
+      Some
+        (match List.filter (fun (_, d) -> d < 0) cs with
+        | [] -> leftmost
+        | c :: shrinks ->
+            fst
+              (List.fold_left
+                 (fun best c -> if snd c < snd best then c else best)
+                 c shrinks))
+
 (* inline tests *)
 
 open Core
@@ -380,3 +420,23 @@ let%expect_test "peek variant: same normal forms, fewer steps" =
     size (△ △ △): canonical 666, peek 623, both => △ (△ (△ △))
     size (△ (△ △) (△ △)): canonical 784, peek 707, both => △ (△ (△ (△ (△ △))))
     |}]
+
+let%expect_test "shrink-eager: same normal form, no larger intermediates" =
+  let peak stepper t =
+    let rec go m t =
+      match stepper t with None -> m | Some t -> go (Int.max m (nodes t)) t
+    in
+    go (nodes t) t
+  in
+  let t = App (size, parse "△ △ △") in
+  let nf = reduce_with step_shrink_eager t in
+  print_s
+    [%sexp
+      (Sexp.equal
+         (Sexp_of.sexp_of_t (to_tree nf))
+         (Sexp_of.sexp_of_t (to_tree (reduce t)))
+        : bool)];
+  [%expect {| true |}];
+  printf "peak: root-first %d, shrink-eager %d\n" (peak step_anywhere t)
+    (peak step_shrink_eager t);
+  [%expect {| peak: root-first 1243, shrink-eager 561 |}]
