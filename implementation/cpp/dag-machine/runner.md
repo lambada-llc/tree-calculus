@@ -191,16 +191,18 @@ memory scales linearly with the count.
 
 Set `RUNNER_WORKERS=$(nproc)` on a beefy local machine to parallelise.
 
-#### `RUNNER_BATCH_CHUNKS` *(default: 16)*
+#### `RUNNER_ARENA_MB` *(default: 64)*
 
-Read by `build/rules/compile/compile-all.js`. How many LambAda chunks
-one `runner -s` invocation handles before we cycle the process. Within a
-batch we share reductions across chunks; between batches the OS
-reclaims the leaked arena, keeping peak RSS bounded.
+Read by `build/rules/compile/compile-all.js`, which passes it as this
+process's `RUNNER_RSS_THRESHOLD_MB`. A compile worker holds one runner
+for every chunk it has, so what bounds its memory is the collection
+budget rather than how often the process is replaced.
 
-Larger batches (e.g. `RUNNER_BATCH_CHUNKS=64`) trade memory for slightly
-more cross-chunk sharing; smaller (e.g. `RUNNER_BATCH_CHUNKS=4`) trade
-sharing for tighter memory.
+64 rather than the runner's own 512 because compiling is thousands of
+independent reductions with nothing carried between them: a tight budget
+costs a little re-reduction and keeps peak RSS flat. A phase whose
+reductions are few and large wants the opposite, and says so by not
+passing one.
 
 #### `CXX` *(default: `c++`)*
 
