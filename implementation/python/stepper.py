@@ -79,12 +79,14 @@ def step_applicative(t):
 
 # --- shrink-eager order (--shrink-eager) ---
 # Only rule 2 with a non-leaf argument can grow a term; every other fire
-# shrinks it without duplicating anything, so firing shrink redexes first --
-# biggest drop first, the growing rule 2 leftmost-outermost only when nothing
-# shrinks -- keeps every intermediate at most as large as under root-first
-# order (a residual argument makes that pointwise). Same normal forms; the
-# leftmost growing pick is not proven normalizing, so pair with --limit if in
-# doubt (min-growth picks provably diverge on the __wn family).
+# shrinks it without duplicating anything, so shrink redexes fire first --
+# biggest drop first -- and only when nothing shrinks does the root-first
+# `step` pick the growing fire. Firing a shrink early can only make every
+# later term smaller (a residual argument), so intermediates stay small. Same
+# normal forms; not proven normalizing, so pair with --limit if in doubt.
+# Picking growing fires by any global rule (leftmost in preorder, min-growth)
+# instead of root-first's descent provably diverges on parts of the __wn
+# family.
 
 def _drop(t):
     '''Node-count decrease of firing a shrink redex (context-free).'''
@@ -101,28 +103,25 @@ def _drop(t):
     return 3 + nodes(x) + nodes(y)  # 3c drops x and y
 
 def step_shrink_eager(t):
-    best = grow = None              # (drop, path) of best shrink / first grow
+    best = None                     # (drop, path) of the best shrink redex
     def walk(t, path):
-        nonlocal best, grow
-        if len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3):
-            if len(t[0]) != 1 or t[2] == ():
-                d = _drop(t)
-                if best is None or d > best[0]:
-                    best = (d, path)
-            elif grow is None:
-                grow = path
+        nonlocal best
+        if (len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3)
+                and (len(t[0]) != 1 or t[2] == ())):
+            d = _drop(t)
+            if best is None or d > best[0]:
+                best = (d, path)
         for i, e in enumerate(t):
             walk(e, path + (i,))
     walk(t, ())
-    target = best[1] if best else grow
-    if target is None:
-        return None
+    if best is None:                # nothing shrinks: root-first's pick
+        return step(t)
     def fire_at(t, path):
         if not path:
             return _fire(t)
         i = path[0]
         return t[:i] + (fire_at(t[i], path[1:]),) + t[i+1:]
-    return fire_at(t, target)
+    return fire_at(t, best[1])
 
 def count_steps(t):
     n = 0

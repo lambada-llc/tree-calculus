@@ -22,12 +22,13 @@
 // --shrink-eager is a different strategy over the plain rules (it composes
 // with neither --peek nor --fuse): only rule 2 with a non-leaf argument can
 // grow a term, and every other fire shrinks it without duplicating anything,
-// so firing shrink redexes first -- biggest drop first, the growing rule 2
-// leftmost-outermost only when nothing shrinks -- keeps every intermediate at
-// most as large as under root-first order (a residual argument makes that
-// pointwise). Same normal forms; each step is one canonical rewrite. Its
-// leftmost pick is not proven normalizing, so pair it with --limit if in
-// doubt (min-growth picks provably diverge on the __wn family).
+// so shrink redexes fire first -- biggest drop first -- and only when nothing
+// shrinks does the root-first step pick the growing fire. Firing a shrink
+// early can only make every later term smaller (a residual argument), so
+// intermediates stay small. Same normal forms; each step is one canonical
+// rewrite. Not proven normalizing -- pair with --limit if in doubt; picking
+// growing fires by any global rule (leftmost in preorder, min-growth) instead
+// of root-first's descent provably diverges on parts of the __wn family.
 
 import { readFileSync } from 'node:fs';
 
@@ -155,24 +156,22 @@ const shrinkDrop = k => {
   return 3 + x.n + y.n;
 };
 const stepShrinkEager = root => {
-  let bestShrink = null, firstGrow = null;
+  let best = null;
   const walk = (t, path) => {
     if (t.nf) return;
     const k = t.kids;
-    if (k.length >= 3 && k[0].kids.length < 3 && (k[0].kids.length < 2 || k[2].kids.length < 3)) {
-      if (k[0].kids.length !== 1 || k[2].kids.length === 0) {
-        const drop = shrinkDrop(k);
-        if (!bestShrink || drop > bestShrink.drop) bestShrink = { path, drop };
-      } else if (!firstGrow) firstGrow = { path };
+    if (k.length >= 3 && k[0].kids.length < 3 && (k[0].kids.length < 2 || k[2].kids.length < 3)
+        && (k[0].kids.length !== 1 || k[2].kids.length === 0)) {
+      const drop = shrinkDrop(k);
+      if (!best || drop > best.drop) best = { path, drop };
     }
     for (let i = 0; i < k.length; i++) walk(k[i], path.concat(i));
   };
   walk(root, []);
-  const target = bestShrink ?? firstGrow;
-  if (!target) return null;
+  if (!best) return stepNormal(root);   // nothing shrinks: root-first's pick
   const spine = [];
   let t = root;
-  for (const i of target.path) { spine.push({ node: t, idx: i }); t = t.kids[i]; }
+  for (const i of best.path) { spine.push({ node: t, idx: i }); t = t.kids[i]; }
   t = mk(fire(t.kids));
   for (let j = spine.length - 1; j >= 0; j--) t = patch(spine[j].node, spine[j].idx, t);
   return t;

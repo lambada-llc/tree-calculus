@@ -103,17 +103,14 @@ let step_shrink_eager t =
         go (fun b' -> ctx (App (a, b'))) b
   in
   go (fun x -> x) t;
-  match List.rev !candidates with
-  | [] -> None
-  | ((leftmost, _) :: _) as cs ->
+  match List.filter (fun (_, d) -> d < 0) (List.rev !candidates) with
+  | [] -> step_anywhere t (* nothing shrinks: normal order's pick *)
+  | c :: shrinks ->
       Some
-        (match List.filter (fun (_, d) -> d < 0) cs with
-        | [] -> leftmost
-        | c :: shrinks ->
-            fst
-              (List.fold_left
-                 (fun best c -> if snd c < snd best then c else best)
-                 c shrinks))
+        (fst
+           (List.fold_left
+              (fun best c -> if snd c < snd best then c else best)
+              c shrinks))
 
 (* inline tests *)
 
