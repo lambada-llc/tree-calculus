@@ -50,6 +50,23 @@ def _fire(t):
     u, v = c                        # 3c: c = △ u v -> (b u v)
     return b + (u, v) + w
 
+# --fuse: compress transient size spikes into one recorded composite -- after
+# a fire that grew the head node, keep firing there, up to `fuse` fires total,
+# while it is still above its pre-fire size. Every recorded term is a term of
+# the plain sequence.
+
+fuse = 0
+
+def _fireable(t):
+    return len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3)
+
+def _fire_chain(t):
+    out = _fire(t)
+    start, n = nodes(t), 1
+    while n < fuse and nodes(out) > start and _fireable(out):
+        out = _fire(out); n += 1
+    return out
+
 def step(t):
     if len(t) >= 3:
         a, c = t[0], t[2]
@@ -57,7 +74,7 @@ def step(t):
             return (step(a),) + t[1:]
         if len(a) == 2 and len(c) >= 3: # rule-3 argument not a value yet
             return t[:2] + (step(c),) + t[3:]
-        return _fire(t)
+        return _fire_chain(t)
     for i, e in enumerate(t):           # a value: reduce the leftmost child that can
         s = step(e)
         if s is not None:
@@ -174,9 +191,14 @@ if __name__ == '__main__':
     p.add_argument('--eager', action='store_true', help='applicative instead of root-first order')
     p.add_argument('--peek', action='store_true', help='rule-2 shortcuts that avoid duplicating the argument')
     p.add_argument('--shrink-eager', action='store_true', help='shrinking fires first; smallest intermediate terms')
+    p.add_argument('--fuse', type=int, nargs='?', const=8, default=0,
+                   help='compress transient spikes into composite steps, up to this many fires (implies --peek)')
     a = p.parse_args()
-    peek = a.peek
-    step = step_applicative if a.eager else step_shrink_eager if a.shrink_eager else step
+    peek = a.peek or a.fuse > 0
+    fuse = a.fuse
+    # a fresh name: rebinding `step` would turn step_shrink_eager's root-first
+    # fallback into a call to itself
+    step_fn = step_applicative if a.eager else step_shrink_eager if a.shrink_eager else step
     t = ()
     for i, line in enumerate(sys.stdin.read().split()):
         u = parse_ternary(line)
@@ -184,7 +206,7 @@ if __name__ == '__main__':
     i = 0
     while True:
         print(f'{i} {nodes(t)} {format_term(t)}' if a.terms else f'{i} {nodes(t)}')
-        s = step(t)
+        s = step_fn(t)
         if s is None or (a.limit is not None and i >= a.limit):
             break
         t = s; i += 1
