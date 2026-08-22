@@ -52,7 +52,8 @@ $ ./main.js <param>+
 where `<param>` is one of
 * A flag that modifies how subsequent trees are parsed or printed.
   * `-bool`, `-nat`, `-string` follow the conventions for representing data described [here](../conventions/).
-  * `-ternary`, `-term`, `-dag` follow the conventions for representing trees described [here](../conventions/).
+  * `-ternary`, `-term`, `-dag`, `-minbin` follow the conventions for representing trees described [here](../conventions/).
+  * `-buffer` is `-string` for binary data: the tree is a list of byte-sized naturals, printed raw.
   * `-infer` tries to guess which of the above formats are used. This is the default behavior as long as no explicit format has been specified. However, this has potential to be quite confusing, so explicitly passing formats is strongly recommended.
   * `-file` is orthogonal to all other flags in that it does not update the expected format, but merely causes the next tree (and only the next one) to be read from a file rather than directly from the command line.
 * A tree that is either program or argument to said program.

@@ -181,6 +181,10 @@ an entry refreshes its mtime, which is what lets a warmer prune by age.
 
 ### Read by the build scripts that drive `runner`
 
+These two are read by the consumer's build, not by `runner` itself — the
+paths below are [forest](https://github.com/lambada-llc/forest)'s, the
+heaviest driver of this runner.
+
 #### `RUNNER_WORKERS` *(default: 1)*
 
 Read by `build/rules/compile/compile-all.js` and
@@ -206,7 +210,7 @@ passing one.
 
 #### `CXX` *(default: `c++`)*
 
-Compiler used for the on-demand build of `runner.cpp` to `.runner.exe`. The
+Compiler used for the on-demand build of `runner.cpp`. The
 build flags are fixed: `-O3 -std=c++17 -pthread`.
 
 ## Tuning recipes

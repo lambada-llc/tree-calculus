@@ -1,7 +1,7 @@
 // runner.cpp — minimal fast tree-calculus program runner
 //
 // The other DAG machines in this directory are pure DAG→DAG transforms:
-// reduce.cpp reduces a tree, canonicalize.cpp hash-conses it, a tree in
+// reduce_canonicalize.cpp reduces a tree and hash-conses it, a tree in
 // on stdin and a tree out on stdout. This one instead *runs a program
 // against data*: it marshals host strings/bytes into tree-calculus
 // values, applies the program to them, and decodes the result back to a

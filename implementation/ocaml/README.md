@@ -19,9 +19,9 @@ dune build --watch
 dune fmt
 ```
 
-### Build and run self-check
+### Build
 ```
-dune exec tree_calculus_reference_implementation
+dune build
 ```
 
 ### Test

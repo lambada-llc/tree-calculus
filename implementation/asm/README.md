@@ -62,7 +62,7 @@ Heap addresses are always non-zero, so `0` unambiguously means "no child" — th
 
 **x64-ternary**: `x64` with the original tagged-ternary node layout instead of the two-word tagless one (see *By internal representation*). Kept as the head-to-head baseline for the representation change.
 
-**x64-noid**: Omits the identity tree builder at startup. The first input becomes the accumulator directly instead of being applied to the identity. Undefined behavior for fewer than 2 inputs. Saves ~11 bytes.
+**x64-noid**: Omits the identity tree builder at startup. The first input becomes the accumulator directly instead of being applied to the identity. Undefined behavior for fewer than 2 inputs. Saves 4 bytes (see `sizes.txt`).
 
 ## Sizes
 
