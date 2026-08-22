@@ -132,7 +132,7 @@ function of(e, s) {
     else if (a)
       return get_env(a);
   }
-  return raise("dag representation was unepxectedly not terminated by a value");
+  return raise("dag representation was unexpectedly not terminated by a value");
 }
 var formatter = { to, of };
 var dag_default = formatter;

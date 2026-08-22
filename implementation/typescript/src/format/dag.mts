@@ -48,7 +48,7 @@ function of<TTree>(e: Evaluator<TTree>, s: string): TTree {
     else if (b) env[a] = get_env(b);
     else if (a) return get_env(a);
   }
-  return raise('dag representation was unepxectedly not terminated by a value');
+  return raise('dag representation was unexpectedly not terminated by a value');
 }
 
 const formatter: Formatter = { to, of };

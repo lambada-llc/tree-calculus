@@ -288,7 +288,7 @@ function test_fingerprint() {
     'the same term fingerprints the same, whatever the lines look like');
   assert_equal(
     false,
-    hex(fingerprint('x △ △\nx\n').value) === hex(fingerprint('y △ (△ △)\ny\n').value),
+    hex(fingerprint('x △ △\nx\n').value) === hex(fingerprint('s △ △\ny △ s\ny\n').value),
     'different terms fingerprint differently');
   assert_equal(
     hex(fingerprint('k △ △\nk\n').fingerprints.get('k')),

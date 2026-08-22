@@ -2,7 +2,9 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-MAIN_JS="$DIR/../../typescript/main.js"
+# The checked-in bundle, so a fresh clone can run this without `npm run bundle`
+# (same choice as test-runner.sh).
+MAIN_JS="$DIR/../../../bin/main.js"
 
 # Compile
 "$DIR/compile.sh"
@@ -27,7 +29,7 @@ for dag in "$DIR"/*.dag; do
   # --stats=`) is exercised too; the table itself is written for reading, not
   # compared against anything.
   "$DIR/reduce_canonicalize.exe" --stats-per-symbol < "$dag" > "$out" 2> "$stats.csv"
-  column -s, -t < "$stats.csv" > "$stats"
+  tr ',' '\t' < "$stats.csv" > "$stats"
   rm -f "$stats.csv"
 
   expected=$(node "$MAIN_JS" --dag --file "$dag" --ternary)
