@@ -1,0 +1,5 @@
+name = "tree-calculus"
+defaultTargets = ["TreeCalculus"]
+
+[[lean_lib]]
+name = "TreeCalculus"
