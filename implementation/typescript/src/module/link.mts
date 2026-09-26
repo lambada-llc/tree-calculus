@@ -10,6 +10,7 @@
 // reference mean?) and a dependency cycle (no order satisfies everyone).
 
 import { raise } from "../common.mjs";
+import { LEAF } from "./module.mjs";
 
 export interface Fragment {
   /** How this module is identified in errors, typically a file path. */
@@ -71,7 +72,12 @@ export function interface_of(text: string): Interface {
     for (let i = 1; i < words.length; i++)
       if (!defined.has(words[i])) imports.add(words[i]);
     defined.add(words[0]);
-    if (words.length === 2 && !words[0].includes(':')) exports.add(words[0]);
+    // Binding `△` names the leaf something else for the rest of the module; it
+    // does not offer the leaf to anyone. Exporting it would say every module
+    // that spells `△` — which is all of them — depends on this one, and a
+    // module this one depends on would then depend back on it.
+    if (words.length === 2 && !words[0].includes(':') && words[0] !== LEAF)
+      exports.add(words[0]);
   }
 
   return { exports: [...exports], imports: [...imports] };
