@@ -157,6 +157,12 @@ function test_interface() {
   const { exports, imports } = interface_of('k △ △\nnot k\nhelper:0 Other.thing\n');
   assert_equal('not', exports.join(','), 'two-word definitions of ordinary names export');
   assert_equal('△,Other.thing', imports.join(','), 'anything not defined above is imported');
+
+  // A source is free to bind `△`. Doing so offers the leaf to nobody — and
+  // from there on `△` is what this module bound, not something it needs.
+  const rebound = interface_of('△ x\nfoo △\n');
+  assert_equal('foo', rebound.exports.join(','), 'rebinding the leaf exports nothing');
+  assert_equal('x', rebound.imports.join(','), 'and its own binding is not an import');
 }
 
 function test_link() {

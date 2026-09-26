@@ -736,7 +736,7 @@ function interface_of(text) {
       if (!defined.has(words[i]))
         imports.add(words[i]);
     defined.add(words[0]);
-    if (words.length === 2 && !words[0].includes(":"))
+    if (words.length === 2 && !words[0].includes(":") && words[0] !== LEAF)
       exports2.add(words[0]);
   }
   return { exports: [...exports2], imports: [...imports] };
