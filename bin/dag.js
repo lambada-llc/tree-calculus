@@ -50,6 +50,8 @@ module.exports = __toCommonJS(main_dag_exports);
 var import_fs4 = require("fs");
 
 // src/common.mjs
+var import_worker_threads = require("worker_threads");
+var writer = `${process.pid}.${import_worker_threads.threadId}`;
 function children(e, x) {
   return e.triage(() => [], (u) => [u], (u, v) => [u, v])(x);
 }
@@ -837,7 +839,7 @@ function memoize(run2, program, options = {}) {
     const path = (0, import_path.resolve)(cache_dir2, sha256(`${program_hash}
 ${input}`));
     if (!(0, import_fs.existsSync)(path)) {
-      const temporary = `${path}.${process.pid}.tmp`;
+      const temporary = `${path}.${writer}.tmp`;
       try {
         (0, import_fs.writeFileSync)(temporary, run2(input));
         (0, import_fs.renameSync)(temporary, path);
@@ -862,7 +864,6 @@ function transformer(e, program, options = {}) {
 var import_child_process = require("child_process");
 var import_fs3 = require("fs");
 var import_os = require("os");
-var import_worker_threads = require("worker_threads");
 var import_path3 = require("path");
 
 // src/module/cache.mjs
@@ -873,7 +874,6 @@ var cache_dir = () => process.env.TREE_CALCULUS_CACHE || void 0;
 var REDUCE_STORE = "reduce-v1";
 var MODULE_STORE = "module-v1";
 var text_key = (text) => (0, import_crypto2.createHash)("sha256").update(text).digest();
-var counter = 0;
 function store(name) {
   const base = cache_dir();
   if (base === void 0)
@@ -905,7 +905,7 @@ function store(name) {
     },
     put: (key, data) => {
       const at = path(key);
-      const temporary = `${at}.${process.pid}.${counter++}.tmp`;
+      const temporary = `${at}.${writer}.tmp`;
       try {
         (0, import_fs2.writeFileSync)(temporary, data);
         (0, import_fs2.renameSync)(temporary, at);
@@ -981,7 +981,7 @@ var executable = once(() => {
   const exe = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.exe`);
   const current = (0, import_fs3.existsSync)(exe) && (0, import_fs3.statSync)(exe).mtimeMs >= source_mtime(from);
   if (!current) {
-    const mine = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.${process.pid}.${import_worker_threads.threadId}.exe`);
+    const mine = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.${writer}.exe`);
     (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", [
       "-O3",
       "-std=c++17",
@@ -1072,7 +1072,7 @@ function recent_dumps(modules) {
     list,
     remember(key) {
       const next = [key.toString("hex"), ...list.filter((k) => k !== key.toString("hex"))];
-      const temporary = `${at}.${process.pid}.tmp`;
+      const temporary = `${at}.${writer}.tmp`;
       (0, import_fs3.writeFileSync)(temporary, next.slice(0, 8).join("\n") + "\n");
       (0, import_fs3.renameSync)(temporary, at);
     }

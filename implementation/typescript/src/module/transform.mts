@@ -16,7 +16,7 @@
 import { createHash } from "crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
 import { resolve } from "path";
-import { Evaluator, marshal } from "../common.mjs";
+import { Evaluator, marshal, writer } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
 
 export interface TransformerOptions {
@@ -49,7 +49,7 @@ export function memoize(
     if (!existsSync(path)) {
       // Through a temporary and a rename, so a parallel writer filling the
       // same cache never shows a reader half an entry.
-      const temporary = `${path}.${process.pid}.tmp`;
+      const temporary = `${path}.${writer}.tmp`;
       try {
         writeFileSync(temporary, run(input));
         renameSync(temporary, path);

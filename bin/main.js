@@ -34,6 +34,8 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 
 // src/common.mjs
+var import_worker_threads = require("worker_threads");
+var writer = `${process.pid}.${import_worker_threads.threadId}`;
 function children(e, x) {
   return e.triage(() => [], (u) => [u], (u, v) => [u, v])(x);
 }

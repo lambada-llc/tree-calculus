@@ -18,9 +18,8 @@ import {
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "fs";
 import { tmpdir } from "os";
-import { threadId } from "worker_threads";
 import { dirname, join, resolve } from "path";
-import { Evaluator, raise } from "../common.mjs";
+import { Evaluator, raise, writer } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
 import { MODULE_STORE, REDUCE_STORE, Store, store, text_key } from "../module/cache.mjs";
 import { EnvOptions, Environment } from "../module/env.mjs";
@@ -77,9 +76,9 @@ const eager = () => process.env.TREE_CALCULUS_RUNNER === 'eager';
  * `once` is per thread and the path is not: several threads of one process
  * asking for the runner all find it missing and all build it. Writing straight
  * to the shared name lets them overwrite each other's output, and whoever spawns
- * the result gets half a binary. A rename is atomic, so the name only ever holds
- * a binary someone finished — which is also what makes the mtime check below
- * sound.
+ * the result gets `spawn ETXTBSY` or half a binary. A rename is atomic, so the
+ * name only ever holds a binary someone finished — which is also what makes the
+ * mtime check below sound.
  */
 const executable = once(() => {
   const from = source();
@@ -90,7 +89,7 @@ const executable = once(() => {
   const current = existsSync(exe) && statSync(exe).mtimeMs >= source_mtime(from);
   if (!current) {
     // Still a .exe, so the ignore rule that covers the binary covers this too.
-    const mine = join(dirname(from), `${name}.${process.pid}.${threadId}.exe`);
+    const mine = join(dirname(from), `${name}.${writer}.exe`);
     execFileSync(process.env.CXX ?? 'c++',
       ['-O3', '-std=c++17', '-pthread', ...(eager() ? ['-DRUNNER_EAGER'] : []),
        from, '-o', mine], { stdio: 'inherit' });
@@ -225,7 +224,7 @@ function recent_dumps(modules: Store): { list: string[], remember(key: Buffer): 
     list,
     remember(key) {
       const next = [key.toString('hex'), ...list.filter(k => k !== key.toString('hex'))];
-      const temporary = `${at}.${process.pid}.tmp`;
+      const temporary = `${at}.${writer}.tmp`;
       writeFileSync(temporary, next.slice(0, 8).join('\n') + '\n');
       renameSync(temporary, at);
     },
