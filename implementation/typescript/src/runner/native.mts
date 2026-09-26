@@ -18,6 +18,7 @@ import {
   renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "fs";
 import { tmpdir } from "os";
+import { threadId } from "worker_threads";
 import { dirname, join, resolve } from "path";
 import { Evaluator, raise } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
@@ -69,17 +70,31 @@ function source_mtime(from: string): number {
  */
 const eager = () => process.env.TREE_CALCULUS_RUNNER === 'eager';
 
-/** Build the runner next to its source, unless a current binary is already there. */
+/**
+ * Build the runner next to its source, unless a current binary is already there.
+ *
+ * Compiled under a name of this builder's own and moved into place, because
+ * `once` is per thread and the path is not: several threads of one process
+ * asking for the runner all find it missing and all build it. Writing straight
+ * to the shared name lets them overwrite each other's output, and whoever spawns
+ * the result gets half a binary. A rename is atomic, so the name only ever holds
+ * a binary someone finished — which is also what makes the mtime check below
+ * sound.
+ */
 const executable = once(() => {
   const from = source();
   // The two evaluators get their own binaries, so a repository that uses one
   // does not force a rebuild on a repository that uses the other.
-  const exe = join(dirname(from), eager() ? 'runner-eager.exe' : 'runner.exe');
+  const name = eager() ? 'runner-eager' : 'runner';
+  const exe = join(dirname(from), `${name}.exe`);
   const current = existsSync(exe) && statSync(exe).mtimeMs >= source_mtime(from);
   if (!current) {
+    // Still a .exe, so the ignore rule that covers the binary covers this too.
+    const mine = join(dirname(from), `${name}.${process.pid}.${threadId}.exe`);
     execFileSync(process.env.CXX ?? 'c++',
       ['-O3', '-std=c++17', '-pthread', ...(eager() ? ['-DRUNNER_EAGER'] : []),
-       from, '-o', exe], { stdio: 'inherit' });
+       from, '-o', mine], { stdio: 'inherit' });
+    renameSync(mine, exe);
   }
   return exe;
 });
@@ -99,12 +114,16 @@ const executable = once(() => {
  * the behaviour a synchronous client wants.
  */
 const server = once(() => {
+  // Built before the FIFOs are made: `once` remembers only what succeeded, so a
+  // failure here is retried, and a retry that finds its own FIFOs already there
+  // reports that instead of what actually went wrong.
+  const exe = executable();
   const to = join(scratch(), 'to-runner');
   const from = join(scratch(), 'from-runner');
   execFileSync('mkfifo', [to, from]);
   const write_fd = openSync(to, 'r+');
   const read_fd = openSync(from, 'r+');
-  const runner = spawn(executable(), ['-s'], { stdio: [write_fd, read_fd, 'inherit'] });
+  const runner = spawn(exe, ['-s'], { stdio: [write_fd, read_fd, 'inherit'] });
   // Waiting for the runner is never what keeps this process alive: it only ever
   // has something to say in response to being asked, and it is asked
   // synchronously.

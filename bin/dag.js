@@ -862,6 +862,7 @@ function transformer(e, program, options = {}) {
 var import_child_process = require("child_process");
 var import_fs3 = require("fs");
 var import_os = require("os");
+var import_worker_threads = require("worker_threads");
 var import_path3 = require("path");
 
 // src/module/cache.mjs
@@ -976,9 +977,11 @@ function source_mtime(from) {
 var eager = () => process.env.TREE_CALCULUS_RUNNER === "eager";
 var executable = once(() => {
   const from = source();
-  const exe = (0, import_path3.join)((0, import_path3.dirname)(from), eager() ? "runner-eager.exe" : "runner.exe");
+  const name = eager() ? "runner-eager" : "runner";
+  const exe = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.exe`);
   const current = (0, import_fs3.existsSync)(exe) && (0, import_fs3.statSync)(exe).mtimeMs >= source_mtime(from);
   if (!current) {
+    const mine = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.${process.pid}.${import_worker_threads.threadId}.exe`);
     (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", [
       "-O3",
       "-std=c++17",
@@ -986,18 +989,20 @@ var executable = once(() => {
       ...eager() ? ["-DRUNNER_EAGER"] : [],
       from,
       "-o",
-      exe
+      mine
     ], { stdio: "inherit" });
+    (0, import_fs3.renameSync)(mine, exe);
   }
   return exe;
 });
 var server = once(() => {
+  const exe = executable();
   const to5 = (0, import_path3.join)(scratch(), "to-runner");
   const from = (0, import_path3.join)(scratch(), "from-runner");
   (0, import_child_process.execFileSync)("mkfifo", [to5, from]);
   const write_fd = (0, import_fs3.openSync)(to5, "r+");
   const read_fd = (0, import_fs3.openSync)(from, "r+");
-  const runner = (0, import_child_process.spawn)(executable(), ["-s"], { stdio: [write_fd, read_fd, "inherit"] });
+  const runner = (0, import_child_process.spawn)(exe, ["-s"], { stdio: [write_fd, read_fd, "inherit"] });
   runner.unref();
   process.on("exit", () => runner.kill());
   const byte = Buffer.alloc(1);
