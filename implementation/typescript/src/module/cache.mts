@@ -18,6 +18,7 @@ import {
   existsSync, mkdirSync, readFileSync, renameSync, rmSync, utimesSync, writeFileSync,
 } from "fs";
 import { join } from "path";
+import { writer } from "../common.mjs";
 
 export const cache_dir = (): string | undefined =>
   process.env.TREE_CALCULUS_CACHE || undefined;
@@ -31,8 +32,6 @@ export const MODULE_STORE = 'module-v1';
 
 export const text_key = (text: string): Buffer =>
   createHash('sha256').update(text).digest();
-
-let counter = 0;
 
 export interface Store {
   path(key: Buffer): string;
@@ -69,9 +68,9 @@ export function store(name: string): Store | null {
     },
     put: (key, data) => {
       const at = path(key);
-      // Unique per writer, so parallel processes never write the same
-      // temporary; the rename is atomic, so whoever lands last wins whole.
-      const temporary = `${at}.${process.pid}.${counter++}.tmp`;
+      // Unique per writer, so nobody else writes the same temporary; the
+      // rename is atomic, so whoever lands last wins whole.
+      const temporary = `${at}.${writer}.tmp`;
       try {
         writeFileSync(temporary, data);
         renameSync(temporary, at);

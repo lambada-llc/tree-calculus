@@ -1,3 +1,14 @@
+import { threadId } from "worker_threads";
+
+/**
+ * What to call a file only this writer is writing.
+ *
+ * A pid is not enough. Several threads of one process write the same caches, and
+ * a temporary two of them pick the same name for is one they both write and one
+ * of them renames out from under the other — which surfaces as the rename
+ * failing with ENOENT, a long way from the name that caused it.
+ */
+export const writer = `${process.pid}.${threadId}`;
 
 export function assert_equal<T>(expected: T, actual: T, test_case: string){
   console.assert(expected === actual, `expected: ${expected}, actual: ${actual}, test: ${test_case}`);
