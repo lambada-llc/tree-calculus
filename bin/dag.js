@@ -567,17 +567,16 @@ var DagModule = class _DagModule {
    *
    * Only heads are rewritten; references follow because they share the box.
    */
-  qualify(prefix, options = {}) {
-    const { reserved = is_label } = options;
+  qualify(prefix) {
     const last_definition = /* @__PURE__ */ new Map();
     this.lines.forEach((line, i) => {
-      if (line.length === 2 && !reserved(line[0].symbol))
+      if (line.length === 2 && !is_label(line[0].symbol))
         last_definition.set(line[0].symbol, i);
     });
     let internal = 0;
     this.lines.forEach((line, i) => {
       const head = line[0].symbol;
-      const qualifiable = (line.length === 2 || line.length === 3 && /^[a-zA-Z_]/.test(head)) && !reserved(head);
+      const qualifiable = (line.length === 2 || line.length === 3 && /^[a-zA-Z_]/.test(head)) && !is_label(head);
       if (!qualifiable)
         return;
       const exported = !is_private(head) && last_definition.get(head) === i;
@@ -1259,7 +1258,6 @@ Commands:
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
-  --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
   --symbol <s>            Which symbol 'extract' keeps \u2014 repeat it for several \u2014
                           or which one 'eval' prints. 'eval' defaults to the
                           last one.
@@ -1281,8 +1279,6 @@ function parse_args(argv) {
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
     if (arg === "--prefix")
       options.prefix = value();
-    else if (arg === "--reserved")
-      options.reserved = value();
     else if (arg === "--symbol")
       options.symbols.push(value());
     else if (arg === "--matching")
@@ -1320,8 +1316,7 @@ function run(command, files, options) {
       return utf8(DagModule.parse(read_input(files)).canonicalize().toString());
     case "qualify": {
       const prefix = options.prefix ?? raise("qualify needs --prefix");
-      const extra = options.reserved === void 0 ? null : new RegExp(options.reserved);
-      return utf8(DagModule.parse(read_input(files), { absorb_internal_aliases: false }).qualify(prefix, { reserved: (name) => is_label(name) || !!extra?.test(name) }).toString());
+      return utf8(DagModule.parse(read_input(files), { absorb_internal_aliases: false }).qualify(prefix).toString());
     }
     case "extract": {
       const module2 = DagModule.parse(read_input(files));

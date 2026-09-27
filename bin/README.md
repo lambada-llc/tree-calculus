@@ -79,7 +79,6 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | Option | |
 | --- | --- |
 | `--prefix <p>` | Namespace prefix for `qualify`, e.g. `Bool.` |
-| `--reserved <regex>` | Names `qualify` must leave alone, on top of labels. Useful for whatever a compiler reserves for itself. |
 | `--symbol <s>` | Which symbol `extract` keeps — repeat it for several — or which one `eval` prints. `eval` defaults to the last one. |
 | `--matching <regex>` | `extract`'s symbols by pattern; `^Nat\.` is a module. |
 | `--except <regex>` | The same, by what they are not. |

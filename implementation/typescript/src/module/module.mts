@@ -69,10 +69,6 @@ export interface ParseOptions {
   absorb_internal_aliases?: boolean;
 }
 
-export interface QualifyOptions {
-  /** Names left untouched. Labels always are; a compiler's own reserved names can be added. */
-  reserved?: (name: string) => boolean;
-}
 
 export class DagModule {
   /**
@@ -277,12 +273,10 @@ export class DagModule {
    *
    * Only heads are rewritten; references follow because they share the box.
    */
-  qualify(prefix: string, options: QualifyOptions = {}): this {
-    const { reserved = is_label } = options;
-
+  qualify(prefix: string): this {
     const last_definition = new Map<string, number>();
     this.lines.forEach((line, i) => {
-      if (line.length === 2 && !reserved(line[0].symbol))
+      if (line.length === 2 && !is_label(line[0].symbol))
         last_definition.set(line[0].symbol, i);
     });
 
@@ -291,7 +285,7 @@ export class DagModule {
       const head = line[0].symbol;
       const qualifiable =
         (line.length === 2 || (line.length === 3 && /^[a-zA-Z_]/.test(head)))
-        && !reserved(head);
+        && !is_label(head);
       if (!qualifiable) return;
       const exported = !is_private(head) && last_definition.get(head) === i;
       line[0].symbol = exported ? `${prefix}${head}` : `${prefix}${head}:${internal++}`;

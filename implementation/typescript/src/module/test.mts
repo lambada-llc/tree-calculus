@@ -65,13 +65,6 @@ function test_qualify() {
     'Bool.not:0 △ △\nBool._helper:1 △\nBool.not △\n:t Bool.not\n',
     qualified,
     'last public definition exports, everything else stays private');
-
-  assert_equal(
-    'Bool.x △\n__ENV△ △\n',
-    DagModule.parse('x △\n__ENV△ △\n').qualify('Bool.', {
-      reserved: name => is_label(name) || name.startsWith('__ENV'),
-    }).toString(),
-    'reserved names are left alone');
 }
 
 // --- Extracting ---
@@ -144,8 +137,8 @@ function test_canonicalize() {
   // Two names for one value do not defeat sharing: `x` and `y` build the same
   // node, one of them by way of a name bound to the leaf.
   assert_equal(
-    '__ENV△ △\n1 △ △\nr 1\n:r r\n',
-    DagModule.parse('__ENV△ △\nx △ __ENV△\ny △ △\nr x\n:r r\n').canonicalize().toString(),
+    'leaf △\n1 △ △\nr 1\n:r r\n',
+    DagModule.parse('leaf △\nx △ leaf\ny △ △\nr x\n:r r\n').canonicalize().toString(),
     'a name bound to the leaf shares with △ itself');
 }
 

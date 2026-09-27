@@ -49,7 +49,6 @@ Commands:
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
-  --reserved <regex>      Names 'qualify' must leave alone, on top of labels.
   --symbol <s>            Which symbol 'extract' keeps — repeat it for several —
                           or which one 'eval' prints. 'eval' defaults to the
                           last one.
@@ -62,7 +61,6 @@ A file argument of '-', or no file at all, reads stdin.`;
 
 interface Options {
   prefix?: string;
-  reserved?: string;
   symbols: string[];
   matching?: string;
   except?: string;
@@ -81,7 +79,6 @@ function parse_args(argv: string[]): { command: string, files: string[], options
     const arg = argv[i];
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
     if (arg === '--prefix') options.prefix = value();
-    else if (arg === '--reserved') options.reserved = value();
     else if (arg === '--symbol') options.symbols.push(value());
     else if (arg === '--matching') options.matching = value();
     else if (arg === '--except') options.except = value();
@@ -118,10 +115,9 @@ function run(command: string, files: string[], options: Options): Uint8Array {
 
     case 'qualify': {
       const prefix = options.prefix ?? raise('qualify needs --prefix');
-      const extra = options.reserved === undefined ? null : new RegExp(options.reserved);
       return utf8(DagModule
         .parse(read_input(files), { absorb_internal_aliases: false })
-        .qualify(prefix, { reserved: name => is_label(name) || !!extra?.test(name) })
+        .qualify(prefix)
         .toString());
     }
 
