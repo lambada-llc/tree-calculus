@@ -292,9 +292,11 @@ function test_fingerprint() {
     hex(fingerprint('a △ △\nx a △\nx\n').value),
     hex(fingerprint('1 △ △\n2 1 △\nalso 2\nalso\n').value),
     'the same term fingerprints the same, whatever the lines look like');
+  // Both spelled as lines, since that is all a DAG has: a nested term in the
+  // middle of one is not a node, it is three words that define nothing.
   assert_equal(
     false,
-    hex(fingerprint('x △ △\nx\n').value) === hex(fingerprint('y △ (△ △)\ny\n').value),
+    hex(fingerprint('x △ △\nx\n').value) === hex(fingerprint('s △ △\ny △ s\ny\n').value),
     'different terms fingerprint differently');
   assert_equal(
     hex(fingerprint('k △ △\nk\n').fingerprints.get('k')),
