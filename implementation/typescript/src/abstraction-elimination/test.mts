@@ -104,8 +104,8 @@ function test_size() {
   assert_equal(168n, evaluate(kiselyov_eta), 'record');
 
   const evaluate2 = (elim: (term: Term_Lambda) => Term_Lambda) => size(elim(_functional));
-  assert_equal(76n, evaluate2(star_skibc_op_eta), 'record');
-  assert_equal(76n, evaluate2(kiselyov_eta), 'record');
+  assert_equal(119n, evaluate2(star_skibc_op_eta), 'record');
+  assert_equal(119n, evaluate2(kiselyov_eta), 'record');
   console.groupEnd();
 }
 

@@ -1,0 +1,46 @@
+# Runs the test suites of every implementation that has one.
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Reference implementation
+        working-directory: implementation/typescript
+        run: |
+          npm ci
+          npm run build
+          node src/test.mjs
+
+      # The committed bundles are what every consumer loads, so they have to be
+      # what the sources produce.
+      - name: bin/ is what the sources build
+        run: |
+          ./bin/build.sh
+          git diff --exit-code -- bin
+
+      # Builds both C++ engines and checks them against the reference
+      # implementation, the runner's own end-to-end suite included.
+      - name: Dag machine
+        run: implementation/cpp/dag-machine/test.sh
+
+      - name: Regex implementation
+        run: implementation/pcre/test.sh
+
+      - name: Python implementation
+        run: python3 implementation/python/test_tree_calculus.py
