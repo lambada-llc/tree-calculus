@@ -31,6 +31,9 @@ echo 'import TreeCalculus
 | `TreeCalculus/Tests.lean` | Pins down the kernel cost that sharing buys (below). |
 | `dag2lean.mjs` | DAG → Lean: one definition per distinct node. |
 | `jets/gen.mjs` | Where the trees come from: the toolchain's eager normal forms, as `jets/*.dag`. |
+| `Main.lean` | `lake exe machine`: `step` itself, compiled, answering the runner's `reduce dag`. |
+| `difftest.mjs` | Samples what is trusted: the machine and eager runners on the same programs. |
+| `runner.mjs` | The eager runner built from `runner.cpp`, and a batch of requests to a server. |
 
 ## What is proven
 
@@ -195,7 +198,9 @@ Left out, and why it changes no result:
 
 - That `step` is `apply`'s loop: the table above, which is the whole of it. (`run_iff_eval` ties
   `step` to the reduction rules every implementation in this repository is tested against.)
-- Exact hash-consing, and a collector that frees nothing reachable and filters the memo.
+  Sampled, below.
+- Exact hash-consing, and a collector that frees nothing reachable and filters the memo. Sampled
+  along with it.
 - That a jet's native code takes only transitions of its relation (`MemberJet`, `DropJet`) —
   answers with the set membership it was checked for, skips only elements that are no
   separator — and fires on exactly the tree the theorem is about: its index, interned from the
@@ -205,6 +210,58 @@ Left out, and why it changes no result:
 Not trusted: `dag2lean.mjs` (a wrong translation is a theorem about some other tree, which the
 point above already excludes), and everything in `Symbolic.lean`, `Check.lean` and
 `Runtime.lean`, which is proven.
+
+### Sampled: the machine against the runner
+
+```
+node difftest.mjs [--cases n] [--seed n] [--fuel steps] [--timeout s] [--bundle file.dag] [runner...]
+```
+
+`Main.lean` compiles `step` — the definition the theorems are about, not a copy of it — into
+`lake exe machine`, which answers `runner -s`'s `reduce dag` as the runner does: one run of
+`step` from `reduce f x []` per payload line `id f x`, and the answer printed as `to_dag` prints
+it, which prints equal trees as equal text. `difftest.mjs` generates programs from a seed, has
+the machine run each for at most `--fuel` steps, and asks every eager runner — the one built from
+this repository's `runner.cpp`, and any named — the ones it finished: each answer must be the
+machine's, byte for byte. A runner serves them all in one process, so its memo and interned nodes
+carry over from one program to the next as they do in a build, and does so twice: at the default
+collection budget, and at 1 MiB, where it collects, frees and filters its memo mid-reduction.
+
+The programs, `--cases` of each kind: a random tree applied to a random tree; DAGs of
+applications of random trees, K and I to each other's results; the same over the jets' trees;
+`skipLine`, `skipComment` and `skipLineFix` on lists of characters, near misses of a newline and
+random trees — a tenth of them thousands long, some improper, some no list at all —; `isNewline`,
+`isHash` and `eqConstNewline` on the same elements; and, with `--bundle` (a DAG module, such as
+arboretum's `src/.dag-bundle-canonical`), its symbols evaluated and its functions applied to one
+or two random arguments or other symbols.
+
+What it checks: that on every program sampled, a runner's `apply` — its rules, the memo it hits
+and fills, the interning that makes an index a tree, the collector — returns what `step` does. A
+runner with jets is checked the same way, since `drop` and `member` apply the jets' own trees. It
+can fail: each of 13 one-line mutants of the base runner — one per rule of the table above, the
+S rule's two frames pushed in the other order, the memo keyed on `(a, a)`, the memo left
+unfiltered by a collection, the frames left unmarked (these two at 1 MiB only; the default
+budget never collected) — answers some program differently, or none at all.
+
+What it does not:
+
+- It samples; it proves nothing.
+- A program the machine does not finish within its fuel is counted and skipped. The machine has
+  no memo, so what only the memo makes affordable goes unsampled; `runtime_sound` is what covers
+  the memo.
+- The machine's answers rest on Lean's compiler, and on `Main.lean`'s reading and printing of
+  DAGs, none of which any theorem uses.
+- Only `reduce dag` is compared: marshalling (`bind`, `reduce string`) and the lazy evaluator are
+  not the machine.
+
+Measured with an arboretum `src/.dag-bundle-canonical` (sha256 `5298c444ef373884…`), `--cases
+2000 --fuel 10000000`, and two runners at both budgets: the one built here (whose `runner.cpp` and evaluator
+are 4c4eed7's), and the eager evaluator's optimizations (ea28edc). Seed 1 compared 13,548
+programs, whose answers took the machine 991,687,013 steps, and skipped 452 over fuel (23
+expressions, 169 symbols, 260 calls); seed 2 compared 13,516 and skipped 484. No answer differed
+in any of the 8 runs, and at 1 MiB each runner collected 91 and 99 times. A seed takes about 5
+minutes, most of it the machine spending its fuel on what it then skips; the defaults (1,000
+programs a kind, fuel 10^6, no bundle) take about 11 s.
 
 ## How a checker works
 

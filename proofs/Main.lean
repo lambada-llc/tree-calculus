@@ -47,7 +47,8 @@ def evalDag (text : String) : ExceptT String (StateM Nat) Tree := do
     | [w] => return ← look w
     | [w, v] => env := env.insert w (← look v)
     | w :: f :: x :: _ =>
-      let some (r, left) := exec (← get) (.reduce (← look f) (← look x) []) | set 0; throw "out of fuel"
+      let some (r, left) := exec (← get) (.reduce (← look f) (← look x) [])
+        | set 0; throw "out of fuel"
       set left
       env := env.insert w r
   throw "not terminated by a value"
