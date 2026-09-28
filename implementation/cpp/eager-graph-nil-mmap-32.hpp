@@ -74,6 +74,25 @@
 // the index it was across a collection — which is what lets every Tree a caller
 // is holding survive one without being registered anywhere.
 
+// Anonymous memory, reserved rather than committed: a page is only committed
+// the first time it is touched, so a region can be mapped at the most it will
+// ever need and cost what is used of it.
+//
+// Small pages, on purpose. Huge ones (MADV_HUGEPAGE) spare the TLB, and ran
+// 8-20% faster right after a run that used them; but a VM that returns freed
+// memory to its host returns whole 2 MiB blocks — the ones a huge-page fault
+// needs — so a run that started after a pause touched its memory at a seventh
+// of the speed, and took up to twice as long.
+static void *map_pages(size_t bytes) {
+  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_NORESERVE
+  flags |= MAP_NORESERVE;
+#endif
+  void *mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
+  if (mem == MAP_FAILED) throw std::runtime_error("mmap failed to reserve memory");
+  return mem;
+}
+
 class EagerGraphNilMmap32 {
 public:
   using Tree = uint32_t;
@@ -92,6 +111,10 @@ private:
   static constexpr size_t MIN_TABLE = size_t(1) << 12;
   static constexpr size_t MAX_MEMO = size_t(1) << 24;
   static constexpr size_t MIN_MEMO_CAP = size_t(1) << 21;
+
+  // The most slots the hash-consing table can reach: under reserve_interned's
+  // 0.7 load factor, 2^31 nodes take 2^32.
+  static constexpr size_t MAX_INTERNED = ARENA_NODES * 2;
 
   // A step that resolved in fewer rule applications than this is cheaper to
   // redo than to let its entry evict a slower one from the memo (see the
@@ -186,7 +209,13 @@ private:
   // made by alloc() alone: it is made by a search that came up empty, or where
   // no search could have found one (list(), and intern() over the node made
   // last).
-  std::vector<Tree> _interned;
+  //
+  // Both tables are mapped once, at the most they can reach, and re-laid in
+  // place: rebuild_interned() reads the arena rather than the old table, so
+  // nothing needs the old copy. Memory already touched costs a memset to
+  // re-lay; a fresh mapping costs a fault per page all over again — on a VM, a
+  // host round trip per page — and holds both copies at once while it grows.
+  Tree *const _interned = static_cast<Tree *>(map_pages(MAX_INTERNED * sizeof(Tree)));
   size_t _interned_count = 0;
   size_t _interned_mask = 0;
 
@@ -194,7 +223,7 @@ private:
   // replacing what was there. Bounded on purpose — this is the one table whose
   // natural size is the number of distinct redexes rather than the number of
   // live nodes, and losing an entry costs time, not correctness.
-  std::vector<Memo> _memo;
+  Memo *const _memo = static_cast<Memo *>(map_pages(MAX_MEMO * sizeof(Memo)));
   size_t _memo_mask = 0;
 
   // Per function (the `a` of apply(a, b), by hash), how many of its lookups in
@@ -244,7 +273,7 @@ private:
 
   /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes. */
   void rebuild_interned(size_t capacity) {
-    _interned.assign(capacity, 0);
+    std::fill_n(_interned, capacity, 0);
     _interned_mask = capacity - 1;
     _interned_count = 0;
     // A swept node is {0, next-free}: the leaf is the only live node whose left
@@ -379,20 +408,8 @@ private:
     }
   }
 
-  // Small pages, on purpose. Huge ones (MADV_HUGEPAGE) spare the TLB, and ran
-  // 8-20% faster back to back; but a VM that returns freed memory to its host
-  // returns it in whole 2 MiB blocks — the ones a huge-page fault needs — so a
-  // run that started after a pause touched its memory at a seventh of the
-  // speed, and took up to twice as long.
   void map_arena() {
-    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef MAP_NORESERVE
-    flags |= MAP_NORESERVE;
-#endif
-    void *mem = mmap(nullptr, ARENA_BYTES, PROT_READ | PROT_WRITE, flags, -1, 0);
-    if (mem == MAP_FAILED)
-      throw std::runtime_error("mmap failed to reserve arena");
-    _arena = static_cast<Node *>(mem);
+    _arena = static_cast<Node *>(map_pages(ARENA_BYTES));
     _arena[0] = {0, 0}; // index 0 reserved: 0 is the null child sentinel
     _arena[1] = {0, 0}; // the shared leaf
     _head = 2;
@@ -415,7 +432,7 @@ private:
   void size_memo() {
     const size_t cap = _budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP;
     const size_t capacity = std::min(round_up_pow2(_budget / 8), cap);
-    _memo.assign(capacity, Memo{0, 0, 0});
+    std::fill_n(_memo, capacity, Memo{0, 0, 0});
     _memo_mask = capacity - 1;
     std::fill(std::begin(_cold), std::end(_cold), 0);
   }
@@ -457,7 +474,11 @@ public:
     size_memo();
   }
 
-  ~EagerGraphNilMmap32() { munmap(_arena, ARENA_BYTES); }
+  ~EagerGraphNilMmap32() {
+    munmap(_arena, ARENA_BYTES);
+    munmap(_interned, MAX_INTERNED * sizeof(Tree));
+    munmap(_memo, MAX_MEMO * sizeof(Memo));
+  }
 
   EagerGraphNilMmap32(const EagerGraphNilMmap32 &) = delete;
   EagerGraphNilMmap32 &operator=(const EagerGraphNilMmap32 &) = delete;
@@ -509,10 +530,10 @@ public:
     // nodes is about to be swept must go — the index may be reused. What the
     // filter keeps is reduction work; re-earning it was the old cost of every
     // collection.
-    for (Memo &m : _memo) {
-      if (!m.a) continue;
-      if (marked(m.a) && marked(m.b) && marked(m.r)) continue;
-      m = {0, 0, 0};
+    for (Memo *m = _memo; m <= _memo + _memo_mask; ++m) {
+      if (!m->a) continue;
+      if (marked(m->a) && marked(m->b) && marked(m->r)) continue;
+      *m = {0, 0, 0};
     }
     // Swept indices will be reused by other functions.
     std::fill(std::begin(_cold), std::end(_cold), 0);
@@ -541,7 +562,7 @@ public:
   std::string stats() {
     return std::to_string(allocated()) + " nodes in arena, " +
            std::to_string(_interned_count) + " shared, " +
-           std::to_string(_memo.size()) + " memo slots";
+           std::to_string(_memo_mask + 1) + " memo slots";
   }
 
   Tree leaf() { return 1; }
