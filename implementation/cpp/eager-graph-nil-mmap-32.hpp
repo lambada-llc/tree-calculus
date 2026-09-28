@@ -120,11 +120,21 @@ private:
   // this stack the collector's root set as well as the VM's.
   enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE };
 
+  //
+  // A frame is two 8-byte words, written whole and read back whole, because
+  // it is usually popped within a few instructions of being pushed: a load
+  // that the store buffer cannot answer from one earlier store (a 16-byte
+  // Frame read back from its four 4-byte fields, say) waits for those stores
+  // to retire instead, and that stall was a fifth of the whole loop.
   struct Frame {
-    FrameTag tag;
-    uint32_t arg1;
-    uint32_t arg2; // 0 on an APPLY_TO frame, which mark() ignores
-    uint32_t meta; // MEMOIZE: low bits of the step counter at push
+    uint64_t lo, hi;
+    Frame() = default;
+    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2, uint32_t meta = 0)
+        : lo(tag | uint64_t(arg1) << 32), hi(arg2 | uint64_t(meta) << 32) {}
+    FrameTag tag() const { return FrameTag(uint32_t(lo)); }
+    uint32_t arg1() const { return lo >> 32; }
+    uint32_t arg2() const { return uint32_t(hi); } // 0 on an APPLY_TO frame, which mark() ignores
+    uint32_t meta() const { return hi >> 32; }     // MEMOIZE: low bits of the step counter at push
   };
 
   /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
@@ -429,8 +439,8 @@ public:
   void collect() {
     for (Tree root : _roots) mark(root);
     for (const Frame &f : _stack) { // a reduction in progress is live
-      mark(f.arg1);
-      mark(f.arg2);
+      mark(f.arg1());
+      mark(f.arg2());
     }
     // Between mark and sweep is the one moment liveness is written on the
     // nodes themselves, which is what lets the memo be filtered rather than
@@ -559,8 +569,8 @@ public:
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.push_back({MEMOIZE, a, b});
-          _stack.push_back({COMPUTE_AND_APPLY, un.u, b});
+          _stack.emplace_back(MEMOIZE, a, b);
+          _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
         }
@@ -575,7 +585,7 @@ public:
         if (!bn.v) {                                     //   b = △d: apply(x, d)
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.push_back({MEMOIZE, a, b});
+          _stack.emplace_back(MEMOIZE, a, b);
           a = un.v;
           b = bn.u;
           goto reduce;
@@ -583,8 +593,8 @@ public:
         {                                                //   b = △de: apply(apply(y, d), e)
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.push_back({MEMOIZE, a, b});
-          _stack.push_back({APPLY_TO, bn.v, 0});
+          _stack.emplace_back(MEMOIZE, a, b);
+          _stack.emplace_back(APPLY_TO, bn.v, 0);
           a = y;
           b = bn.u;
           goto reduce;
@@ -597,24 +607,24 @@ public:
       while (_stack.size() != base) {
         const Frame f = _stack.back();
         _stack.pop_back();
-        if (f.tag == MEMOIZE) {
+        if (f.tag() == MEMOIZE) {
           // A tail step (`b = △d`) shares its result with the step it became,
           // so consecutive MEMOIZE frames all record the same normal form.
           // Steps that resolved in a handful of rules are cheaper to redo than
           // to let their entries evict a slower one from the memo.
-          if ((uint32_t)stats_counters.steps - f.meta >= MEMO_MIN_STEPS)
-            memo_put(f.arg1, f.arg2, result);
+          if ((uint32_t)stats_counters.steps - f.meta() >= MEMO_MIN_STEPS)
+            memo_put(f.arg1(), f.arg2(), result);
           continue;
         }
-        if (f.tag == APPLY_TO) {
+        if (f.tag() == APPLY_TO) {
           // `result` is unreachable from any root for exactly as long as it
           // takes to become `a`, which allocates nothing.
           a = result;
-          b = f.arg1;
+          b = f.arg1();
         } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
-          _stack.push_back({APPLY_TO, result, 0});
-          a = f.arg1;
-          b = f.arg2;
+          _stack.emplace_back(APPLY_TO, result, 0);
+          a = f.arg1();
+          b = f.arg2();
         }
         goto reduce;
       }
