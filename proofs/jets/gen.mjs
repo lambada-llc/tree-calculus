@@ -4,7 +4,7 @@
 //
 //   LAMBADA=<lambada checkout> node proofs/jets/gen.mjs
 //
-// The committed ones are lambada 7efbcd1's, whose `compile_file.dag` is the rewritten compiler
+// The committed ones are lambada 236cc8f's, whose `compile_file.dag` is the rewritten compiler
 // that reads a source's lines with `Lambada.skip_line`. Base 6ef3de4 has no `skip_line`, and
 // computes every other tree here byte for byte the same.
 //

@@ -100,7 +100,7 @@ differ in where a line ends: the compiler's `skip_line` stops at a newline only,
 `_skip_comment` at a newline *or* a carriage return. `skip` is what lets a native loop give up
 anywhere: skip what it likes, then hand the rest back to the tree.
 
-Applied to trees the toolchain produced (`Jets.lean`; lambada 7efbcd1, see `jets/gen.mjs`):
+Applied to trees the toolchain produced (`Jets.lean`; lambada 236cc8f, see `jets/gen.mjs`):
 
 ```lean
 theorem eqConstNewline_spec (c : Tree) :
@@ -142,12 +142,12 @@ compiler:
   checker here fits it. `_skip_comment` is not on that path: the tokenizer reaches it only for a
   comment inside a statement. A native `DropJet` on it fires twice on this source and skips 74
   characters (47,612,116 steps → 47,611,035).
-- **Rewritten (lambada 7efbcd1, the compiler-tree track's).** `statements` reads every line past
-  its first character with `skip_line` — a comment or a result whole, a code line before its
-  text is copied out — a drop-through through newline: `skipLine` above. A native `DropJet` on
-  it takes 3,161,664 characters in 64 calls, and the reduction falls from 6,475,725 steps
-  (0.65 s) to 151,342 (0.024 s) — fewer than without the jet on the source with its comment and
-  blank lines taken out (152,857). On `…/termination/paper_experiments/main.lamb` (1.2 MB):
+- **Rewritten (lambada 236cc8f, arboretum's `statements` rewrite).** `statements` reads every
+  line past its first character with `skip_line` — a comment or a result whole, a code line
+  before its text is copied out — a drop-through through newline: `skipLine` above. A native
+  `DropJet` on it takes 3,161,664 characters in 64 calls, and the reduction falls from 6,475,725
+  steps (0.65 s) to 151,342 (0.024 s) — fewer than without the jet on the source with its comment
+  and blank lines taken out (152,857). On `…/termination/paper_experiments/main.lamb` (1.2 MB):
   787,567 characters in 65 calls, 1,728,420 steps → 152,578.
 
 The output is the same byte for byte in every one of these runs, base's included (sha256
