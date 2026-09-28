@@ -158,8 +158,16 @@ private:
 
   // Hash-consing: open addressing over node indices, keyed by the (u, v) of the
   // node a slot names, so a slot costs 4 bytes and the keys are the arena. 0 is
-  // the empty slot, which no node can be. Exact — sharing is what the reduction
-  // below is counting on, not a hint.
+  // the empty slot, which no node can be.
+  //
+  // Exact, and everything else here counts on it: two structurally equal trees
+  // are one node, hence one index, always — across collections (the table is
+  // re-laid from what survived, never dropped), clear(), and everything a
+  // caller builds through stem(), fork() or list(). The memo is keyed on it,
+  // list() skips searches because of it, and deciding that two trees are equal
+  // by comparing their indices is sound only because of it. So no node is ever
+  // made by alloc() alone: it is made by a search that came up empty, or where
+  // no search could have found one (list()).
   std::vector<Tree> _interned;
   size_t _interned_count = 0;
   size_t _interned_mask = 0;
@@ -220,22 +228,33 @@ private:
       if (_arena[at].u) insert_interned(at);
   }
 
+  /** Grow the table, if need be, so that `more` further nodes fit under a 0.7
+   * load factor, which keeps probe runs short. */
+  void reserve_interned(size_t more) {
+    size_t capacity = _interned_mask + 1;
+    while ((_interned_count + more) * 10 > capacity * 7) capacity *= 2;
+    if (capacity != _interned_mask + 1) rebuild_interned(capacity);
+  }
+
+  /** The slot holding the node for this shape, or the empty one it would take. */
+  size_t slot(uint32_t u, uint32_t v) const {
+    for (size_t i = hash(u, v) & _interned_mask;; i = (i + 1) & _interned_mask) {
+      const Tree at = _interned[i];
+      if (!at) return i;
+      const Node n = _arena[at];
+      if (n.u == u && n.v == v) return i;
+    }
+  }
+
   /** The node for this shape: the one that already exists, or a new one. */
   Tree intern(uint32_t u, uint32_t v) {
-    size_t i = hash(u, v) & _interned_mask;
-    for (;; i = (i + 1) & _interned_mask) {
-      const Tree at = _interned[i];
-      if (!at) {
-        const Tree fresh = alloc(u, v);
-        _interned[i] = fresh;
-        // Grow at a 0.7 load factor, so probe runs stay short.
-        if (++_interned_count * 10 > (_interned_mask + 1) * 7)
-          rebuild_interned((_interned_mask + 1) * 2);
-        return fresh;
-      }
-      const Node n = _arena[at];
-      if (n.u == u && n.v == v) return at;
-    }
+    const size_t i = slot(u, v);
+    if (_interned[i]) return _interned[i];
+    const Tree fresh = alloc(u, v);
+    _interned[i] = fresh;
+    ++_interned_count;
+    reserve_interned(0);
+    return fresh;
   }
 
   Tree memo_get(uint32_t a, uint32_t b) {
@@ -456,6 +475,33 @@ public:
   Tree leaf() { return 1; }
   Tree stem(Tree u) { return intern(u, 0); }
   Tree fork(Tree u, Tree v) { return intern(u, v); }
+
+  /**
+   * fork(heads[0], fork(heads[1], … fork(heads[n-1], tail))): what fork()
+   * would build a cell at a time, for the one shape a caller builds in bulk —
+   * a marshalled string is a cell per character.
+   *
+   * Built from the end, and hash-consed exactly like fork(), but a cell only
+   * has to be looked for until one comes out new: a node that already existed
+   * cannot have a child that did not, so every cell in front of a new one is
+   * new as well. (That holds for a slot the free list hands back too: a
+   * collection frees only what no live node reaches.) Those cells just take a
+   * slot in a table sized for all of them up front.
+   */
+  Tree list(const std::vector<Tree> &heads, Tree tail) {
+    size_t k = heads.size();
+    for (; k > 0; --k) { // cells that may exist already
+      const Tree at = _interned[slot(heads[k - 1], tail)];
+      if (!at) break;
+      tail = at;
+    }
+    reserve_interned(k);
+    for (; k > 0; --k) { // cells that cannot
+      tail = alloc(heads[k - 1], tail);
+      insert_interned(tail);
+    }
+    return tail;
+  }
 
   // Callables are template parameters (not std::function) so the walks over a
   // result — marshalling, Evaluator's utilities — inline straight through the
