@@ -198,14 +198,15 @@ private:
     return p;
   }
 
-  /** 64-bit finalizer: the pair of indices is the key, and it needs mixing. */
+  /**
+   * The pair of indices is the key, and it needs mixing — but every step hashes
+   * before it can load anything, so the mixing is on the critical path. One
+   * multiply (Fibonacci hashing), with the high half, where a product mixes
+   * best, folded onto the low bits the tables index by.
+   */
   static uint64_t hash(uint32_t u, uint32_t v) {
-    uint64_t x = (uint64_t(u) << 32) | v;
-    x ^= x >> 33;
-    x *= 0xff51afd7ed558ccdULL;
-    x ^= x >> 33;
-    x *= 0xc4ceb9fe1a85ec53ULL;
-    return x ^ (x >> 33);
+    const uint64_t x = ((uint64_t(u) << 32) | v) * 0x9e3779b97f4a7c15ULL;
+    return x ^ (x >> 32);
   }
 
   /** A node, from the free list or the high-water mark. Not interned. */
