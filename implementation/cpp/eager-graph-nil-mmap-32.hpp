@@ -229,10 +229,10 @@ private:
   size_t _memo_puts = 0; // since it last grew (see memo_put)
 
   // Per function (the `a` of apply(a, b), by hash), how many of its lookups in
-  // a row have missed, up to MEMO_COLD. Small on purpose: it is read on every
+  // a row have missed, up to MEMO_COLD, and past it how many it has skipped
+  // since one was last made (see recall). Small on purpose: it is read on every
   // lookup, so it has to stay in cache where the memo cannot.
   uint8_t _cold[1 << 16];
-  unsigned _cold_tick = 0;
 
   static size_t round_up_pow2(size_t n) {
     size_t p = MIN_TABLE;
@@ -366,17 +366,23 @@ private:
    * in compile_file of a 5 MB source, three in four are, each of them a cache
    * miss into a table sized for a build, plus a write when the step is done
    * that evicts something that would have. A function MEMO_COLD lookups in a
-   * row missed is neither looked up nor recorded; one lookup in sixteen for a
-   * cold function is made anyway, and a hit warms it again.
+   * row missed is neither looked up nor recorded, except every sixteenth of its
+   * own lookups, and a hit warms it again. Its own, counted in its own byte:
+   * with one count for all cold lookups, a function looked up between the same
+   * even number of others each time keeps landing on the same residue, and can
+   * stay unsampled for good. What is left is the lookups a cold function skips
+   * once it needs the memo after all — linear, not exponential: a recursion
+   * that calls itself twice on one argument takes about twice the steps it
+   * does with every lookup made.
    */
   Tree recall(Tree a, Tree b) {
     uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
-    if (cold == MEMO_COLD && (++_cold_tick & 15)) return 0;
+    if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) return 0;
     if (const Tree hit = memo_get(a, b)) {
       cold = 0;
       return hit;
     }
-    cold += cold < MEMO_COLD;
+    cold = std::min(cold + 1, int(MEMO_COLD)); // a sampled miss counts afresh
     _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
     return 0;
   }
