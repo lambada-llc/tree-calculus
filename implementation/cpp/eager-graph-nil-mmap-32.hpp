@@ -101,6 +101,10 @@ private:
   // took twice the steps.
   static constexpr uint32_t MEMO_MIN_STEPS = 4;
 
+  // How many lookups in a row may miss for one function before it stops being
+  // looked up at all (see recall).
+  static constexpr uint8_t MEMO_COLD = 64;
+
   struct Node {
     uint32_t u;
     uint32_t v;
@@ -192,6 +196,12 @@ private:
   std::vector<Memo> _memo;
   size_t _memo_mask = 0;
 
+  // Per function (the `a` of apply(a, b), by hash), how many of its lookups in
+  // a row have missed, up to MEMO_COLD. Small on purpose: it is read on every
+  // lookup, so it has to stay in cache where the memo cannot.
+  uint8_t _cold[1 << 16];
+  unsigned _cold_tick = 0;
+
   static size_t round_up_pow2(size_t n) {
     size_t p = MIN_TABLE;
     while (p < n) p <<= 1;
@@ -282,6 +292,29 @@ private:
     _memo[hash(a, b) & _memo_mask] = {a, b, r};
   }
 
+  /**
+   * What the memo says apply(a, b) is, or 0 — in which case the step is about
+   * to be reduced, and a MEMOIZE frame is pushed to record it.
+   *
+   * Unless `a` has gone cold. Most lookups are for functions that never hit:
+   * in compile_file of a 5 MB source, three in four are, each of them a cache
+   * miss into a table sized for a build, plus a write when the step is done
+   * that evicts something that would have. A function MEMO_COLD lookups in a
+   * row missed is neither looked up nor recorded; one lookup in sixteen for a
+   * cold function is made anyway, and a hit warms it again.
+   */
+  Tree recall(Tree a, Tree b) {
+    uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
+    if (cold == MEMO_COLD && (++_cold_tick & 15)) return 0;
+    if (const Tree hit = memo_get(a, b)) {
+      cold = 0;
+      return hit;
+    }
+    cold += cold < MEMO_COLD;
+    _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+    return 0;
+  }
+
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
    * are permanent (padding and the shared leaf), so they count as live. */
   bool marked(Tree at) const {
@@ -362,6 +395,7 @@ private:
     const size_t capacity = std::min(round_up_pow2(_budget / 8), cap);
     _memo.assign(capacity, Memo{0, 0, 0});
     _memo_mask = capacity - 1;
+    std::fill(std::begin(_cold), std::end(_cold), 0);
   }
 
   /**
@@ -458,6 +492,8 @@ public:
       if (marked(m.a) && marked(m.b) && marked(m.r)) continue;
       m = {0, 0, 0};
     }
+    // Swept indices will be reused by other functions.
+    std::fill(std::begin(_cold), std::end(_cold), 0);
     sweep();
     ++stats_counters.gcs;
     stats_counters.gc_marked += _live;
@@ -571,9 +607,7 @@ public:
           goto dispatch;
         }
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
-          const Tree hit = memo_get(a, b);
-          if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
@@ -587,17 +621,13 @@ public:
           goto dispatch;
         }
         if (!bn.v) {                                     //   b = △d: apply(x, d)
-          const Tree hit = memo_get(a, b);
-          if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
           a = un.v;
           b = bn.u;
           goto reduce;
         }
         {                                                //   b = △de: apply(apply(y, d), e)
-          const Tree hit = memo_get(a, b);
-          if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
           _stack.emplace_back(APPLY_TO, bn.v, 0);
           a = y;
           b = bn.u;
