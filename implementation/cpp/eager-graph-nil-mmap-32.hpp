@@ -285,8 +285,12 @@ private:
     ++_interned_count;
   }
 
-  /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes. */
-  void rebuild_interned(size_t capacity) {
+  /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes.
+   * Out of line, as is everything else apply() reaches only now and then —
+   * grow_memo, collect: inlined, they made apply() twice the size, and which of
+   * its helpers the compiler inlined then hung on any edit to it, for as much as
+   * 13% more instructions a step. */
+  [[gnu::noinline]] void rebuild_interned(size_t capacity) {
     std::fill_n(_interned, capacity, 0);
     _interned_mask = capacity - 1;
     _interned_count = 0;
@@ -358,7 +362,7 @@ private:
    * hashes to the slot it is in or to the one `half` above it, in the half being
    * added — so no entry moves onto another.
    */
-  void grow_memo() {
+  [[gnu::noinline]] void grow_memo() {
     const size_t half = _memo_mask + 1;
     std::fill_n(_memo + half, half, Memo{0, 0, 0});
     _memo_mask = 2 * half - 1;
@@ -562,7 +566,7 @@ public:
    * The memo is dropped outright: its keys are node indices too, and it is a
    * cache, so re-earning its entries is the cheaper correctness.
    */
-  void collect() {
+  [[gnu::noinline]] void collect() {
     for (Tree root : _roots) mark(root);
     for (const Frame &f : _stack) { // a reduction in progress is live
       mark(f.arg1());
