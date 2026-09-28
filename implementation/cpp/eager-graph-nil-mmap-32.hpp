@@ -95,8 +95,11 @@ private:
 
   // A step that resolved in fewer rule applications than this is cheaper to
   // redo than to let its entry evict a slower one from the memo (see the
-  // MEMOIZE pop in apply).
-  static constexpr uint32_t MEMO_MIN_STEPS = 16;
+  // MEMOIZE pop in apply). Low, because a step of a few rules can still be
+  // the one asked for most: a compiler's character-class test is asked of
+  // every character of its input, and at 16 compile_file of a 5 MB source
+  // took twice the steps.
+  static constexpr uint32_t MEMO_MIN_STEPS = 4;
 
   struct Node {
     uint32_t u;
@@ -569,7 +572,7 @@ public:
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b);
+          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
@@ -585,7 +588,7 @@ public:
         if (!bn.v) {                                     //   b = △d: apply(x, d)
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b);
+          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
           a = un.v;
           b = bn.u;
           goto reduce;
@@ -593,7 +596,7 @@ public:
         {                                                //   b = △de: apply(apply(y, d), e)
           const Tree hit = memo_get(a, b);
           if (hit) { result = hit; goto dispatch; }
-          _stack.emplace_back(MEMOIZE, a, b);
+          _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
           _stack.emplace_back(APPLY_TO, bn.v, 0);
           a = y;
           b = bn.u;
