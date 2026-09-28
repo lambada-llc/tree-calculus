@@ -3,18 +3,21 @@
 // one server process fed a batch of requests, its replies parsed back.
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
-/** The eager runner, rebuilt when `runner.cpp` is newer than it. */
+/** The eager runner, rebuilt when `runner.cpp` or an evaluator header it includes is newer than
+ * it — the rule the runtime's own on-demand build (native.mts) goes by. */
 export function eagerRunner() {
-  const source = resolve(here, '../implementation/cpp/dag-machine/runner.cpp');
+  const cpp = resolve(here, '../implementation/cpp');
+  const source = join(cpp, 'dag-machine/runner.cpp');
   const runner = join(here, 'jets/.runner-eager');
   const mtime = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
-  if (mtime(runner) < mtime(source))
+  const headers = readdirSync(cpp).filter((name) => name.endsWith('.hpp')).map((name) => join(cpp, name));
+  if (mtime(runner) < Math.max(...[source, ...headers].map(mtime)))
     execFileSync(process.env.CXX ?? 'c++',
       ['-O2', '-std=c++17', '-pthread', '-DRUNNER_EAGER', '-o', runner, source]);
   return runner;

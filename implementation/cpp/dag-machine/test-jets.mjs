@@ -64,6 +64,10 @@ const cases = {
   'a fork of forks as the argument': fork(fork(leaf, leaf), fork(stem(leaf), nl)),
   'the newline itself, a list of bits': nl,
   'skip_line itself': null, // see `applications`
+  // The separator is told apart by its index alone, and the newline is the last tree the jets
+  // intern: so the trees interned right below it are its own, and the ones right above it the
+  // first this module adds — every tree built so far, each before the newline here.
+  'every tree interned next to the newline': list([...[...nodes.values()].filter((n) => n !== nl), nl, a]),
   'long, newline at the end': list([...Array(20000).fill(a), nl, a]),
   'long, no newline': list(Array(20000).fill(a)),
   'long, a stem at the end': list(Array(20000).fill(a), stem(a)),

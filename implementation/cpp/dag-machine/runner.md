@@ -146,9 +146,12 @@ characters, 6.49 M steps become 163 K.
 
 Predicates (`MemberJet`: `equal_const 10`, `Char.is_newline`, the
 compiler's `_is_hash`) are proven too and do not ship: `compile_file`
-applies them 19 to 167 times per source, and the memo already answers a
-repeated `(predicate, character)` pair with one lookup — 2 ns more than
-a native answer would take (cold, 12 to 37 steps: 50 to 170 ns).
+applies them 19 to 167 times per source. A native answer would take 5 to
+6 ns; the memo already answers a repeated `(predicate, character)` pair
+in 7.5 to 11 ns with one lookup (`_is_hash`, `Char.is_newline`), or 21
+to 32 ns with 1.8 steps (`equal_const 10`: once warm, the pair itself
+takes fewer than `MEMO_MIN_STEPS` rules and goes unrecorded, so the hit
+is a step in); cold, 12 to 37 steps take 50 to 185 ns.
 
 **Adding one** is a line in `proofs/jets/embed.mjs`'s table, which
 regenerates `jets.hpp` and `proofs/TreeCalculus/Jets/Runtime.lean`; the
