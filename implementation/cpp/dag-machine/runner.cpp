@@ -627,13 +627,15 @@ static int run_server() {
       const auto& now = g_e.stats_counters;
       std::fprintf(stderr,
           "runner-stats: %8.1fms steps=%llu hits=%llu puts=%llu gcs=%llu marked=%llu "
-          "arena=%zu | %s\n",
+          "jets=%llu skipped=%llu arena=%zu | %s\n",
           ms,
           (unsigned long long)(now.steps - before.steps),
           (unsigned long long)(now.memo_hits - before.memo_hits),
           (unsigned long long)(now.memo_puts - before.memo_puts),
           (unsigned long long)(now.gcs - before.gcs),
           (unsigned long long)(now.gc_marked - before.gc_marked),
+          (unsigned long long)(now.jet_calls - before.jet_calls),
+          (unsigned long long)(now.jet_skipped - before.jet_skipped),
           g_e.allocated(), what.c_str());
 #else
       std::fprintf(stderr, "runner-stats: %8.1fms arena=%zu | %s\n",
@@ -745,6 +747,11 @@ static void* worker_main(void* p) {
   char** argv = w->argv;
 
   set_collection_budget(collection_budget_nodes());
+#ifdef RUNNER_EAGER
+  // RUNNER_JETS=0: reduce what a jet would answer, so that the two can be
+  // told apart only by how long they take (see test-runner.sh).
+  if (const char* jets = std::getenv("RUNNER_JETS")) g_e.set_jets(std::strcmp(jets, "0") != 0);
+#endif
 
   if (argc == 2 && std::strcmp(argv[1], "-s") == 0) {
     w->result = run_server();

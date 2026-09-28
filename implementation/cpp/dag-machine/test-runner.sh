@@ -119,6 +119,9 @@ transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
 check "a binding does not outlive its request" \
   "err unbound variable: ~x" "${transcript##*hello}"
 
+# The eager runner's jets, against Node, on arguments built to catch them out.
+node "$DIR/test-jets.mjs" "$DIR/runner-eager.exe" || ((fail++)) || true
+
 echo ""
 echo "runner: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

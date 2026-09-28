@@ -4,6 +4,10 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MAIN_JS="$DIR/../../../bin/main.js"
 
+# The eager evaluator's jets are embedded from the trees their proofs are about;
+# an embedding that fell behind them would be a jet no theorem covers.
+node "$DIR/../../../proofs/jets/embed.mjs" --check
+
 # Compile
 "$DIR/compile.sh"
 

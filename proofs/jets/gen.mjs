@@ -39,10 +39,12 @@ const library = join(lambada, 'compiler/compile_file.dag');
 
 const runner = eagerRunner();
 
-/** `runner -s`, one request: `expr`'s normal form, with the library loaded. */
+/** `runner -s`, one request: `expr`'s normal form, with the library loaded — without jets, so
+ * that no tree a theorem is about was computed by one. */
 function normalize(expr) {
   const { replies: [, reply] } =
-    session([runner, '-s'], [`load ${library}\n`, reduceDag(expr), 'quit\n']);
+    session([runner, '-s'], [`load ${library}\n`, reduceDag(expr), 'quit\n'],
+      { env: { ...process.env, RUNNER_JETS: '0' } });
   if (reply?.data === undefined) throw new Error(JSON.stringify(reply));
   return reply.data + '\n';
 }
@@ -56,3 +58,4 @@ for (const [name, { lamb, symbol }] of Object.entries(trees))
 const inputs = Object.keys(trees).map((name) => `${name}=${join(here, name + '.dag')}`);
 writeFileSync(join(here, '../TreeCalculus/Jets/Trees.lean'),
   execFileSync('node', [join(here, '../dag2lean.mjs'), 'TreeCalculus.Jets', ...inputs]));
+execFileSync('node', [join(here, 'embed.mjs')]);

@@ -2,10 +2,15 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <iterator>
 #include <string>
+#include <string_view>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 #include <sys/mman.h>
+
+#include "jets.hpp"
 
 // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
 // evaluator an eager module build needs, which none of the eager evaluators
@@ -70,6 +75,12 @@
 // every occurrence (it just writes the answers on top of each other), and the
 // memo without hash-consing never sees the same pair of indices twice. Together
 // they take the same measurement from exponential to flat.
+//
+// On top of both, jets: a function the evaluator recognizes by its index, and
+// answers natively instead of reducing — each a tree with a machine-checked
+// theorem that the transitions taken for it are composites of real steps
+// (proofs/, and jets.hpp for which trees). Recognizing a tree by its index is
+// sound for the same reason the memo is: interning is exact.
 //
 // Marks live in the top bit of the left field, so an index is 31 bits and the
 // arena is sized to match: 2^31 nodes, 16 GiB. Nothing moves, so a Tree stays
@@ -187,6 +198,7 @@ public:
   // traffic they count, so they are unconditional.
   struct Stats {
     uint64_t steps = 0, memo_hits = 0, memo_puts = 0, gcs = 0, gc_marked = 0;
+    uint64_t jet_calls = 0, jet_skipped = 0; // a jet's calls, and list elements it skipped
   };
   Stats stats_counters;
 
@@ -207,10 +219,10 @@ private:
   // re-laid from what survived, never dropped), clear(), and everything a
   // caller builds through stem(), fork() or list(). The memo is keyed on it,
   // list() skips searches because of it, and deciding that two trees are equal
-  // by comparing their indices is sound only because of it. So no node is ever
-  // made by alloc() alone: it is made by a search that came up empty, or where
-  // no search could have found one (list(), and intern() over the node made
-  // last).
+  // by comparing their indices — which is how apply() recognizes a jet — is
+  // sound only because of it. So no node is ever made by alloc() alone: it is
+  // made by a search that came up empty, or where no search could have found
+  // one (list(), and intern() over the node made last).
   //
   // Both tables are mapped once, at the most they can reach, and re-laid in
   // place: rebuild_interned() reads the arena rather than the old table, so
@@ -235,6 +247,14 @@ private:
   // since one was last made (see recall). Small on purpose: it is read on every
   // lookup, so it has to stay in cache where the memo cannot.
   uint8_t _cold[1 << 16];
+
+  // jets::drop_through, interned (see establish_jets). A jet's trees are the
+  // evaluator's own roots, marked by every collection and interned afresh by
+  // every clear(), so an index here always is the tree it was interned from.
+  // `f` is 0, which no operand is, while jets are off.
+  struct DropThrough { Tree f, k; };
+  DropThrough _drop_through[std::size(jets::drop_through)];
+  bool _jets = true;
 
   static size_t round_up_pow2(size_t n) {
     size_t p = MIN_TABLE;
@@ -487,6 +507,70 @@ private:
   }
 
   /**
+   * The tree a DAG in jets.hpp denotes, interned. Each is a value, whose every
+   * line only builds — △ applied to x is the stem △x, a stem △u applied to x
+   * the fork △ux — and a line that would reduce is refused: dag2lean.mjs's
+   * reading, so this is the tree the Lean theorems are about.
+   */
+  Tree intern_value(std::string_view dag) {
+    std::unordered_map<std::string_view, Tree> env{{"\xe2\x96\xb3", leaf()}}; // △
+    Tree value = 0;
+    while (!dag.empty()) {
+      const std::string_view line = dag.substr(0, dag.find('\n'));
+      dag.remove_prefix(std::min(line.size() + 1, dag.size()));
+      std::string_view w[3];
+      size_t n = 0;
+      for (size_t i = 0; i < line.size() && n < 3;) {
+        const size_t end = std::min(line.find(' ', i), line.size());
+        if (end > i) w[n++] = line.substr(i, end - i);
+        i = end + 1;
+      }
+      if (n == 3) {
+        const Node f = _arena[env.at(w[1])];
+        if (f.v) throw std::logic_error("jets.hpp: a line that reduces is no value");
+        env[w[0]] = f.u ? fork(f.u, env.at(w[2])) : stem(env.at(w[2]));
+      } else if (n == 2) {
+        env[w[0]] = env.at(w[1]);
+      } else if (n == 1) {
+        value = env.at(w[0]);
+      }
+    }
+    return value;
+  }
+
+  /**
+   * apply(j.f, b), as far as a DropJet (proofs/TreeCalculus/Check.lean) takes
+   * it: the answer, or no answer and the rest of the list when a stem ends it
+   * — none of the relation's transitions, so the rules take it from there.
+   * Each turn of the loop is one transition, which runtimeJets_sound
+   * (Jets/Runtime.lean) proves changes no result; and an element is the
+   * separator exactly when its index is j.k, because interning is exact.
+   *
+   * Out of line, and handed b rather than a reference to it, so that what
+   * apply() pays for a step that is no jet is the one comparison.
+   */
+  struct Dropped { Tree result, rest; }; // result 0: no answer, go on with rest
+  [[gnu::noinline]] Dropped drop_through(const DropThrough &j, Tree b) {
+    ++stats_counters.jet_calls;
+    for (;;) {
+      const Node xn = _arena[b];
+      if (!xn.u) return {b, 0};          // nil
+      if (!xn.v) return {0, b};          // a stem: the tree's to answer
+      if (xn.u == j.k) return {xn.v, 0}; // hit
+      b = xn.v;                          // skip
+      ++stats_counters.jet_skipped;
+    }
+  }
+
+  /** Intern the jets' trees into a fresh arena, and arm them if they are on. */
+  void establish_jets() {
+    for (size_t i = 0; i < std::size(jets::drop_through); ++i) {
+      const Tree f = intern_value(jets::drop_through[i].f);
+      _drop_through[i] = {_jets ? f : 0, intern_value(jets::drop_through[i].k)};
+    }
+  }
+
+  /**
    * Collect if the arena has grown past its budget, and raise the budget if that
    * did not leave much room.
    *
@@ -521,6 +605,7 @@ public:
     map_arena();
     rebuild_interned(MIN_TABLE);
     size_memo();
+    establish_jets();
   }
 
   ~EagerGraphNilMmap32() {
@@ -544,6 +629,7 @@ public:
     _grey.shrink_to_fit();
     rebuild_interned(MIN_TABLE);
     size_memo();
+    establish_jets();
   }
 
   /**
@@ -571,6 +657,10 @@ public:
     for (const Frame &f : _stack) { // a reduction in progress is live
       mark(f.arg1());
       mark(f.arg2());
+    }
+    for (const DropThrough &j : _drop_through) {
+      mark(j.f);
+      mark(j.k);
     }
     // Between mark and sweep is the one moment liveness is written on the
     // nodes themselves, which is what lets the memo be filtered rather than
@@ -601,6 +691,12 @@ public:
 
   /** How many nodes the last collection found reachable. */
   size_t live() const { return _live; }
+
+  /** Whether apply() takes jets; on by default. Off, it only ever reduces. */
+  void set_jets(bool on) {
+    _jets = on;
+    establish_jets();
+  }
 
   /** Collect at most every `nodes` allocations. 0 never collects. */
   void set_budget(size_t nodes) {
@@ -665,9 +761,10 @@ public:
    * The rules are EagerTernaryNilMmapVM32's. What is around them is the budget
    * check at the top — the one point where a collection can happen, and hence
    * the one point where the live set has to be exactly the roots, the frames
-   * and these two operands — and the memo, consulted on the way into the three
-   * shapes that go on to reduce something. Everything else only reads nodes and
-   * interns, neither of which collects.
+   * and these two operands — the memo, consulted on the way into the three
+   * shapes that go on to reduce something, and the jets, before it in one of
+   * them. Everything else only reads nodes and interns, neither of which
+   * collects.
    */
   Tree apply(Tree a, Tree b) {
     const size_t base = _stack.size();
@@ -719,6 +816,17 @@ public:
           goto reduce;
         }
         {                                                //   b = △de: apply(apply(y, d), e)
+          // A jet: `a` is its f, interned from the tree its theorem is about,
+          // and interning is exact, so this comparison is a tree comparison.
+          // Here, because a DropJet's f is a triage node (jets/embed.mjs sees to
+          // it) and this is its every step that skips or hits: the one on a pair.
+          for (const DropThrough &j : _drop_through)
+            if (a == j.f) {
+              const Dropped d = drop_through(j, b);
+              if ((result = d.result)) goto dispatch;
+              b = d.rest; // a stem: apply(f, △d) is x d
+              goto reduce;
+            }
           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
           _stack.emplace_back(APPLY_TO, bn.v, 0);
           a = y;

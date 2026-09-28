@@ -115,6 +115,49 @@ what it says by sharing, plain eager reduction re-derives each occurrence
 and materializes the normal form as a tree, and that tree is
 exponentially larger than the DAG it prints as.
 
+## Jets
+
+The eager evaluator answers some functions natively rather than reducing
+them. Each such *jet* is a tree with a machine-checked theorem
+([`proofs/`](../../../proofs/)) that every transition its native code
+takes is a composite of real reduction steps — so taking it changes no
+result, only how long the result takes.
+
+**Recognized by index.** `apply(a, b)` with `b` a pair takes a jet when
+`a` is the index of its tree, interned from the very DAG its theorem is
+about:
+[`../jets.hpp`](../jets.hpp) embeds `proofs/jets/*.dag` byte for byte.
+An index comparison is a tree comparison only because hash-consing is
+exact — equal trees are one node, always — and that is also how the
+native loop recognizes its separator. Hence the jet's trees are the
+evaluator's own roots: every collection marks them and every `clear()`
+interns them afresh. An index that outlived its tree would fire on
+whatever node took its slot, and a second node for the newline would be
+skipped as if it were any other character.
+
+**What ships.** One jet, `skip_line`: lambada's `compile_file` reads every
+line of a source past its first character with it, so on a source that
+is mostly comments it is nearly all of the reduction. It is a `DropJet`
+through the newline tree: walk the list, skip every element that is not
+the newline, answer with what follows the first one that is — or leaf at
+the end — and hand a stem in the spine back to the tree as
+`apply(skip_line, rest)`. On a 5 MB source whose comments are 3.16 M
+characters, 6.49 M steps become 163 K.
+
+Predicates (`MemberJet`: `equal_const 10`, `Char.is_newline`, the
+compiler's `_is_hash`) are proven too and do not ship: `compile_file`
+applies them 19 to 167 times per source, and the memo already answers a
+repeated `(predicate, character)` pair with one lookup — 2 ns more than
+a native answer would take (cold, 12 to 37 steps: 50 to 170 ns).
+
+**Adding one** is a line in `proofs/jets/embed.mjs`'s table, which
+regenerates `jets.hpp` and `proofs/TreeCalculus/Jets/Runtime.lean`; the
+latter type-checks only if the jet's check theorem proves the relation
+the table claims. `apply()` implements a `DropJet` through one separator
+on a triage node `△(△wx)y`, and `embed.mjs` refuses any other; see
+[`proofs/README.md`](../../../proofs/README.md#adding-a-jet). `test.sh`
+fails if `jets.hpp` is not what the table and the trees make.
+
 ## Environment variables
 
 These influence runtime behaviour. All are optional; defaults aim to
@@ -150,8 +193,15 @@ a little more re-reduction as well as more sweeps.
 Any non-`0` value makes server mode print one line per command to
 stderr: wall time, and under `-DRUNNER_EAGER` the evaluator's counters
 for that command (reduction steps, memo hits and writes, collections and
-what they marked, arena high water). This is how one finds out where a
-build's time actually goes before optimizing anything.
+what they marked, jet calls and the list elements they skipped, arena
+high water). This is how one finds out where a build's time actually goes
+before optimizing anything.
+
+#### `RUNNER_JETS` *(default: on)*
+
+`0` turns the eager evaluator's [jets](#jets) off, so that everything is
+reduced. Answers are the same either way — which is what running both
+tests.
 
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
