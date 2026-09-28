@@ -180,12 +180,14 @@ static std::vector<Tree> to_list(Tree t) {
 }
 
 // to_nat as 64-bit (chars only need 8 bits; if any test ever needs >64-bit
-// nats this should be widened, but _to_string outputs char codes).
+// nats this should be widened, but _to_string outputs char codes). Read off
+// the list in place: this runs once per character of every string answer.
 static uint64_t to_nat_u64(Tree t) {
-  auto bits = to_list(t);
   uint64_t n = 0;
-  for (size_t i = bits.size(); i > 0; --i) {
-    n = (n << 1) | (to_bool(bits[i - 1]) ? 1u : 0u);
+  unsigned i = 0; // bits are LSB first; past 64 they are dropped
+  for (Shape s = shape(t); s.arity; s = shape(s.v), ++i) {
+    if (s.arity == 1) die("tree is not a list");
+    if (to_bool(s.u) && i < 64) n |= uint64_t(1) << i;
   }
   return n;
 }
