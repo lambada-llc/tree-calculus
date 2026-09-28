@@ -225,6 +225,12 @@ public:
   Tree stem(Tree u) { return alloc(u, 0); }
   Tree fork(Tree u, Tree v) { return alloc(u, v); }
 
+  /** fork(heads[0], fork(heads[1], … fork(heads[n-1], tail))). */
+  Tree list(const std::vector<Tree> &heads, Tree tail) {
+    for (size_t k = heads.size(); k > 0; --k) tail = fork(heads[k - 1], tail);
+    return tail;
+  }
+
   /** An application, unreduced: laziness is the whole point of this evaluator. */
   Tree apply(Tree a, Tree b) { return alloc(a | APP, b); }
 

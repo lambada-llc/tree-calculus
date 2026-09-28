@@ -285,13 +285,18 @@ static Tree of_nat(uint64_t n) {
   return f;
 }
 
-// Decode UTF-8 input bytes into Unicode code points, mirroring how the JS CLI
-// effectively maps a JS string into a list of code-unit-valued nats. Inputs stay
-// within the BMP, so a code point per nat round-trips byte-for-byte with the JS
-// implementation.
-static std::vector<uint32_t> utf8_decode(std::string_view s) {
-  std::vector<uint32_t> out;
-  out.reserve(s.size());
+// Decode UTF-8 input bytes into a list of Unicode code points, mirroring how
+// the JS CLI effectively maps a JS string into a list of code-unit-valued nats.
+// Inputs stay within the BMP, so a code point per nat round-trips byte-for-byte
+// with the JS implementation.
+//
+// A source file is millions of characters but only a few dozen distinct ones,
+// so each code point's nat is built once and every occurrence shares it: what
+// is left per character is the one list cell that holds it.
+static Tree of_string(std::string_view s) {
+  std::vector<Tree> nat;   // by code point; 0, which no tree is, until built
+  std::vector<Tree> chars; // in order, so the list can be built from its end
+  chars.reserve(s.size());
   size_t i = 0;
   while (i < s.size()) {
     uint8_t b = static_cast<uint8_t>(s[i]);
@@ -308,17 +313,12 @@ static std::vector<uint32_t> utf8_decode(std::string_view s) {
       if ((cb & 0xC0) != 0x80) die("invalid utf-8 continuation");
       cp = (cp << 6) | (cb & 0x3F);
     }
-    out.push_back(cp);
+    if (cp >= nat.size()) nat.resize(cp + 1);
+    if (!nat[cp]) nat[cp] = of_nat(cp);
+    chars.push_back(nat[cp]);
     i += len;
   }
-  return out;
-}
-
-static Tree of_string(std::string_view s) {
-  auto cps = utf8_decode(s);
-  Tree f = g_e.leaf();
-  for (size_t i = cps.size(); i > 0; --i) f = g_e.fork(of_nat(cps[i - 1]), f);
-  return f;
+  return g_e.list(chars, g_e.leaf());
 }
 
 // ─── DAG parser ───────────────────────────────────────────────────────────
