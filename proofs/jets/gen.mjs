@@ -14,9 +14,10 @@
 // repository's `runner.cpp` normalizes it (`reduce dag`), with that module loaded.
 
 import { execFileSync } from 'node:child_process';
-import { statSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { eagerRunner, reduceDag, session } from '../runner.mjs';
 
 const trees = {
   newline: { lamb: '10' },
@@ -36,19 +37,14 @@ const lambada = process.env.LAMBADA
   ?? (console.error('set LAMBADA to a lambada checkout'), process.exit(2));
 const library = join(lambada, 'compiler/compile_file.dag');
 
-const source = join(root, 'implementation/cpp/dag-machine/runner.cpp');
-const runner = join(here, '.runner-eager');
-const mtime = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
-if (mtime(runner) < mtime(source))
-  execFileSync(process.env.CXX ?? 'c++',
-    ['-O2', '-std=c++17', '-pthread', '-DRUNNER_EAGER', '-o', runner, source]);
+const runner = eagerRunner();
 
 /** `runner -s`, one request: `expr`'s normal form, with the library loaded. */
 function normalize(expr) {
-  const request = `load ${library}\nreduce dag ${Buffer.byteLength(expr)}\n${expr}quit\n`;
-  const out = execFileSync(runner, ['-s'], { input: request }).toString();
-  const reply = /^ok\ndata (\d+)\n/.exec(out) ?? (() => { throw new Error(out); })();
-  return Buffer.from(out.slice(reply[0].length)).subarray(0, +reply[1]).toString() + '\n';
+  const { replies: [, reply] } =
+    session([runner, '-s'], [`load ${library}\n`, reduceDag(expr), 'quit\n']);
+  if (reply?.data === undefined) throw new Error(JSON.stringify(reply));
+  return reply.data + '\n';
 }
 
 const emit = (lamb) => execFileSync('node', [join(lambada, 'bin/lambada.js'), 'emit',
