@@ -214,6 +214,21 @@ def t207 : Tree := .stem t206
 def t208 : Tree := .fork t207 t1
 def t209 : Tree := .fork .leaf t208
 def t210 : Tree := .fork t204 t209
+def t211 : Tree := .fork .leaf t77
+def t212 : Tree := .fork t146 t211
+def t213 : Tree := .fork t212 .leaf
+def t214 : Tree := .fork .leaf t213
+def t215 : Tree := .stem t214
+def t216 : Tree := .fork t215 t41
+def t217 : Tree := .stem t216
+def t218 : Tree := .stem t217
+def t219 : Tree := .fork .leaf t218
+def t220 : Tree := .stem t219
+def t221 : Tree := .fork t220 t1
+def t222 : Tree := .fork t51 t221
+def t223 : Tree := .fork .leaf t222
+def t224 : Tree := .fork t217 t223
+def t225 : Tree := .fork t9 t224
 
 /-- `newline.dag` -/
 def newline : Tree := t5
@@ -224,8 +239,8 @@ def carriageReturn : Tree := t8
 /-- `eqConstNewline.dag` -/
 def eqConstNewline : Tree := t41
 
-/-- `skipLine.dag` -/
-def skipLine : Tree := t89
+/-- `skipLineFix.dag` -/
+def skipLineFix : Tree := t89
 
 /-- `isHash.dag` -/
 def isHash : Tree := t112
@@ -238,5 +253,8 @@ def hash : Tree := t144
 
 /-- `skipComment.dag` -/
 def skipComment : Tree := t210
+
+/-- `skipLine.dag` -/
+def skipLine : Tree := t225
 
 end TreeCalculus.Jets

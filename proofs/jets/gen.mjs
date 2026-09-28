@@ -1,8 +1,12 @@
 #!/usr/bin/env node
-// The demo jets' trees: each one's eager normal form, as the base toolchain computes it, written
-// to `<name>.dag` here and, through ../dag2lean.mjs, to ../TreeCalculus/Jets/Trees.lean.
+// The jets' trees: each one's eager normal form, as a lambada checkout's toolchain computes it,
+// written to `<name>.dag` here and, through ../dag2lean.mjs, to ../TreeCalculus/Jets/Trees.lean.
 //
 //   LAMBADA=<lambada checkout> node proofs/jets/gen.mjs
+//
+// The committed ones are lambada 7efbcd1's, whose `compile_file.dag` is the rewritten compiler
+// that reads a source's lines with `Lambada.skip_line`. Base 6ef3de4 has no `skip_line`, and
+// computes every other tree here byte for byte the same.
 //
 // A tree is either a LambAda expression, compiled by `lambada emit` against the library
 // `compile_file.dag` carries, or a symbol of `compile_file.dag` itself — the compiler's own
@@ -18,11 +22,12 @@ const trees = {
   newline: { lamb: '10' },
   carriageReturn: { lamb: '13' },
   eqConstNewline: { lamb: 'equal_const 10' },
-  skipLine: { lamb: 'fix $ \\self List.match [] (\\h Bool.match self id (equal_const 10 h))' },
+  skipLineFix: { lamb: 'fix $ \\self List.match [] (\\h Bool.match self id (equal_const 10 h))' },
   isHash: { symbol: 'Lambada._is_hash:28' },
   isNewline: { symbol: 'Char.is_newline' },
   hash: { lamb: "'#'" },
   skipComment: { symbol: 'Lambada._skip_comment:27' },
+  skipLine: { symbol: 'Lambada.skip_line' },
 };
 
 const here = dirname(fileURLToPath(import.meta.url));

@@ -5,13 +5,24 @@ proportional to their DAG, not their expansion, because it caches every `whnf` b
 
 namespace TreeCalculus.Tests
 
-/-- A tree with 2^n copies of `bottom`, as n + 1 distinct nodes. -/
-def tower (bottom : Tree) : Nat → Tree
-  | 0 => bottom
-  | n + 1 => .fork (tower bottom n) (tower bottom n)
+/-! Trees laid out the way `dag2lean.mjs` writes them, one definition a node, n + 1 of them for
+2^n leaves: `x n` and `y n` are the same tree defined twice, and `w n` is `y n` with its last
+leaf a stem instead — shared all the way down, and different only where a comparison looks
+last. -/
+open Lean in
+local macro "towers" : command => do
+  let name (p : String) (i : Nat) : Ident := mkIdent (.mkSimple s!"{p}{i}")
+  let mut defs := #[]
+  for (p, l, r, bottom) in [("x", "x", "x", ← `(Tree.leaf)), ("y", "y", "y", ← `(Tree.leaf)),
+      ("w", "y", "w", ← `(Tree.stem .leaf))] do
+    defs := defs.push (← `(def $(name p 0) : Tree := $bottom))
+    for i in [1:61] do
+      defs := defs.push (← `(def $(name p i) : Tree := .fork $(name l (i - 1)) $(name r (i - 1))))
+  return ⟨mkNullNode defs⟩
+towers
 
-/-- Both sides built separately; the expansion has 2^61 - 1 nodes. -/
-example : tower .leaf 60 = tower .leaf 60 := by decide +kernel
-example : tower .leaf 60 ≠ tower (.stem .leaf) 60 := by decide +kernel
+/-- 2^61 - 1 nodes a side. -/
+example : x60 = y60 := by decide +kernel
+example : x60 ≠ w60 := by decide +kernel
 
 end TreeCalculus.Tests

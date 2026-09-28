@@ -31,9 +31,20 @@ const intern = (shape) => {
   }
   return interned.get(shape);
 };
-const expr = (node) => node === leaf ? '.leaf' : node.name ??= intern(node.fork
-  ? `.fork ${expr(node.fork[0])} ${expr(node.fork[1])}`
-  : `.stem ${expr(node.stem)}`);
+const ref = (node) => node === leaf ? '.leaf' : node.name;
+// Children before parents, left before right — with a stack of its own rather than JavaScript's,
+// which a long list (a string constant, say) is deeper than.
+const expr = (root) => {
+  const todo = [root];
+  while (todo.length) {
+    const node = todo.at(-1);
+    const kids = ref(node) ? [] : (node.fork ?? [node.stem]).filter((kid) => !ref(kid));
+    if (kids.length) todo.push(...kids.reverse());
+    else if (todo.pop() !== leaf) node.name ??= intern(node.fork
+      ? `.fork ${ref(node.fork[0])} ${ref(node.fork[1])}` : `.stem ${ref(node.stem)}`);
+  }
+  return ref(root);
+};
 
 const roots = inputs.map((arg) => {
   const eq = arg.indexOf('=');
