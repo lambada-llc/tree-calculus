@@ -225,6 +225,8 @@ private:
   // live nodes, and losing an entry costs time, not correctness.
   Memo *const _memo = static_cast<Memo *>(map_pages(MAX_MEMO * sizeof(Memo)));
   size_t _memo_mask = 0;
+  size_t _memo_cap = 0;  // the bound (see size_memo)
+  size_t _memo_puts = 0; // since it last grew (see memo_put)
 
   // Per function (the `a` of apply(a, b), by hash), how many of its lookups in
   // a row have missed, up to MEMO_COLD. Small on purpose: it is read on every
@@ -331,9 +333,29 @@ private:
     return 0; // no tree is index 0, so 0 is "miss"
   }
 
+  /** Record an entry, and double the memo once it has taken as many entries
+   * as it has slots, until it reaches its bound. */
   void memo_put(uint32_t a, uint32_t b, uint32_t r) {
     ++stats_counters.memo_puts;
     _memo[hash(a, b) & _memo_mask] = {a, b, r};
+    if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
+  }
+
+  /**
+   * Double the memo in place, keeping its entries: at twice the size, an entry
+   * hashes to the slot it is in or to the one `half` above it, in the half being
+   * added — so no entry moves onto another.
+   */
+  void grow_memo() {
+    const size_t half = _memo_mask + 1;
+    std::fill_n(_memo + half, half, Memo{0, 0, 0});
+    _memo_mask = 2 * half - 1;
+    for (Memo *m = _memo; m < _memo + half; ++m)
+      if (m->a && (hash(m->a, m->b) & half)) {
+        m[half] = *m;
+        *m = {0, 0, 0};
+      }
+    _memo_puts = 0;
   }
 
   /**
@@ -419,21 +441,26 @@ private:
   }
 
   /**
-   * Size the memo to the budget, since it is the rest of what a collection
-   * bounds: a slot per eight nodes of arena, which at 12 bytes a slot is
-   * comparable to what the nodes cost — a long-lived module build is exactly
+   * Empty the memo, and bound it by the budget, since it is the rest of what a
+   * collection bounds: a slot per eight nodes of arena, which at 12 bytes a slot
+   * is comparable to what the nodes cost — a long-lived module build is exactly
    * the workload where remembering more reductions beats touching less memory.
    * Capped, because a cache stops paying for itself well before it is the size
    * of the thing it is caching, and direct-mapped, so the capacity is exactly
    * what it occupies. An unbudgeted evaluator (a one-shot benchmark run that
    * never calls set_budget) keeps the small cap: it exits before a large memo
    * pays for its footprint.
+   *
+   * The bound is reached by growing (memo_put), not laid out up front: laying
+   * a memo is a write to every slot — 96 MB at the default budget, which was
+   * most of what starting a runner cost — and a small request never fills one.
    */
   void size_memo() {
     const size_t cap = _budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP;
-    const size_t capacity = std::min(round_up_pow2(_budget / 8), cap);
-    std::fill_n(_memo, capacity, Memo{0, 0, 0});
-    _memo_mask = capacity - 1;
+    _memo_cap = std::min(round_up_pow2(_budget / 8), cap);
+    std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
+    _memo_mask = MIN_TABLE - 1;
+    _memo_puts = 0;
     std::fill(std::begin(_cold), std::end(_cold), 0);
   }
 
