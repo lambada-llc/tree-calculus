@@ -153,6 +153,7 @@ private:
   Node *_arena;
   uint32_t _head;      // one past the highest node ever allocated
   Tree _free = 0;      // head of the free list, chained through v
+  Tree _newest = ~0u;  // the node alloc() made last, if no collection since
   size_t _live = 0;    // what the last collection found, for sizing the next one
   size_t _budget;      // collect once _head reaches this
 
@@ -183,7 +184,8 @@ private:
   // list() skips searches because of it, and deciding that two trees are equal
   // by comparing their indices is sound only because of it. So no node is ever
   // made by alloc() alone: it is made by a search that came up empty, or where
-  // no search could have found one (list()).
+  // no search could have found one (list(), and intern() over the node made
+  // last).
   std::vector<Tree> _interned;
   size_t _interned_count = 0;
   size_t _interned_mask = 0;
@@ -228,7 +230,7 @@ private:
       result = _head++;
     }
     _arena[result] = {u, v};
-    return result;
+    return _newest = result;
   }
 
   /** Put a live node in the hash-consing table, which must have room for it. */
@@ -269,8 +271,22 @@ private:
     }
   }
 
-  /** The node for this shape: the one that already exists, or a new one. */
+  /**
+   * The node for this shape: the one that already exists, or a new one.
+   *
+   * No search when a child is the node made last: a node is made after its
+   * children, so nothing can have that one as a child yet (list()'s argument,
+   * a cell at a time). That is a quarter to a half of all the nodes a
+   * reduction builds — whatever it builds on what it just built — and without
+   * a search to wait on, the table write overlaps with the steps after it.
+   */
   Tree intern(uint32_t u, uint32_t v) {
+    if (u == _newest || v == _newest) {
+      const Tree fresh = alloc(u, v);
+      insert_interned(fresh);
+      reserve_interned(0);
+      return fresh;
+    }
     const size_t i = slot(u, v);
     if (_interned[i]) return _interned[i];
     const Tree fresh = alloc(u, v);
@@ -347,6 +363,7 @@ private:
    */
   void sweep() {
     _free = 0;
+    _newest = ~0u;
     _live = 0;
     // Downwards, so the list comes out in ascending order and allocation walks
     // the arena forwards rather than backwards.
@@ -375,6 +392,7 @@ private:
     _arena[1] = {0, 0}; // the shared leaf
     _head = 2;
     _free = 0;
+    _newest = ~0u;
     _live = 0;
   }
 
