@@ -23,7 +23,7 @@ echo 'import TreeCalculus
 | --- | --- |
 | `TreeCalculus/Tree.lean` | Trees, and `Eval`: the rules of [`reduction-rules/`](../reduction-rules/), big-step. |
 | `TreeCalculus/Machine.lean` | `step`: the eager evaluator's reduction loop, rule by rule. `Run`. |
-| `TreeCalculus/Memo.lean` | The memo put back, and proven not to change a result. |
+| `TreeCalculus/Runtime.lean` | What the runtime adds — the memo, and jets — proven not to change a result. |
 | `TreeCalculus/Symbolic.lean` | The same machine over trees with variables, and the substitution lemma. |
 | `TreeCalculus/Check.lean` | `explore`, and the checkers built on it, with their soundness theorems. |
 | `TreeCalculus/Jets.lean` | Jets on real trees: one kernel-checked line each. |
@@ -34,14 +34,17 @@ echo 'import TreeCalculus
 
 ## What is proven
 
-The machine (`Run a b r`: `apply(a, b)` returns `r`) is deterministic, computes exactly what the
-reduction rules do, and memoizing it changes nothing:
+The machine (`Run a b r`: `apply(a, b)` returns `r`) is deterministic and computes exactly what
+the reduction rules do. The runtime around it — the machine plus a memo it may hit, fill and
+forget any way at all, plus jets: any relation `J` on states every transition of which is a
+composite of real steps — returns what the machine does:
 
 ```lean
 theorem Run.det (h : Run a b r) (h' : Run a b r') : r = r'
 theorem run_iff_eval : Run a b r ↔ Eval a b r
-theorem memo_sound (hm : m.Sound)
-    (h : Star MStep ⟨.reduce a b [], [], m⟩ ⟨.dispatch r [], [], m'⟩) : Run a b r ∧ m'.Sound
+theorem runtime_sound (hj : ∀ s t, J s t → Reaches s t) (hm : m.Sound)
+    (h : Star (RStep J) ⟨.reduce a b [], [], m⟩ ⟨.dispatch r [], [], m'⟩) :
+    Run a b r ∧ m'.Sound
 ```
 
 Every step the symbolic machine takes is the concrete machine's on every instance:
@@ -70,6 +73,20 @@ theorem checkDropThrough_hit (h : checkDropThrough F ks n = true) (hk : k ∈ ks
     Run F (.fork k t) t
 ```
 
+and license the transitions a runtime takes for the jet — the `J` of `runtime_sound`:
+
+```lean
+inductive MemberJet (P : Tree) (ks : List Tree) : State Tree → State Tree → Prop
+  | answer : MemberJet P ks (.reduce P c k) (.dispatch (if c ∈ ks then .true else .false) k)
+inductive DropJet (F : Tree) (ks : List Tree) : State Tree → State Tree → Prop
+  | skip : c ∉ ks → DropJet F ks (.reduce F (.fork c t) k) (.reduce F t k)
+  | hit : c ∈ ks → DropJet F ks (.reduce F (.fork c t) k) (.dispatch t k)
+  | nil : DropJet F ks (.reduce F .leaf k) (.dispatch .leaf k)
+
+theorem MemberJet.reaches (h : checkMember P ks n = true) : MemberJet P ks s t → Reaches s t
+theorem DropJet.reaches (h : checkDropThrough F ks n = true) : DropJet F ks s t → Reaches s t
+```
+
 `checkMember` is a predicate on characters — or on any trees — as a finite set: `equal_const k`
 is `[k]` (`checkMember_single`), `Char.is_newline` is newline and carriage return. Every tree
 `c` is covered, whatever its shape, not only the ones that encode a character.
@@ -77,7 +94,7 @@ is `[k]` (`checkMember_single`), `Char.is_newline` is newline and carriage retur
 `dropThrough ks` drops a list's elements up to and including the first one in `ks`; `IsList`
 constrains only the spine, so the elements are arbitrary trees. `ks` is a list because the tree
 that matters takes two: `_skip_comment`, the loop that reads a comment's text a character at a
-time, stops at a newline *or* a carriage return. `_skip` is what lets a native loop give up
+time, stops at a newline *or* a carriage return. `skip` is what lets a native loop give up
 anywhere: skip what it likes, then hand the rest back to the tree.
 
 Applied to trees the base toolchain produced (`Jets.lean`):
@@ -97,6 +114,11 @@ theorem skipComment_skip (hc : c ∉ [newline, carriageReturn]) (ht : Run skipCo
     Run skipComment (.fork c t) r
 theorem skipComment_hit (hk : k ∈ [newline, carriageReturn]) (t : Tree) :
     Run skipComment (.fork k t) t
+
+/-- The compiler's jets (skipComment, isNewline, isHash), as transitions. -/
+theorem compilerJets_sound (hm : m.Sound)
+    (h : Star (RStep compilerJets) ⟨.reduce a b [], [], m⟩ ⟨.dispatch r [], [], m'⟩) :
+    Run a b r ∧ m'.Sound
 ```
 
 and the checkers refuse what is false — among them `checkDropThrough skipComment [newline]`: a
@@ -127,14 +149,15 @@ is a loop over two labels with its continuations on a heap stack; `step` is one 
 
 Left out, and why it changes no result:
 
-- **`MEMOIZE` frames and the memo.** `Memo.lean` puts them back: a machine that, besides every
-  rule, may on any `reduce a b` hit an entry (`memo_get`), push `MEMOIZE(a, b)` under what the
-  rule pushes, `memo_put` when that frame pops, and forget any entries at any time — which is
-  every admission and eviction policy at once (the direct-mapped overwrite, `MEMO_MIN_STEPS`, a
-  collection's filter). `memo_sound`: started with sound entries, it returns what `Run` says and
-  leaves only sound entries. The reason is `Run.frame` — a run is oblivious to the stack under
-  it, so a hit is a composite of real steps — and the frames above a `MEMOIZE(a, b)` being
-  exactly what `reduce a b` pushed, so what it records is `Run a b r`.
+- **`MEMOIZE` frames and the memo.** `Runtime.lean` puts them back: `RStep` may, besides every
+  rule, on any `reduce a b` hit an entry (`memo_get`), push `MEMOIZE(a, b)` under what the rule
+  pushes, `memo_put` when that frame pops, and forget any entries at any time — which is every
+  admission and eviction policy at once (the direct-mapped overwrite, `MEMO_MIN_STEPS`, a
+  collection's filter). `runtime_sound`: started with sound entries, it returns what `Run` says
+  and leaves only sound entries. The reason is `Run.frame` — a run is oblivious to the stack
+  under it, so a hit is a composite of real steps — and the frames above a `MEMOIZE(a, b)` being
+  exactly what `reduce a b` pushed, so what it records is `Run a b r`. Jets ride on the same
+  argument: a transition that is a composite of real steps is as good as the steps.
 - **Hash-consing.** The memo is keyed by node indices, the machine by trees. They agree because
   interning is exact: equal trees are equal indices and vice versa.
 - **Collection.** It frees only what no root, frame or operand reaches, moves nothing, and drops
@@ -142,15 +165,18 @@ Left out, and why it changes no result:
 
 ## What is trusted
 
-- That `step` is `apply`'s loop: the table above, which is the whole of it.
+- That `step` is `apply`'s loop: the table above, which is the whole of it. (`run_iff_eval` ties
+  `step` to the reduction rules every implementation in this repository is tested against.)
 - Exact hash-consing, and a collector that frees nothing reachable and filters the memo.
-- That a jet's native code computes the function its theorem names (`dropThrough ks`, or
-  `c = k` as a bool), and fires on exactly the tree the theorem is about — its index, interned
-  from the same `jets/*.dag` the Lean definition was generated from.
+- That a jet's native code takes only transitions of its relation (`MemberJet`, `DropJet`) —
+  answers with the set membership it was checked for, skips only elements that are no
+  separator — and fires on exactly the tree the theorem is about: its index, interned from the
+  same `jets/*.dag` the Lean definition was generated from.
 - Lean's kernel.
 
 Not trusted: `dag2lean.mjs` (a wrong translation is a theorem about some other tree, which the
-last point already excludes), and everything in `Symbolic.lean` and `Check.lean`, which is proven.
+point above already excludes), and everything in `Symbolic.lean`, `Check.lean` and
+`Runtime.lean`, which is proven.
 
 ## How a checker works
 
@@ -162,9 +188,9 @@ the tail fails. A checker is only a `Verdict`: which states end a branch, and wh
 the pattern. `checkDropThrough` ends a branch at the tail call `reduce F (var 0)` with an empty
 stack — accepted if no separator fits the pattern — or at `dispatch (var 0)` — accepted if the
 pattern is pinned to one of the separators; `checkMember` at `dispatch v`, accepting `v = true`
-if the pattern is pinned to one of `ks` and `v = false` if none of them can fit it. `explore_sound` turns acceptance into
-`Inv` for a set of branches covering every instance, and each checker's theorem reads its
-statement off those.
+if the pattern is pinned to one of `ks` and `v = false` if none of them can fit it.
+`explore_sound` turns acceptance into `Inv` for a set of branches covering every instance, and
+each checker's theorem reads its statement off those.
 
 **Sharing.** A runtime tree is a DAG whose expansion can be far larger (`_skip_comment`: 84
 distinct nodes, 16,284 as a tree). `dag2lean.mjs` writes one definition per distinct node, so the
@@ -177,7 +203,8 @@ that down — a tree with 2^60 leaves compared with a separately built copy in a
 
 **Cost.** The kernel evaluates at roughly 250 µs per symbolic step (30,134 concrete steps took
 7.5–8.2 s); a bare countdown loop costs it 37 µs an iteration, so that is interpretation
-overhead rather than anything in the checker. Measured with `lake env lean -Dprofiler=true TreeCalculus/Jets.lean`:
+overhead rather than anything in the checker. Measured with
+`lake env lean -Dprofiler=true TreeCalculus/Jets.lean`:
 
 | Jet | Distinct nodes | Branches | Symbolic steps | Kernel check |
 | --- | ---: | ---: | ---: | ---: |
@@ -200,9 +227,11 @@ Memo.gen_ascii_low`), and every shape a tree could take at each bit, so it has m
    `Jets/Trees.lean` from all of them.
 2. If a checker has the jet's shape, the jet is one line in `Jets.lean`:
    `theorem <name>_check : checkDropThrough <tree> [<separators>] 1000 = true := by decide +kernel`,
-   and its specification follows from the checker's theorems. The number is fuel — the longest
-   branch it may take, in steps and splits; a check that runs out fails rather than lies.
+   and its specification follows from the checker's theorems; add its relation to
+   `compilerJets`. The number is fuel — the longest branch it may take, in steps and splits; a
+   check that runs out fails rather than lies.
 3. If none has, write one: a `Verdict` saying which states end a branch and what they need of the
-   pattern, and its soundness theorem from `explore_sound`, the way `checkMember_sound` reads
-   its own off it (about 15 lines).
-4. Implement the native path keyed on the tree's index, and cite the theorem that licenses it.
+   pattern, its soundness theorem from `explore_sound` (the way `checkMember_sound` reads its
+   own off it, about 15 lines), and the relation of transitions it licenses.
+4. Implement the native path keyed on the tree's index, taking only those transitions, and cite
+   the theorem that licenses them.

@@ -27,14 +27,16 @@ const trees = {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '../..');
-const lambada = process.env.LAMBADA ?? (console.error('set LAMBADA to a lambada checkout'), process.exit(2));
+const lambada = process.env.LAMBADA
+  ?? (console.error('set LAMBADA to a lambada checkout'), process.exit(2));
 const library = join(lambada, 'compiler/compile_file.dag');
 
 const source = join(root, 'implementation/cpp/dag-machine/runner.cpp');
 const runner = join(here, '.runner-eager');
 const mtime = (path) => { try { return statSync(path).mtimeMs; } catch { return 0; } };
 if (mtime(runner) < mtime(source))
-  execFileSync(process.env.CXX ?? 'c++', ['-O2', '-std=c++17', '-pthread', '-DRUNNER_EAGER', '-o', runner, source]);
+  execFileSync(process.env.CXX ?? 'c++',
+    ['-O2', '-std=c++17', '-pthread', '-DRUNNER_EAGER', '-o', runner, source]);
 
 /** `runner -s`, one request: `expr`'s normal form, with the library loaded. */
 function normalize(expr) {
@@ -44,11 +46,12 @@ function normalize(expr) {
   return Buffer.from(out.slice(reply[0].length)).subarray(0, +reply[1]).toString() + '\n';
 }
 
-const emit = (lamb) => execFileSync('node', [join(lambada, 'bin/lambada.js'), 'emit', '--tree-calculus', root,
-  '--cache', join(here, '.cache')], { input: lamb + '\n' }).toString();
+const emit = (lamb) => execFileSync('node', [join(lambada, 'bin/lambada.js'), 'emit',
+  '--tree-calculus', root, '--cache', join(here, '.cache')], { input: lamb + '\n' }).toString();
 
-for (const [name, tree] of Object.entries(trees))
-  writeFileSync(join(here, `${name}.dag`), normalize(tree.lamb ? emit(tree.lamb) : tree.symbol + '\n'));
+for (const [name, { lamb, symbol }] of Object.entries(trees))
+  writeFileSync(join(here, `${name}.dag`), normalize(lamb ? emit(lamb) : symbol + '\n'));
 
-writeFileSync(join(root, 'proofs/TreeCalculus/Jets/Trees.lean'), execFileSync('node', [join(here, '../dag2lean.mjs'),
-  'TreeCalculus.Jets', ...Object.keys(trees).map((name) => `${name}=${join(here, name + '.dag')}`)]));
+const inputs = Object.keys(trees).map((name) => `${name}=${join(here, name + '.dag')}`);
+writeFileSync(join(here, '../TreeCalculus/Jets/Trees.lean'),
+  execFileSync('node', [join(here, '../dag2lean.mjs'), 'TreeCalculus.Jets', ...inputs]));

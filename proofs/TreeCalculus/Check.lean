@@ -148,6 +148,13 @@ theorem checkMember_single (h : checkMember P [k] n = true) (c : Tree) :
     Run P c (if c = k then .true else .false) := by
   simpa using checkMember_sound h c
 
+/-- What the runtime may do with a membership jet: answer `apply(P, c)` outright. -/
+inductive MemberJet (P : Tree) (ks : List Tree) : State Tree → State Tree → Prop
+  | answer : MemberJet P ks (.reduce P c k) (.dispatch (if c ∈ ks then .true else .false) k)
+
+theorem MemberJet.reaches (h : checkMember P ks n = true) : MemberJet P ks s t → Reaches s t
+  | .answer => (checkMember_sound h _).frame _
+
 /-! ## Drop-through jets: a loop that discards a list up to a separator -/
 
 inductive IsList : Tree → Prop
@@ -200,6 +207,22 @@ theorem checkDropThrough_hit (h : checkDropThrough F ks n = true) (hk : k ∈ ks
   rcases checkDropThrough_fork h k t with ⟨hk', -⟩ | ⟨-, hs⟩
   · exact absurd hk hk'
   · exact hs
+
+/-- What the runtime may do with a drop-through jet: skip an element that is none of `ks` and go
+on with the rest — natively, or by handing it back to the tree — or answer at one that is, or at
+the end of the list. -/
+inductive DropJet (F : Tree) (ks : List Tree) : State Tree → State Tree → Prop
+  | skip : c ∉ ks → DropJet F ks (.reduce F (.fork c t) k) (.reduce F t k)
+  | hit : c ∈ ks → DropJet F ks (.reduce F (.fork c t) k) (.dispatch t k)
+  | nil : DropJet F ks (.reduce F .leaf k) (.dispatch .leaf k)
+
+theorem DropJet.reaches (h : checkDropThrough F ks n = true) : DropJet F ks s t → Reaches s t
+  | .skip hc => by
+    rcases checkDropThrough_fork h _ _ with ⟨-, hs⟩ | ⟨hk, -⟩
+    · simpa [State.app] using hs.app _
+    · exact absurd hk hc
+  | .hit hk => (checkDropThrough_hit h hk _).frame _
+  | .nil => (checkRun_sound (Bool.and_eq_true _ _ ▸ h).1).frame _
 
 theorem checkDropThrough_list (h : checkDropThrough F ks n = true) (hxs : IsList xs) :
     Run F xs (dropThrough ks xs) := by

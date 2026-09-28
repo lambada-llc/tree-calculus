@@ -14,7 +14,7 @@ and `inst`/`maxVar` stop at a `lit`. A concrete tree written as one Lean definit
 not its tree expansion — and comparing two of them (`decide (u = t)` in `fits`) costs one pair of
 nodes per *distinct* pair, because the kernel caches every `whnf` it computes, keyed by term: the
 recursive comparisons of a shared node pair are the same term (`Tests.lean` pins that down on a
-tree whose expansion has 2^60 nodes).
+tree with 2^60 leaves).
 -/
 
 namespace TreeCalculus
@@ -81,7 +81,6 @@ inductive Out where
   /-- `return result`. -/
   | halt
 
-open STree in
 /-- `step`, triaging through `view`. -/
 def sstep : State STree → Out
   | .reduce a b k => match a.view with
@@ -127,7 +126,8 @@ theorem fits_false {x : STree} (h : x.fits false t = true) : x.subst σ = t := b
   | lit => simpa [fits, subst] using h
   | stem _ ih => cases t <;> simp only [fits, reduceCtorEq] at h; simp [subst, ih h]
   | fork _ _ ih₁ ih₂ =>
-    cases t <;> simp only [fits, Bool.and_eq_true, reduceCtorEq] at h; simp [subst, ih₁ h.1, ih₂ h.2]
+    cases t <;> simp only [fits, Bool.and_eq_true, reduceCtorEq] at h
+    simp [subst, ih₁ h.1, ih₂ h.2]
   | var => simp [fits] at h
 
 theorem fits_true {x : STree} (h : x.subst σ = t) : x.fits true t = true := by
@@ -181,7 +181,8 @@ theorem sstep_next {s : State STree} (h : sstep s = .next s') (σ : Nat → Tree
 /-- `inst`, then `subst`, is `subst` alone at the updated valuation — on whole states. -/
 theorem State.subst_inst (s : State STree) :
     (s.map (·.inst i p)).map (subst σ) = s.map (subst (upd σ i (p.subst σ))) := by
-  have hf : ∀ f : Frame STree, (f.map (·.inst i p)).map (subst σ) = f.map (subst (upd σ i (p.subst σ))) := by
+  have hf : ∀ f : Frame STree,
+      (f.map (·.inst i p)).map (subst σ) = f.map (subst (upd σ i (p.subst σ))) := by
     intro f; cases f <;> simp [Frame.map, STree.subst_inst]
   cases s <;> simp [State.map, STree.subst_inst, hf]
 

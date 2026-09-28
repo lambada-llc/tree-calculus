@@ -1,4 +1,5 @@
 import TreeCalculus.Check
+import TreeCalculus.Runtime
 import TreeCalculus.Jets.Trees
 
 /-!
@@ -7,8 +8,8 @@ import TreeCalculus.Jets.Trees
 Each tree in `Jets/Trees.lean` is an eager normal form the base toolchain computed
 (`jets/gen.mjs`): LambAda compiled by `lambada emit`, or a symbol of the shipped
 `compile_file.dag` itself, normalized by `runner`. Each `…_check` is one kernel evaluation
-(`decide +kernel`, no `native_decide`); what the runtime may do with the tree follows from it
-by the checker's soundness theorem.
+(`decide +kernel`, no `native_decide`); everything else about the tree follows from it by the
+checker's theorems.
 -/
 
 namespace TreeCalculus.Jets
@@ -16,18 +17,26 @@ namespace TreeCalculus.Jets
 /-! ## Predicates: membership in a set of trees, against every tree -/
 
 /-- `equal_const 10`, written in LambAda. -/
+theorem eqConstNewline_check : checkMember eqConstNewline [newline] 1000 = true := by
+  decide +kernel
+
 theorem eqConstNewline_spec (c : Tree) :
     Run eqConstNewline c (if c = newline then .true else .false) :=
-  checkMember_single (n := 1000) (by decide +kernel) c
+  checkMember_single eqConstNewline_check c
 
 /-- The compiler's `_is_hash`, which is `equal_const '#'`. -/
+theorem isHash_check : checkMember isHash [hash] 1000 = true := by decide +kernel
+
 theorem isHash_spec (c : Tree) : Run isHash c (if c = hash then .true else .false) :=
-  checkMember_single (n := 1000) (by decide +kernel) c
+  checkMember_single isHash_check c
 
 /-- `Char.is_newline`, which is `Fn.p_or (equal_const 10) (equal_const 13)`. -/
+theorem isNewline_check : checkMember isNewline [newline, carriageReturn] 1000 = true := by
+  decide +kernel
+
 theorem isNewline_spec (c : Tree) :
     Run isNewline c (if c ∈ [newline, carriageReturn] then .true else .false) :=
-  checkMember_sound (n := 1000) (by decide +kernel) c
+  checkMember_sound isNewline_check c
 
 /-! ## Loops: dropping a list through a separator -/
 
@@ -57,6 +66,21 @@ theorem skipComment_skip (hc : c ∉ [newline, carriageReturn]) (ht : Run skipCo
 theorem skipComment_hit (hk : k ∈ [newline, carriageReturn]) (t : Tree) :
     Run skipComment (.fork k t) t :=
   checkDropThrough_hit skipComment_check hk t
+
+/-! ## A runtime taking them -/
+
+/-- The compiler's jets, as transitions. -/
+def compilerJets (s t : State Tree) : Prop :=
+  DropJet skipComment [newline, carriageReturn] s t ∨
+  MemberJet isNewline [newline, carriageReturn] s t ∨ MemberJet isHash [hash] s t
+
+/-- A runtime that memoizes, and takes the compiler's jets wherever it likes, returns what the
+reduction rules say. -/
+theorem compilerJets_sound (hm : m.Sound)
+    (h : Star (RStep compilerJets) ⟨.reduce a b [], [], m⟩ ⟨.dispatch r [], [], m'⟩) :
+    Run a b r ∧ m'.Sound :=
+  runtime_sound (fun _ _ => (·.elim (DropJet.reaches skipComment_check) (·.elim
+    (MemberJet.reaches isNewline_check) (MemberJet.reaches isHash_check)))) hm h
 
 /-! ## What the checkers refuse -/
 

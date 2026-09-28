@@ -31,8 +31,9 @@ const intern = (shape) => {
   }
   return interned.get(shape);
 };
-const expr = (node) => node === leaf ? '.leaf' : node.name ??=
-  intern(node.fork ? `.fork ${expr(node.fork[0])} ${expr(node.fork[1])}` : `.stem ${expr(node.stem)}`);
+const expr = (node) => node === leaf ? '.leaf' : node.name ??= intern(node.fork
+  ? `.fork ${expr(node.fork[0])} ${expr(node.fork[1])}`
+  : `.stem ${expr(node.stem)}`);
 
 const roots = inputs.map((arg) => {
   const eq = arg.indexOf('=');

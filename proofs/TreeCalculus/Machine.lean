@@ -14,11 +14,11 @@ What the C++ does besides, and why none of it changes a result:
   so where the C++ compares indices, this compares trees.
 * **Collection** (`collect_if_over_budget`): frees only what no root, frame or operand reaches,
   and nothing moves, so every index the loop holds still names the tree it named.
-* **`MEMOIZE` frames and the memo**: a cache, put back in `Memo.lean`, whose `memo_sound` proves
-  that a machine free to hit, fill and forget its memo any way at all returns what `Run` says,
-  and only ever holds entries `Run` agrees with. That the entries' keys — indices — mean trees
-  is hash-consing again, plus the collector dropping every entry one of whose three nodes it
-  frees, so no index is reused under a stale entry.
+* **`MEMOIZE` frames and the memo**: a cache, put back in `Runtime.lean`, whose `runtime_sound`
+  proves that a machine free to hit, fill and forget its memo any way at all returns what `Run`
+  says, and only ever holds entries `Run` agrees with. That the entries' keys — indices — mean
+  trees is hash-consing again, plus the collector dropping every entry one of whose three nodes
+  it frees, so no index is reused under a stale entry.
 -/
 
 namespace TreeCalculus
@@ -116,7 +116,7 @@ theorem Reaches.app (h : Reaches s t) (k) : Reaches (s.app k) (t.app k) := by
   | cons hs _ ih => exact .cons (step_app hs k) ih
 
 /-- A run is oblivious to the stack under it — what makes a memo hit, `reduce a b k` jumping
-straight to `dispatch r k`, a composite of real steps (`Memo.lean`). -/
+straight to `dispatch r k`, a composite of real steps (`Runtime.lean`). -/
 theorem Run.frame (h : Run a b r) (k) : Reaches (.reduce a b k) (.dispatch r k) := by
   simpa [State.app] using h.app k
 
