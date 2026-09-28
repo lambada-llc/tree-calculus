@@ -6,6 +6,9 @@
 #
 # Needs a C++ compiler (the runtime builds runner.cpp on demand) and Node.
 set -euo pipefail
+# The runner frames a payload by its length in bytes, and ${#…} counts bytes
+# only in the C locale: under UTF-8, a payload spelling △ would come up short.
+export LC_ALL=C
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 DAG_JS="$DIR/../../../bin/dag.js"
