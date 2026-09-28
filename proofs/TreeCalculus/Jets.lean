@@ -13,16 +13,21 @@ by the checker's soundness theorem.
 
 namespace TreeCalculus.Jets
 
-/-! ## Predicates: `equal_const k` against every tree -/
+/-! ## Predicates: membership in a set of trees, against every tree -/
 
 /-- `equal_const 10`, written in LambAda. -/
 theorem eqConstNewline_spec (c : Tree) :
     Run eqConstNewline c (if c = newline then .true else .false) :=
-  checkEqConst_sound (n := 1000) (by decide +kernel) c
+  checkMember_single (n := 1000) (by decide +kernel) c
 
 /-- The compiler's `_is_hash`, which is `equal_const '#'`. -/
 theorem isHash_spec (c : Tree) : Run isHash c (if c = hash then .true else .false) :=
-  checkEqConst_sound (n := 1000) (by decide +kernel) c
+  checkMember_single (n := 1000) (by decide +kernel) c
+
+/-- `Char.is_newline`, which is `Fn.p_or (equal_const 10) (equal_const 13)`. -/
+theorem isNewline_spec (c : Tree) :
+    Run isNewline c (if c ∈ [newline, carriageReturn] then .true else .false) :=
+  checkMember_sound (n := 1000) (by decide +kernel) c
 
 /-! ## Loops: dropping a list through a separator -/
 
@@ -55,8 +60,8 @@ theorem skipComment_hit (hk : k ∈ [newline, carriageReturn]) (t : Tree) :
 
 /-! ## What the checkers refuse -/
 
-example : checkEqConst isHash newline 1000 = false := by decide +kernel
-example : checkEqConst eqConstNewline carriageReturn 1000 = false := by decide +kernel
+example : checkMember isHash [newline] 1000 = false := by decide +kernel
+example : checkMember isNewline [newline] 1000 = false := by decide +kernel
 example : checkDropThrough skipLine [carriageReturn] 1000 = false := by decide +kernel
 /-- A jet that skipped `_skip_comment`'s argument to the next newline would be wrong: a carriage
 return ends the comment first. -/

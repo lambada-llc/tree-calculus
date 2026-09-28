@@ -20,6 +20,7 @@ const trees = {
   eqConstNewline: { lamb: 'equal_const 10' },
   skipLine: { lamb: 'fix $ \\self List.match [] (\\h Bool.match self id (equal_const 10 h))' },
   isHash: { symbol: 'Lambada._is_hash:28' },
+  isNewline: { symbol: 'Char.is_newline' },
   hash: { lamb: "'#'" },
   skipComment: { symbol: 'Lambada._skip_comment:27' },
 };

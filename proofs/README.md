@@ -57,7 +57,9 @@ every argument, of any shape:
 ```lean
 theorem checkRun_sound (h : checkRun F x r n = true) : Run F x r
 
-theorem checkEqConst_sound (h : checkEqConst P k n = true) (c : Tree) :
+theorem checkMember_sound (h : checkMember P ks n = true) (c : Tree) :
+    Run P c (if c ∈ ks then .true else .false)
+theorem checkMember_single (h : checkMember P [k] n = true) (c : Tree) :
     Run P c (if c = k then .true else .false)
 
 theorem checkDropThrough_list (h : checkDropThrough F ks n = true) (hxs : IsList xs) :
@@ -68,12 +70,15 @@ theorem checkDropThrough_hit (h : checkDropThrough F ks n = true) (hk : k ∈ ks
     Run F (.fork k t) t
 ```
 
+`checkMember` is a predicate on characters — or on any trees — as a finite set: `equal_const k`
+is `[k]` (`checkMember_single`), `Char.is_newline` is newline and carriage return. Every tree
+`c` is covered, whatever its shape, not only the ones that encode a character.
+
 `dropThrough ks` drops a list's elements up to and including the first one in `ks`; `IsList`
 constrains only the spine, so the elements are arbitrary trees. `ks` is a list because the tree
 that matters takes two: `_skip_comment`, the loop that reads a comment's text a character at a
-time, stops at a newline *or* a carriage return (`Char.is_newline`). A single separator is
-`ks = [k]`. `_skip` is what lets a native loop give up anywhere: skip what it likes, then hand
-the rest back to the tree.
+time, stops at a newline *or* a carriage return. `_skip` is what lets a native loop give up
+anywhere: skip what it likes, then hand the rest back to the tree.
 
 Applied to trees the base toolchain produced (`Jets.lean`):
 
@@ -82,6 +87,8 @@ theorem eqConstNewline_spec (c : Tree) :
     Run eqConstNewline c (if c = newline then .true else .false)   -- `equal_const 10`
 theorem isHash_spec (c : Tree) :
     Run isHash c (if c = hash then .true else .false)              -- the compiler's `_is_hash`
+theorem isNewline_spec (c : Tree) :                                -- `Char.is_newline`
+    Run isNewline c (if c ∈ [newline, carriageReturn] then .true else .false)
 theorem skipLine_spec (h : IsList xs) :
     Run skipLine xs (dropThrough [newline] xs)                     -- a loop written for this
 theorem skipComment_spec (h : IsList xs) :
@@ -154,8 +161,8 @@ records the refinement in `var 1`'s pattern; `var 0` is never split, so a branch
 the tail fails. A checker is only a `Verdict`: which states end a branch, and what they need of
 the pattern. `checkDropThrough` ends a branch at the tail call `reduce F (var 0)` with an empty
 stack — accepted if no separator fits the pattern — or at `dispatch (var 0)` — accepted if the
-pattern is ground and one of the separators; `checkEqConst` at `dispatch v`, accepting `v = true`
-if the pattern is `k` and `v = false` if `k` cannot fit it. `explore_sound` turns acceptance into
+pattern is pinned to one of the separators; `checkMember` at `dispatch v`, accepting `v = true`
+if the pattern is pinned to one of `ks` and `v = false` if none of them can fit it. `explore_sound` turns acceptance into
 `Inv` for a set of branches covering every instance, and each checker's theorem reads its
 statement off those.
 
@@ -175,9 +182,12 @@ overhead rather than anything in the checker. Measured with `lake env lean -Dpro
 | Jet | Distinct nodes | Branches | Symbolic steps | Kernel check |
 | --- | ---: | ---: | ---: | ---: |
 | `eqConstNewline` (`equal_const 10`) | 34 | 23 | 163 | 0.07–0.15 s |
-| `isHash` (compiler) | 48 | 33 | 241 | 0.11–0.17 s |
-| `skipLine` | 82 | 23 | 420 | 0.17–0.32 s |
+| `isHash` (compiler) | 48 | 33 | 241 | 0.10–0.17 s |
+| `isNewline` (`Char.is_newline`) | 65 | 43 | 786 | 0.22 s |
+| `skipLine` | 82 | 23 | 420 | 0.15–0.32 s |
 | `skipComment` (compiler) | 84 | 507 | 33,434 | 10.9–13.5 s |
+
+The ranges are repeated runs on a shared machine.
 
 `_skip_comment` explores a table over the character's low 6 bits (`Memo.precompute_alt
 Memo.gen_ascii_low`), and every shape a tree could take at each bit, so it has many branches.
@@ -193,6 +203,6 @@ Memo.gen_ascii_low`), and every shape a tree could take at each bit, so it has m
    and its specification follows from the checker's theorems. The number is fuel — the longest
    branch it may take, in steps and splits; a check that runs out fails rather than lies.
 3. If none has, write one: a `Verdict` saying which states end a branch and what they need of the
-   pattern, and its soundness theorem from `explore_sound`, the way `checkEqConst_sound` reads
+   pattern, and its soundness theorem from `explore_sound`, the way `checkMember_sound` reads
    its own off it (about 15 lines).
 4. Implement the native path keyed on the tree's index, and cite the theorem that licenses it.

@@ -90,6 +90,20 @@ theorem explore_sound (h : explore verdict n pat s = true) (hinv : Inv init pat 
         obtain ⟨pat', s', σ'', hv, hinv'', hpat', h0'⟩ := ih (hall p hp) hinv' σ'
         exact ⟨pat', s', σ'', hv, hinv'', hpat'.trans hpat, h0'.trans h0⟩
 
+/-! ## What a branch's pattern says about `c` -/
+
+/-- `c`, refined to `pat`, is one of `ks` whatever the rest of it is. -/
+def pinnedIn (pat : STree) (ks : List Tree) : Bool := ks.any (pat.fits false ·)
+
+/-- `c`, refined to `pat`, is none of `ks`. -/
+def avoids (pat : STree) (ks : List Tree) : Bool := ks.all (!pat.fits true ·)
+
+theorem pinnedIn_mem (h : pinnedIn pat ks = true) (σ) : pat.subst σ ∈ ks := by
+  obtain ⟨k, hk, hfit⟩ := List.any_eq_true.mp h; rwa [fits_false hfit]
+
+theorem avoids_not_mem (h : avoids pat ks = true) (σ) : pat.subst σ ∉ ks := fun hk => by
+  have := List.all_eq_true.mp h _ hk; rw [fits_true rfl] at this; cases this
+
 /-! ## Running a closed application -/
 
 /-- `F x` runs to `r`. -/
@@ -101,37 +115,38 @@ theorem checkRun_sound (h : checkRun F x r n = true) : Run F x r := by
   obtain ⟨_, s, σ, hv, hinv, -⟩ :=
     explore_sound (init := fun _ _ => .reduce F x []) h (fun _ => .refl) (fun _ => .leaf)
   split at hv
-  · have := hinv σ; simp only [State.map, List.map_nil, fits_false (Option.some.inj hv)] at this
-    exact this
+  · simpa [Run, State.map, fits_false (Option.some.inj hv)] using hinv σ
   · cases hv
 
 /-! ## Predicate jets: "a predicate on chars plus a char" -/
 
-/-- `P` is `equal_const k`'s behaviour: every branch returns, returning true exactly when `c`
-has been pinned to `k`, and false when `c` provably is not `k`. -/
-def checkEqConst (P k : Tree) (n : Nat) : Bool :=
+/-- `P` decides membership in `ks`: every branch returns, true where `c` has been pinned to one
+of `ks` and false where it provably is none of them. -/
+def checkMember (P : Tree) (ks : List Tree) (n : Nat) : Bool :=
   explore (fun pat s => match s with
       | .dispatch v [] => some <|
-          if pat.fits false k then v.fits false .true else !pat.fits true k && v.fits false .false
+          if pinnedIn pat ks then v.fits false .true else avoids pat ks && v.fits false .false
       | _ => none)
     n (var 1) (.reduce (lit P) (var 1) [])
 
-theorem checkEqConst_sound (h : checkEqConst P k n = true) (c : Tree) :
-    Run P c (if c = k then .true else .false) := by
+theorem checkMember_sound (h : checkMember P ks n = true) (c : Tree) :
+    Run P c (if c ∈ ks then .true else .false) := by
   obtain ⟨pat, s, σ, hv, hinv, hc, -⟩ :=
     explore_sound (init := fun c _ => .reduce P c []) h (fun _ => .refl) (fun _ => c)
   simp only [subst] at hc
   split at hv
-  · rename_i v
-    have run : Run P c (v.subst σ) := by have := hinv σ; rwa [hc] at this
+  · have run := hinv σ; simp only [State.map, List.map_nil, hc] at run
     simp only [Option.some.injEq] at hv
     split at hv
-    · rename_i hk
-      rw [fits_false hv] at run; simpa [← hc, fits_false hk] using run
-    · simp only [Bool.and_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hv
-      have : c ≠ k := fun hck => by rw [fits_true (hc.trans hck)] at hv; cases hv.1
-      rw [fits_false hv.2] at run; simpa [this] using run
+    · rw [fits_false hv] at run; simpa [Run, hc ▸ pinnedIn_mem ‹_› σ] using run
+    · simp only [Bool.and_eq_true] at hv
+      rw [fits_false hv.2] at run; simpa [Run, hc ▸ avoids_not_mem hv.1 σ] using run
   · cases hv
+
+/-- `equal_const k`'s specification. -/
+theorem checkMember_single (h : checkMember P [k] n = true) (c : Tree) :
+    Run P c (if c = k then .true else .false) := by
+  simpa using checkMember_sound h c
 
 /-! ## Drop-through jets: a loop that discards a list up to a separator -/
 
@@ -145,13 +160,13 @@ def dropThrough (ks : List Tree) : Tree → Tree
   | t => t
 
 /-- `F` is a loop over a list that drops elements up to and including the first in `ks`: `F △`
-is `△`; on `△ c t` every branch either tail-calls `F t` (`c` provably in no `ks`) or returns `t`
-itself (`c` pinned to one of `ks`); `t` is never looked at. -/
+is `△`; on `△ c t` every branch either tail-calls `F t` (`c` provably none of `ks`) or returns
+`t` itself (`c` pinned to one of `ks`); `t` is never looked at. -/
 def checkDropThrough (F : Tree) (ks : List Tree) (n : Nat) : Bool :=
   checkRun F .leaf .leaf n &&
   explore (fun pat s => match s with
-      | .reduce a (.var 0) [] => if a.fits false F then some (ks.all (!pat.fits true ·)) else none
-      | .dispatch (.var 0) [] => some (ks.any (pat.fits false ·))
+      | .reduce a (.var 0) [] => if a.fits false F then some (avoids pat ks) else none
+      | .dispatch (.var 0) [] => some (pinnedIn pat ks)
       | _ => none)
     n (var 1) (.reduce (lit F) (fork (var 1) (var 0)) [])
 
@@ -163,21 +178,14 @@ theorem checkDropThrough_fork (h : checkDropThrough F ks n = true) (c t : Tree) 
     explore_sound (init := fun c t => .reduce F (.fork c t) []) h.2 (fun _ => .refl)
       (fun i => if i = 0 then t else c)
   simp only [subst, Nat.one_ne_zero, ↓reduceIte] at hc ht
-  have run := hinv σ; rw [hc, ht] at run
+  have run := hinv σ; simp only [State.map, hc, ht] at run
   split at hv
-  · rename_i a
-    split at hv
-    · simp only [Option.some.injEq, List.all_eq_true, Bool.not_eq_eq_eq_not, Bool.not_true] at hv
-      refine .inl ⟨fun hk => ?_, ?_⟩
-      · have := hv c hk; rw [fits_true hc] at this; cases this
-      · simpa [State.map, fits_false ‹_›, subst, ht] using run
+  · split at hv
+    · simp only [Option.some.injEq] at hv
+      exact .inl ⟨hc ▸ avoids_not_mem hv σ, by simpa [fits_false ‹_›, subst, ht] using run⟩
     · cases hv
-  · simp only [Option.some.injEq, List.any_eq_true] at hv
-    obtain ⟨k, hk, hfit⟩ := hv
-    rw [← hc, fits_false hfit]
-    have : Reaches (.reduce F (.fork k t) []) (.dispatch t []) := by
-      simpa [State.map, subst, ht, hc, ← fits_false (σ := σ) hfit] using run
-    exact .inr ⟨hk, this⟩
+  · simp only [Option.some.injEq] at hv
+    exact .inr ⟨hc ▸ pinnedIn_mem hv σ, by simpa [Run, subst, ht] using run⟩
   · cases hv
 
 /-- A native loop may skip any element not in `ks` and hand the rest back to the tree. -/
