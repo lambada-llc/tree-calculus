@@ -379,6 +379,11 @@ private:
     }
   }
 
+  // Small pages, on purpose. Huge ones (MADV_HUGEPAGE) spare the TLB, and ran
+  // 8-20% faster back to back; but a VM that returns freed memory to its host
+  // returns it in whole 2 MiB blocks — the ones a huge-page fault needs — so a
+  // run that started after a pause touched its memory at a seventh of the
+  // speed, and took up to twice as long.
   void map_arena() {
     int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
