@@ -45,7 +45,11 @@ jobs:
       - name: Python implementation
         run: python3 implementation/python/test_tree_calculus.py
 
-  # The theorems under proofs/. --wfail, because a `sorry` is only a warning.
+  # The theorems under proofs/, the runtime's jets among them. test.sh checks
+  # that jets.hpp and the Lean files are what proofs/jets/*.dag make; this, that
+  # those files prove what they claim — Jets/Runtime.lean type-checks only if
+  # every jet jets.hpp embeds is one a checker proved. --wfail, because a
+  # `sorry` is only a warning.
   proofs:
     runs-on: ubuntu-latest
     timeout-minutes: 20

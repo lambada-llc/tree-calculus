@@ -153,10 +153,13 @@ a native answer would take (cold, 12 to 37 steps: 50 to 170 ns).
 **Adding one** is a line in `proofs/jets/embed.mjs`'s table, which
 regenerates `jets.hpp` and `proofs/TreeCalculus/Jets/Runtime.lean`; the
 latter type-checks only if the jet's check theorem proves the relation
-the table claims. `apply()` implements a `DropJet` through one separator
-on a triage node `△(△wx)y`, and `embed.mjs` refuses any other; see
+the table claims, so run `lake build --wfail` in `proofs/` too.
+`apply()` implements a `DropJet` through one separator on a triage node
+`△(△wx)y`, and `embed.mjs` refuses any other; see
 [`proofs/README.md`](../../../proofs/README.md#adding-a-jet). `test.sh`
-fails if `jets.hpp` is not what the table and the trees make.
+fails if `jets.hpp` or the Lean trees are not what `proofs/jets/*.dag`
+make, and CI's `proofs` job if the Lean does not check: between them,
+the tree the runtime fires on is the tree a theorem is about.
 
 ## Environment variables
 

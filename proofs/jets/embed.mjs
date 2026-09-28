@@ -1,15 +1,19 @@
 #!/usr/bin/env node
-// The jets the runtime takes, from the one table below: each tree byte for byte as this
-// directory holds it, in the header the eager evaluator interns them from, and each relation in
-// a Lean file that type-checks only if the runtime takes nothing that is not proven.
+// What the trees in this directory make: every one of them as Lean definitions
+// (../TreeCalculus/Jets/Trees.lean, through ../dag2lean.mjs), the theorems' subjects; and, for
+// the jets the runtime takes — the one table below —, each tree byte for byte in the header the
+// eager evaluator interns them from, and each relation in a Lean file that type-checks only if
+// the runtime takes nothing that is not proven.
 //
-//   node proofs/jets/embed.mjs          write both
-//   node proofs/jets/embed.mjs --check  fail if either is not what it would write
+//   node proofs/jets/embed.mjs          write all three
+//   node proofs/jets/embed.mjs --check  fail if any is not what it would write
 //
-// `implementation/cpp/dag-machine/test.sh` runs the check, so an embedding cannot fall behind
-// the trees the theorems are about; `gen.mjs` runs this after writing them.
+// `implementation/cpp/dag-machine/test.sh` runs the check and CI builds proofs/ (`lake build
+// --wfail`, so a `sorry` fails too): between them, the tree the runtime fires on is the tree a
+// theorem is about. `gen.mjs` runs this after writing the trees.
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -82,7 +86,13 @@ theorem runtimeJets_sound (hm : m.Sound)
 end TreeCalculus.Jets
 `;
 
+// Every tree here, sorted: the order numbers dag2lean.mjs's shared definitions.
+const trees = readdirSync(here).filter((file) => file.endsWith('.dag')).sort()
+  .map((file) => `${file.slice(0, -'.dag'.length)}=${join(here, file)}`);
+
 const outputs = {
+  [join(here, '../TreeCalculus/Jets/Trees.lean')]:
+    execFileSync('node', [join(here, '../dag2lean.mjs'), 'TreeCalculus.Jets', ...trees]).toString(),
   [join(root, 'implementation/cpp/jets.hpp')]: header,
   [join(here, '../TreeCalculus/Jets/Runtime.lean')]: lean,
 };

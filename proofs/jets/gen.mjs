@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // The jets' trees: each one's eager normal form, as a lambada checkout's toolchain computes it,
-// written to `<name>.dag` here and, through ../dag2lean.mjs, to ../TreeCalculus/Jets/Trees.lean.
+// written to `<name>.dag` here — from which `embed.mjs`, run last, writes everything else.
 //
 //   LAMBADA=<lambada checkout> node proofs/jets/gen.mjs
 //
@@ -55,7 +55,4 @@ const emit = (lamb) => execFileSync('node', [join(lambada, 'bin/lambada.js'), 'e
 for (const [name, { lamb, symbol }] of Object.entries(trees))
   writeFileSync(join(here, `${name}.dag`), normalize(lamb ? emit(lamb) : symbol + '\n'));
 
-const inputs = Object.keys(trees).map((name) => `${name}=${join(here, name + '.dag')}`);
-writeFileSync(join(here, '../TreeCalculus/Jets/Trees.lean'),
-  execFileSync('node', [join(here, '../dag2lean.mjs'), 'TreeCalculus.Jets', ...inputs]));
 execFileSync('node', [join(here, 'embed.mjs')]);
