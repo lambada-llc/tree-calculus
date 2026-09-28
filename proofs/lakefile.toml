@@ -3,3 +3,7 @@ defaultTargets = ["TreeCalculus"]
 
 [[lean_lib]]
 name = "TreeCalculus"
+
+[[lean_exe]]
+name = "machine"
+root = "Main"
