@@ -127,12 +127,11 @@ private:
   // this stack the collector's root set as well as the VM's.
   enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE };
 
-  //
   // A frame is two 8-byte words, written whole and read back whole, because
   // it is usually popped within a few instructions of being pushed: a load
   // that the store buffer cannot answer from one earlier store (a 16-byte
   // Frame read back from its four 4-byte fields, say) waits for those stores
-  // to retire instead, and that stall was a fifth of the whole loop.
+  // to retire instead — a stall on nearly every step.
   struct Frame {
     uint64_t lo, hi;
     Frame() = default;
