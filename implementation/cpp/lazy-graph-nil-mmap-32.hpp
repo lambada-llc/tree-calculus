@@ -225,9 +225,11 @@ public:
   Tree stem(Tree u) { return alloc(u, 0); }
   Tree fork(Tree u, Tree v) { return alloc(u, v); }
 
-  /** fork(heads[0], fork(heads[1], … fork(heads[n-1], tail))). */
-  Tree list(const std::vector<Tree> &heads, Tree tail) {
-    for (size_t k = heads.size(); k > 0; --k) tail = fork(heads[k - 1], tail);
+  /** fork(head(0), fork(head(1), … fork(head(n-1), tail))). */
+  template <typename Head> Tree list(size_t n, Head head, Tree tail) {
+    std::vector<Tree> heads(n);
+    for (size_t i = 0; i < n; ++i) heads[i] = head(i);
+    for (size_t k = n; k > 0; --k) tail = fork(heads[k - 1], tail);
     return tail;
   }
 

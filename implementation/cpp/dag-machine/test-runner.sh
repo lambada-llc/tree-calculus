@@ -119,6 +119,31 @@ transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
 check "a binding does not outlive its request" \
   "err unbound variable: ~x" "${transcript##*hello}"
 
+# A string of 2^16 characters or more is marshalled as a run: cells kept out
+# of the hash-consing table, and found by where they lie. Hash-consing must stay
+# exact all the same, and the arena's size says whether it did: binding the
+# string again, or a suffix of it, makes no node, and neither does a reduction
+# that rebuilds one of its cells — `~f`, △(△△△)△, answers △ c t by building
+# △c and then the very cell it was given (the first request builds △c).
+long=$(printf 'ab%.0s' $(seq 40000))
+suffix=${long:1001}
+rebuild=$'~s △ △\n~w ~s △\n~t △ ~w\n~f ~t △\n~r ~f ~x\n~r\n'
+transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
+               printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
+               printf 'bind ~y %d\n' ${#long}; printf '%s' "$long"
+               printf 'bind ~z %d\n' ${#suffix}; printf '%s' "$suffix"
+               r=$'~r id ~z\n~r\n'; printf 'reduce string %d\n' "${#r}"; printf '%s' "$r"
+               printf 'bind ~x 2\nab'
+               printf 'reduce string %d\n' "${#rebuild}"; printf '%s' "$rebuild"
+               printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
+               printf 'reduce string %d\n' "${#rebuild}"; printf '%s' "$rebuild"
+             } | RUNNER_STATS=1 "$DIR/runner-eager.exe" -s 2>"$CACHE/long.stats")
+check "a long string round-trips" "$long" "${transcript##*$'\n'}"
+arena() { sed -n "$1p" "$CACHE/long.stats" | grep -o 'arena=[0-9]*'; }
+check "binding it again makes no node" "$(arena 2)" "$(arena 3)"
+check "nor does binding a suffix of it" "$(arena 2)" "$(arena 4)"
+check "nor rebuilding one of its cells" "$(arena 7)" "$(arena 9)"
+
 # The eager runner's jets, against Node, on arguments built to catch them out.
 node "$DIR/test-jets.mjs" "$DIR/runner-eager.exe" || ((fail++)) || true
 

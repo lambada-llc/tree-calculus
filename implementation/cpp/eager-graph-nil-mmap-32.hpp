@@ -222,7 +222,8 @@ private:
   // by comparing their indices — which is how apply() recognizes a jet — is
   // sound only because of it. So no node is ever made by alloc() alone: it is
   // made by a search that came up empty, or where no search could have found
-  // one (list(), and intern() over the node made last).
+  // one (list(), and intern() over the node made last). A search is this
+  // table's, and for the cells of a run (below), where the cell would be.
   //
   // Both tables are mapped once, at the most they can reach, and re-laid in
   // place: rebuild_interned() reads the arena rather than the old table, so
@@ -232,6 +233,22 @@ private:
   Tree *const _interned = static_cast<Tree *>(map_pages(MAX_INTERNED * sizeof(Tree)));
   size_t _interned_count = 0;
   size_t _interned_mask = 0;
+
+  // A run: the cells of the last long list() made, [_run, _run_end), which
+  // are left out of the table because where one is says what it is. list()
+  // lays them out from the list's end at consecutive indices, so a cell's tail
+  // is the cell right below it, or _run_tail for the first — and the one cell
+  // that can be (u, v) is the one at v + 1, or at _run if v is _run_tail
+  // (in_run). A source file bound as a string is millions of cells, and
+  // inserting each was two thirds of marshalling it; this is a comparison.
+  //
+  // A collection may free cells of a run, and the free list may hand their
+  // slots to other nodes; those go in the table like any other, and a cell
+  // that survives is still where its tail says. A run ends when the next one
+  // starts (end_run), or when its first cell is freed, which every other cell
+  // reaches.
+  static constexpr size_t RUN_MIN = size_t(1) << 16;
+  Tree _run = 0, _run_end = 0, _run_tail = 0;
 
   // Memoized reductions: direct-mapped, one slot per hash, a colliding write
   // replacing what was there. Bounded on purpose — this is the one table whose
@@ -305,19 +322,49 @@ private:
     ++_interned_count;
   }
 
-  /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes.
-   * Out of line, as is everything else apply() reaches only now and then —
-   * grow_memo, collect: inlined, they made apply() twice the size, and which of
-   * its helpers the compiler inlined then hung on any edit to it, for as much as
-   * 13% more instructions a step. */
+  /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes
+   * that are no cell of the run. Out of line, as is everything else apply()
+   * reaches only now and then — end_run, grow_memo, collect: inlined, they made
+   * apply() twice the size, and which of its helpers the compiler inlined then
+   * hung on any edit to it, for as much as 13% more instructions a step. */
   [[gnu::noinline]] void rebuild_interned(size_t capacity) {
     std::fill_n(_interned, capacity, 0);
     _interned_mask = capacity - 1;
     _interned_count = 0;
     // A swept node is {0, next-free}: the leaf is the only live node whose left
-    // field is 0, and it is at index 1, below where interning starts.
-    for (Tree at = 2; at < _head; ++at)
-      if (_arena[at].u) insert_interned(at);
+    // field is 0, and it is at index 1, below where interning starts. The run's
+    // cells are found where they lie, and only between its bounds need telling
+    // apart from what the free list put there.
+    const auto insert_live = [&](Tree from, Tree to, auto keep) {
+      for (Tree at = from; at < to; ++at)
+        if (_arena[at].u && keep(at)) insert_interned(at);
+    };
+    const Tree run = std::max(_run, Tree(2)), run_end = std::max(_run_end, Tree(2));
+    const auto all = [](Tree) { return true; };
+    insert_live(2, run, all);
+    insert_live(run, run_end, [&](Tree at) { return in_run(_arena[at].u, _arena[at].v) != at; });
+    insert_live(run_end, _head, all);
+  }
+
+  /** The cell of the run that is (u, v), or 0. */
+  Tree in_run(uint32_t u, uint32_t v) const {
+    if (!_run_end) return 0; // no run, the usual case: one well-predicted branch
+    const Tree at = v == _run_tail ? _run : v + 1;
+    return at >= _run && at < _run_end && _arena[at].u == u && _arena[at].v == v ? at : 0;
+  }
+
+  /** The node for this shape if there is one, else 0. */
+  Tree find(uint32_t u, uint32_t v) const {
+    const Tree at = _interned[slot(u, v)];
+    return at ? at : in_run(u, v);
+  }
+
+  /** Put the run's cells in the table, so that it no longer takes a run to find them. */
+  [[gnu::noinline]] void end_run() {
+    reserve_interned(_run_end - _run);
+    for (Tree at = _run; at < _run_end; ++at)
+      if (in_run(_arena[at].u, _arena[at].v) == at) insert_interned(at);
+    _run = _run_end = _run_tail = 0;
   }
 
   /** Grow the table, if need be, so that `more` further nodes fit under a 0.7
@@ -356,6 +403,7 @@ private:
     }
     const size_t i = slot(u, v);
     if (_interned[i]) return _interned[i];
+    if (const Tree cell = in_run(u, v)) return cell;
     const Tree fresh = alloc(u, v);
     _interned[i] = fresh;
     ++_interned_count;
@@ -480,6 +528,7 @@ private:
     _free = 0;
     _newest = ~0u;
     _live = 0;
+    _run = _run_end = _run_tail = 0;
   }
 
   /**
@@ -677,6 +726,7 @@ public:
     // Swept indices will be reused by other functions.
     std::fill(std::begin(_cold), std::end(_cold), 0);
     sweep();
+    if (!_arena[_run].u) _run = _run_end = _run_tail = 0; // its first cell was freed
     ++stats_counters.gcs;
     stats_counters.gc_marked += _live;
     // Re-laid at the size it already had rather than at the size of what
@@ -715,30 +765,50 @@ public:
   Tree fork(Tree u, Tree v) { return intern(u, v); }
 
   /**
-   * fork(heads[0], fork(heads[1], … fork(heads[n-1], tail))): what fork()
-   * would build a cell at a time, for the one shape a caller builds in bulk —
-   * a marshalled string is a cell per character.
+   * fork(head(0), fork(head(1), … fork(head(n-1), tail))): what fork() would
+   * build a cell at a time, for the one shape a caller builds in bulk — a
+   * marshalled string is a cell per character. head(i) is called once for each
+   * i, in order, and must not build a node: the cells are written as it goes,
+   * at the high-water mark, from the list's end — so a string can be decoded
+   * straight into them.
    *
-   * Built from the end, and hash-consed exactly like fork(), but a cell only
-   * has to be looked for until one comes out new: a node that already existed
-   * cannot have a child that did not, so every cell in front of a new one is
-   * new as well. (That holds for a slot the free list hands back too: a
-   * collection frees only what no live node reaches.) Those cells just take a
-   * slot in a table sized for all of them up front.
+   * Hash-consed exactly like fork() all the same. The cells written are looked
+   * for from the list's end until one comes out new: a node that already
+   * existed cannot have a child that did not, so every cell in front of a new
+   * one is new as well. (That holds for a slot the free list hands back too: a
+   * collection frees only what no live node reaches.) Those that existed are
+   * dropped, and the first new one takes the old suffix for its tail. A few new
+   * ones just take a slot in the table; RUN_MIN or more are a run, found where
+   * they lie.
    */
-  Tree list(const std::vector<Tree> &heads, Tree tail) {
-    size_t k = heads.size();
-    for (; k > 0; --k) { // cells that may exist already
-      const Tree at = _interned[slot(heads[k - 1], tail)];
+  template <typename Head> Tree list(size_t n, Head head, Tree tail) {
+    if (_head + n > ARENA_NODES) throw std::runtime_error("arena exhausted: a list of 2^31 nodes");
+    Node *const cell = _arena + _head; // head(i)'s at n - 1 - i, its tail below it
+    for (size_t i = 0; i < n; ++i) cell[n - 1 - i] = {head(i), Tree(_head + n - 2 - i)};
+    if (_arena + _head != cell) throw std::logic_error("list(): a head built a node");
+    size_t old = 0; // cells that existed already
+    for (; old < n; ++old) {
+      const Tree at = find(cell[old].u, tail);
       if (!at) break;
       tail = at;
+      cell[old] = {0, 0}; // no node: the next collection frees it
     }
-    reserve_interned(k);
-    for (; k > 0; --k) { // cells that cannot
-      tail = alloc(heads[k - 1], tail);
-      insert_interned(tail);
+    if (old == n) return tail;
+    cell[old].v = tail;
+    // Room first, while the cells are not yet allocated: a re-lay would take them in.
+    const Tree first = _head + old, end = _head + n;
+    if (n - old < RUN_MIN) {
+      reserve_interned(n - old);
+      _head = end;
+      for (Tree at = first; at < end; ++at) insert_interned(at);
+    } else {
+      end_run();
+      _head = end;
+      _run = first;
+      _run_end = end;
+      _run_tail = tail;
     }
-    return tail;
+    return _newest = end - 1;
   }
 
   // Callables are template parameters (not std::function) so the walks over a
