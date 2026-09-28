@@ -62,7 +62,9 @@
 //     redex that recurs can be recognized: `_memo` maps the operands of a step
 //     to the normal form it reached, so a repeated one is a lookup. Only the
 //     steps that recurse are memoized — the rules that answer outright are
-//     cheaper to redo than to remember.
+//     cheaper to redo than to remember — and of those, not the ones that took
+//     fewer than MEMO_MIN_STEPS rules, nor those of a function whose lookups
+//     keep missing (recall).
 //
 // Neither alone does anything: hash-consing without the memo still re-derives
 // every occurrence (it just writes the answers on top of each other), and the
@@ -245,6 +247,16 @@ private:
    * before it can load anything, so the mixing is on the critical path. One
    * multiply (Fibonacci hashing), with the high half, where a product mixes
    * best, folded onto the low bits the tables index by.
+   *
+   * Which leaves the bits of `u` at and above a table's index width out of the
+   * index: bit 32 + j of the product depends on bits 0..j of u only, so in a
+   * table of 2^k slots (u, v) and (u + 2^k, v) always share a slot. The
+   * hash-consing table is sized to the live nodes, and indices outrun it only
+   * by what collections have freed (probes measure 2.3-2.8 slots a search);
+   * the memo is smaller than the arena by design, and there such pairs evict
+   * each other. Folding a 128-bit product instead keeps every bit, and took
+   * 0.15% fewer steps on the build's three heaviest tests — in 35.9 s against
+   * this hash's 35.4 s.
    */
   static uint64_t hash(uint32_t u, uint32_t v) {
     const uint64_t x = ((uint64_t(u) << 32) | v) * 0x9e3779b97f4a7c15ULL;
