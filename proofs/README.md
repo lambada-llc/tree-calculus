@@ -255,13 +255,14 @@ What it does not:
   not the machine.
 
 Measured with an arboretum `src/.dag-bundle-canonical` (sha256 `5298c444ef373884…`), `--cases
-2000 --fuel 10000000`, and two runners at both budgets: the one built here (whose `runner.cpp` and evaluator
-are 4c4eed7's), and the eager evaluator's optimizations (ea28edc). Seed 1 compared 13,548
-programs, whose answers took the machine 991,687,013 steps, and skipped 452 over fuel (23
-expressions, 169 symbols, 260 calls); seed 2 compared 13,516 and skipped 484. No answer differed
-in any of the 8 runs, and at 1 MiB each runner collected 91 and 99 times. A seed takes about 5
-minutes, most of it the machine spending its fuel on what it then skips; the defaults (1,000
-programs a kind, fuel 10^6, no bundle) take about 11 s.
+2000 --fuel 10000000`, and two runners at both budgets: 4c4eed7's, and the optimized eager
+evaluator this builds on. Seed 1 compared 13,548 programs, whose answers took the machine
+991,687,013 steps, and skipped 452 over fuel (23 expressions, 169 symbols, 260 calls); seed 2
+compared 13,516 and skipped 484. No answer differed in any of the 8 runs, and at 1 MiB each
+runner collected 91 and 99 times. A seed takes about 5 minutes, most of it the machine spending
+its fuel on what it then skips; the defaults (1,000 programs a kind, fuel 10^6, no bundle) take
+about 11 s. The mutants were a one-off run against patched copies of the base runner, not
+something this directory ships.
 
 ## How a checker works
 
