@@ -287,6 +287,27 @@ static Tree of_nat(uint64_t n) {
   return f;
 }
 
+// The code point of the UTF-8 sequence at s[i], and i moved past it. Inlined:
+// it runs twice per character of a string, and called, took 40% more instructions.
+[[gnu::always_inline]] inline uint32_t utf8_decode(std::string_view s, size_t& i) {
+  uint8_t b = static_cast<uint8_t>(s[i]);
+  uint32_t cp;
+  int len;
+  if (b < 0x80)            { cp = b;          len = 1; }
+  else if ((b & 0xE0) == 0xC0) { cp = b & 0x1F; len = 2; }
+  else if ((b & 0xF0) == 0xE0) { cp = b & 0x0F; len = 3; }
+  else if ((b & 0xF8) == 0xF0) { cp = b & 0x07; len = 4; }
+  else die("invalid utf-8 in input");
+  if (i + len > s.size()) die("truncated utf-8 in input");
+  for (int k = 1; k < len; ++k) {
+    uint8_t cb = static_cast<uint8_t>(s[i + k]);
+    if ((cb & 0xC0) != 0x80) die("invalid utf-8 continuation");
+    cp = (cp << 6) | (cb & 0x3F);
+  }
+  i += len;
+  return cp;
+}
+
 // Decode UTF-8 input bytes into a list of Unicode code points, mirroring how
 // the JS CLI effectively maps a JS string into a list of code-unit-valued nats.
 // Inputs stay within the BMP, so a code point per nat round-trips byte-for-byte
@@ -294,33 +315,26 @@ static Tree of_nat(uint64_t n) {
 //
 // A source file is millions of characters but only a few dozen distinct ones,
 // so each code point's nat is built once and every occurrence shares it: what
-// is left per character is the one list cell that holds it.
+// is left per character is the one list cell that holds it. Twice over the
+// text, then: once forwards, to check it, count the characters and build their
+// nats — what list() is handed must build no node — and once backwards, as
+// list() takes them from the list's end, straight from the text rather than
+// from a copy of it.
 static Tree of_string(std::string_view s) {
-  std::vector<Tree> nat;   // by code point; 0, which no tree is, until built
-  std::vector<Tree> chars; // in order, so the list can be built from its end
-  chars.reserve(s.size());
-  size_t i = 0;
-  while (i < s.size()) {
-    uint8_t b = static_cast<uint8_t>(s[i]);
-    uint32_t cp;
-    int len;
-    if (b < 0x80)            { cp = b;          len = 1; }
-    else if ((b & 0xE0) == 0xC0) { cp = b & 0x1F; len = 2; }
-    else if ((b & 0xF0) == 0xE0) { cp = b & 0x0F; len = 3; }
-    else if ((b & 0xF8) == 0xF0) { cp = b & 0x07; len = 4; }
-    else die("invalid utf-8 in input");
-    if (i + len > s.size()) die("truncated utf-8 in input");
-    for (int k = 1; k < len; ++k) {
-      uint8_t cb = static_cast<uint8_t>(s[i + k]);
-      if ((cb & 0xC0) != 0x80) die("invalid utf-8 continuation");
-      cp = (cp << 6) | (cb & 0x3F);
-    }
+  std::vector<Tree> nat; // by code point; 0, which no tree is, until built
+  size_t n = 0;
+  for (size_t i = 0; i < s.size(); ++n) {
+    const uint32_t cp = utf8_decode(s, i);
     if (cp >= nat.size()) nat.resize(cp + 1);
     if (!nat[cp]) nat[cp] = of_nat(cp);
-    chars.push_back(nat[cp]);
-    i += len;
   }
-  return g_e.list(chars, g_e.leaf());
+  size_t end = s.size(); // where the character list() takes next ends
+  return g_e.list(n, [&] {
+    size_t i = end;
+    while ((static_cast<uint8_t>(s[--i]) & 0xC0) == 0x80) {} // back to where it starts
+    end = i;
+    return nat[utf8_decode(s, i)];
+  }, g_e.leaf());
 }
 
 // ─── DAG parser ───────────────────────────────────────────────────────────
