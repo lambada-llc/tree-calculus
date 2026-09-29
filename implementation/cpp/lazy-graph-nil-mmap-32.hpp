@@ -225,9 +225,9 @@ public:
   Tree stem(Tree u) { return alloc(u, 0); }
   Tree fork(Tree u, Tree v) { return alloc(u, v); }
 
-  /** fork(heads[0], fork(heads[1], … fork(heads[n-1], tail))). */
-  Tree list(const std::vector<Tree> &heads, Tree tail) {
-    for (size_t k = heads.size(); k > 0; --k) tail = fork(heads[k - 1], tail);
+  /** fork(x1, fork(x2, … fork(xn, tail))), with last() giving xn first. */
+  template <typename Last> Tree list(size_t n, Last last, Tree tail) {
+    for (; n > 0; --n) tail = fork(last(), tail);
     return tail;
   }
 
