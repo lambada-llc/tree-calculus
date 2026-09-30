@@ -140,6 +140,27 @@ function test_canonicalize() {
     'leaf △\n1 △ △\nr 1\n:r r\n',
     DagModule.parse('leaf △\nx △ leaf\ny △ △\nr x\n:r r\n').canonicalize().toString(),
     'a name bound to the leaf shares with △ itself');
+
+  // As written, the node built through a name stays apart from the equal node
+  // built through another, and each keeps the name it was built through.
+  const through_names = '1 △ △\nk 1\nK 1\nx △ k\ny △ K\nr x y\n:r r\n';
+  assert_equal(
+    '1 △ △\nk 1\nK 1\n2 △ k\n3 2 2\n:r 3\n',
+    DagModule.parse(through_names).canonicalize().toString(),
+    'by default, nodes built through different names for one value are shared');
+  const as_written = DagModule.parse(through_names).canonicalize({ as_written: true }).toString();
+  assert_equal(
+    '1 △ △\nk 1\nK 1\n2 △ k\n3 △ K\n4 2 3\n:r 4\n',
+    as_written,
+    'as written, nodes built through different names stay apart');
+  assert_same_value(through_names, as_written, ':r', 'as written preserves the value');
+
+  // `_` is a name like any other: a program may bind it (to the leaf, say),
+  // and a reference through it is written through it.
+  assert_equal(
+    '_ △\n1 △ _\n:r 1\n',
+    DagModule.parse('_ △\nx △ _\n:r x\n').canonicalize({ as_written: true }).toString(),
+    'a name starting with an underscore is referred to by name');
 }
 
 // --- Linking ---
