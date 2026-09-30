@@ -41,6 +41,15 @@ def M : Term := △ ⬝ (△ ⬝ I) ⬝ I
 -- `M ⬝ M ⟶ I M (I M) ⟶ ⋯ ⟶ M M ⟶ ⋯` diverges; no fuel is ever enough.
 #guard evalF 100 (M ⬝ M) = none
 
+-- `applyS` agrees, reporting divergence as `stuck` rather than `none`.
+#guard applyS 20 I K = K
+#guard applyS 100 M M = stuck
+
+-- `△ (△ K) M M ⟶ K M (M M)`: rule (1) would discard the diverging `M M`, but
+-- eager evaluation reduces it first. `stuck` survives the discard.
+#guard evalF 100 (△ ⬝ (△ ⬝ K) ⬝ M ⬝ M) = none
+#guard applyS 100 (△ ⬝ (△ ⬝ K) ⬝ M) M = stuck
+
 /-- A strong normalization certificate straight from an evaluator run:
 `evalF` terminates on `I ⬝ I`, therefore *no* reduction strategy can diverge
 on it. -/
