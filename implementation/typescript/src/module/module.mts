@@ -42,7 +42,7 @@ export function box(symbol: string): Box {
 
 /** Names that can be referred to symbolically, as opposed to `△` and numeric ids. */
 export function is_symbol_name(s: string): boolean {
-  return /^[:a-zA-Z]/.test(s);
+  return /^[:_a-zA-Z]/.test(s);
 }
 
 /** A label is a marker rather than part of a module's interface. */
@@ -305,8 +305,14 @@ export class DagModule {
    *
    * Sharing is keyed on resolved ids rather than on how a reference happens to
    * be spelled, so two names for one value collapse to one node.
+   *
+   * `as_written` keys it on the spelling instead: a node is shared only with
+   * one written the same way, so a node built through one name stays apart
+   * from an equal node built through another. The value is the same either
+   * way; what differs is which name each node is attributed to, for a reader
+   * that treats a reference by name as meaning something the id does not.
    */
-  canonicalize(): DagModule {
+  canonicalize({ as_written = false }: { as_written?: boolean } = {}): DagModule {
     const LEAF_ID = 0;
     const ids = new Map<Box, number>();
     for (const line of this.lines)
@@ -320,11 +326,13 @@ export class DagModule {
     const out = new DagModule();
 
     // How a reference is written: the leaf always as △, then any name already
-    // defined above, then the node's id.
+    // defined above, then the node's id. As written, a name comes first even
+    // for the leaf: `:t` bound to △ is still written `:t`.
     const ref = (b: Box): string => {
       const id = ids.get(b);
-      if (id === LEAF_ID) return LEAF;
-      if (is_symbol_name(b.symbol) && named.has(b.symbol)) return b.symbol;
+      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol);
+      if (id === LEAF_ID && !(as_written && by_name)) return LEAF;
+      if (by_name) return b.symbol;
       return id === undefined ? b.symbol : String(id);
     };
     // What sharing is decided on. Unresolved references — symbols this module
@@ -337,7 +345,7 @@ export class DagModule {
     for (const line of this.lines) {
       if (line.length === 3) {
         const [head, left, right] = line;
-        const fork_key = `${key(left)} ${key(right)}`;
+        const fork_key = as_written ? `${ref(left)} ${ref(right)}` : `${key(left)} ${key(right)}`;
         const shared = forks.get(fork_key);
         if (shared !== undefined) {
           ids.set(head, shared);

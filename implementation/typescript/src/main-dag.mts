@@ -56,6 +56,10 @@ Options:
   --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(', ')}.
                           Defaults to term.
+  --as-written            'canonicalize' shares a node only with one written
+                          the same way, so nodes built through different names
+                          stay apart, each attributed to the name it was built
+                          through.
 
 A file argument of '-', or no file at all, reads stdin.`;
 
@@ -65,6 +69,7 @@ interface Options {
   matching?: string;
   except?: string;
   format: string;
+  as_written: boolean;
 }
 
 const COMMANDS = ['link', 'canonicalize', 'qualify', 'extract', 'eval', 'interface'];
@@ -74,7 +79,7 @@ function parse_args(argv: string[]): { command: string, files: string[], options
   if (!COMMANDS.includes(command)) raise(`expected one of ${COMMANDS.join(', ')}, got ${command}`);
 
   const files: string[] = [];
-  const options: Options = { symbols: [], format: 'term' };
+  const options: Options = { symbols: [], format: 'term', as_written: false };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
@@ -83,6 +88,7 @@ function parse_args(argv: string[]): { command: string, files: string[], options
     else if (arg === '--matching') options.matching = value();
     else if (arg === '--except') options.except = value();
     else if (arg === '--format') options.format = value();
+    else if (arg === '--as-written') options.as_written = true;
     else if (arg.startsWith('--')) raise(`unrecognized option ${arg}`);
     else files.push(arg);
   }
@@ -111,7 +117,7 @@ function run(command: string, files: string[], options: Options): Uint8Array {
       return utf8(link(files.map(name => ({ name, text: read(name) }))));
 
     case 'canonicalize':
-      return utf8(DagModule.parse(read_input(files)).canonicalize().toString());
+      return utf8(DagModule.parse(read_input(files)).canonicalize({ as_written: options.as_written }).toString());
 
     case 'qualify': {
       const prefix = options.prefix ?? raise('qualify needs --prefix');

@@ -365,7 +365,7 @@ function box(symbol) {
   return { symbol };
 }
 function is_symbol_name(s) {
-  return /^[:a-zA-Z]/.test(s);
+  return /^[:_a-zA-Z]/.test(s);
 }
 function is_label(name) {
   return name.startsWith(":");
@@ -595,8 +595,14 @@ var DagModule = class _DagModule {
    *
    * Sharing is keyed on resolved ids rather than on how a reference happens to
    * be spelled, so two names for one value collapse to one node.
+   *
+   * `as_written` keys it on the spelling instead: a node is shared only with
+   * one written the same way, so a node built through one name stays apart
+   * from an equal node built through another. The value is the same either
+   * way; what differs is which name each node is attributed to, for a reader
+   * that treats a reference by name as meaning something the id does not.
    */
-  canonicalize() {
+  canonicalize({ as_written = false } = {}) {
     const LEAF_ID = 0;
     const ids = /* @__PURE__ */ new Map();
     for (const line of this.lines)
@@ -610,9 +616,10 @@ var DagModule = class _DagModule {
     const out = new _DagModule();
     const ref = (b) => {
       const id = ids.get(b);
-      if (id === LEAF_ID)
+      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol);
+      if (id === LEAF_ID && !(as_written && by_name))
         return LEAF;
-      if (is_symbol_name(b.symbol) && named.has(b.symbol))
+      if (by_name)
         return b.symbol;
       return id === void 0 ? b.symbol : String(id);
     };
@@ -623,7 +630,7 @@ var DagModule = class _DagModule {
     for (const line of this.lines) {
       if (line.length === 3) {
         const [head, left, right] = line;
-        const fork_key = `${key(left)} ${key(right)}`;
+        const fork_key = as_written ? `${ref(left)} ${ref(right)}` : `${key(left)} ${key(right)}`;
         const shared = forks.get(fork_key);
         if (shared !== void 0) {
           ids.set(head, shared);
@@ -1265,6 +1272,10 @@ Options:
   --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(", ")}.
                           Defaults to term.
+  --as-written            'canonicalize' shares a node only with one written
+                          the same way, so nodes built through different names
+                          stay apart, each attributed to the name it was built
+                          through.
 
 A file argument of '-', or no file at all, reads stdin.`;
 var COMMANDS = ["link", "canonicalize", "qualify", "extract", "eval", "interface"];
@@ -1273,7 +1284,7 @@ function parse_args(argv) {
   if (!COMMANDS.includes(command))
     raise(`expected one of ${COMMANDS.join(", ")}, got ${command}`);
   const files = [];
-  const options = { symbols: [], format: "term" };
+  const options = { symbols: [], format: "term", as_written: false };
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
     const value = () => i + 1 < argv.length ? argv[++i] : raise(`${arg} needs a value`);
@@ -1287,6 +1298,8 @@ function parse_args(argv) {
       options.except = value();
     else if (arg === "--format")
       options.format = value();
+    else if (arg === "--as-written")
+      options.as_written = true;
     else if (arg.startsWith("--"))
       raise(`unrecognized option ${arg}`);
     else
@@ -1313,7 +1326,7 @@ function run(command, files, options) {
         raise("link needs at least one file");
       return utf8(link(files.map((name) => ({ name, text: read(name) }))));
     case "canonicalize":
-      return utf8(DagModule.parse(read_input(files)).canonicalize().toString());
+      return utf8(DagModule.parse(read_input(files)).canonicalize({ as_written: options.as_written }).toString());
     case "qualify": {
       const prefix = options.prefix ?? raise("qualify needs --prefix");
       return utf8(DagModule.parse(read_input(files), { absorb_internal_aliases: false }).qualify(prefix).toString());
