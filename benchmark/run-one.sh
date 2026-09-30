@@ -189,7 +189,7 @@ else
 fi
 
 # --- Lean ---
-# The formalization's own verified evaluator (applyF), compiled to native code.
+# The formalization's own verified evaluator (applyS), compiled to native code.
 LEAN_BIN="$REPO_ROOT/implementation/lean/.lake/build/bin/tree-calculus"
 if [[ -x "$LEAN_BIN" ]]; then
   bench "Lean" --stdin "$LEAN_BIN"

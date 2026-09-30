@@ -315,6 +315,86 @@ theorem Eval.evalF_complete {t v : Term} (h : Eval t v) :
       _, evalF_le (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)) h₂,
       applyF_le (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)) h₃⟩
 
+/-! ## A faster executable evaluator
+
+`applyF` pays for `Option` on every step: each result is boxed in `some` and
+unboxed again by the caller.  `applyS` reports running out of fuel in-band
+instead, as `stuck`, a term that is never a value, so a result needs no box.
+It is what the benchmark executable runs.
+
+`stuck` must be absorbing: rule (1) discards its argument, so a `stuck` that
+reached it would vanish and leave a value with no `Apply` derivation behind
+it.  Hence the checks after each recursive call whose result is used again.
+Fuel is checked once, up front, rather than in every pattern. -/
+
+/-- The out-of-fuel result: `△ △ △ △`, a rule (1) redex, hence not a value. -/
+def stuck : Term := △ ⬝ △ ⬝ △ ⬝ △
+
+/-- Recognizes `stuck` by the shape no value has: an application nested three
+deep on the left (a fork is only two deep). -/
+def isStuck : Term → Bool
+  | .app (.app (.app _ _) _) _ => true
+  | _ => false
+
+/-- Fuel-based eager application of two values, returning `stuck` when out
+of fuel. -/
+def applyS : Nat → Term → Term → Term
+  | 0, _, _ => stuck
+  | _ + 1, .leaf, b => △ ⬝ b
+  | _ + 1, .app .leaf x, b => △ ⬝ x ⬝ b
+  | _ + 1, .app (.app .leaf .leaf) y, _ => y
+  | n + 1, .app (.app .leaf (.app .leaf x)) y, z =>
+      let xz := applyS n x z
+      if isStuck xz then stuck else
+      let yz := applyS n y z
+      if isStuck yz then stuck else applyS n xz yz
+  | _ + 1, .app (.app .leaf (.app (.app .leaf w) _)) _, .leaf => w
+  | n + 1, .app (.app .leaf (.app (.app .leaf _) x)) _, .app .leaf u => applyS n x u
+  | n + 1, .app (.app .leaf (.app (.app .leaf _) _)) y, .app (.app .leaf u) v =>
+      let yu := applyS n y u
+      if isStuck yu then stuck else applyS n yu v
+  | _ + 1, _, _ => stuck
+
+/-- On values, `applyS` either runs out of fuel or computes the big-step
+result. -/
+theorem applyS_stuck_or_apply {fuel : Nat} {a b : Term}
+    (ha : IsValue a) (hb : IsValue b) :
+    applyS fuel a b = stuck ∨ Apply a b (applyS fuel a b) := by
+  fun_induction applyS fuel a b with
+  | case1 | case5 | case6 | case10 | case12 => exact .inl rfl
+  | case2 => exact .inr .underLeaf
+  | case3 => exact .inr .underStem
+  | case4 => exact .inr .k
+  | case7 =>
+    rename_i n x y z xz hxz yz hyz ihx ihy ihr
+    cases ha with | fork hx hy =>
+    cases hx with | stem hx =>
+    have ax : Apply x z xz := (ihx hx hb).resolve_left fun e => hxz (by
+      show isStuck (applyS n x z) = true; rw [e]; rfl)
+    have ay : Apply y z yz := (ihy hy hb).resolve_left fun e => hyz (by
+      show isStuck (applyS n y z) = true; rw [e]; rfl)
+    exact (ihr (ax.isValue hx hb) (ay.isValue hy hb)).imp id (.s ax ay)
+  | case8 => exact .inr .fLeaf
+  | case9 =>
+    rename_i ih
+    cases ha with | fork hwx _ =>
+    cases hwx with | fork _ hx =>
+    cases hb with | stem hu =>
+    exact (ih hx hu).imp id .fStem
+  | case11 =>
+    rename_i n _ _ y u v yu hyu ihy ihr
+    cases ha with | fork _ hy =>
+    cases hb with | fork hu hv =>
+    have ay : Apply y u yu := (ihy hy hu).resolve_left fun e => hyu (by
+      show isStuck (applyS n y u) = true; rw [e]; rfl)
+    exact (ihr (ay.isValue hy hu) hv).imp id (.fFork ay)
+
+/-- Soundness: whenever `applyS` does not run out of fuel on values, the
+big-step relation holds. -/
+theorem applyS_sound {fuel : Nat} {a b : Term} (ha : IsValue a) (hb : IsValue b)
+    (h : isStuck (applyS fuel a b) = false) : Apply a b (applyS fuel a b) :=
+  (applyS_stuck_or_apply ha hb).resolve_left fun e => by rw [e] at h; cases h
+
 end Term
 
 end TreeCalculus
