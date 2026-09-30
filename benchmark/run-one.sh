@@ -188,6 +188,15 @@ else
   printf "  %-35s SKIP  not found\n" "Python"
 fi
 
+# --- Lean ---
+# The formalization's own verified evaluator (applyF), compiled to native code.
+LEAN_BIN="$REPO_ROOT/implementation/lean/.lake/build/bin/tree-calculus"
+if [[ -x "$LEAN_BIN" ]]; then
+  bench "Lean" --stdin "$LEAN_BIN"
+else
+  printf "  %-35s SKIP  not built\n" "Lean"
+fi
+
 # --- WASM ---
 # The runner supplies fd_read/fd_write as plain JS (see implementation/wasm/run.mjs),
 # so any Node with WASM support works — node:wasi is not involved.

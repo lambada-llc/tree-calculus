@@ -3,3 +3,9 @@ defaultTargets = ["TreeCalculus"]
 
 [[lean_lib]]
 name = "TreeCalculus"
+
+# The benchmark's executable (benchmark/run-one.sh); not a default target, so
+# `lake build` still means the formalization.
+[[lean_exe]]
+name = "tree-calculus"
+root = "Main"

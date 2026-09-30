@@ -71,3 +71,15 @@ lake build
 The pinned toolchain (`lean-toolchain`) is downloaded automatically on first
 use. There are no external dependencies (no mathlib); the `#guard` tests in
 `Examples.lean` run as part of the build.
+
+## Benchmark executable
+
+`Main.lean` wraps the verified evaluator `applyF` in a command-line program
+that [`benchmark/`](../../benchmark) times alongside the other
+implementations: ternary-encoded trees on stdin, one per line, applied as a
+left fold, result printed in ternary. It is not a default target:
+
+```sh
+lake build tree-calculus
+.lake/build/bin/tree-calculus
+```

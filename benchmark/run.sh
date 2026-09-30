@@ -87,6 +87,19 @@ if [[ ! -f "$TS_DIR/src/evaluator/lazy-stacks.mjs" ]]; then
   fi
 fi
 
+# Lean compiles through C to a native executable; lake builds it, and with no
+# elan on PATH it is skipped like any other missing toolchain.
+[ -d "$HOME/.elan/bin" ] && export PATH="$HOME/.elan/bin:$PATH"
+LEAN_DIR="$REPO_ROOT/implementation/lean"
+if [[ ! -x "$LEAN_DIR/.lake/build/bin/tree-calculus" ]] && command -v lake &>/dev/null; then
+  printf "building Lean... "
+  if (cd "$LEAN_DIR" && lake build tree-calculus) >/dev/null 2>&1; then
+    printf "ok\n"
+  else
+    printf "failed (skipping)\n"
+  fi
+fi
+
 if [[ "$(uname -m)" == "x86_64" ]]; then
   ASM_DIR="$REPO_ROOT/implementation/asm"
   needs_asm_build=false
