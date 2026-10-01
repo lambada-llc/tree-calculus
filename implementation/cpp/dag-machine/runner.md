@@ -1,22 +1,13 @@
 # runner — fast tree-calculus program runner
 
-`runner.cpp` single-file C++ port of some subset of the `bin/main.js` CLI functionality. Where `reduce`/`canonicalize` transform a DAG in place, `runner` runs a program against data: it marshals host strings/bytes into tree-calculus values, applies the program, and decodes the result back.
+`runner.cpp` is a single-file server that runs tree-calculus programs against data. Where `reduce_canonicalize` transforms a DAG, `runner` holds one module and answers questions about it: it marshals host strings into tree-calculus values, applies the module's programs to them, and decodes the result back.
 
-## Modes
+## Protocol
 
-### One-shot
+    runner
 
-    runner <dag-file> <string>
-
-reads the DAG from `<dag-file>`, applies it to `<string>` (marshalled as a list-of-bytes), reduces, and prints the result as a string with a
-trailing newline (matching `console.log`).
-
-### Server
-
-    runner -s
-
-reads commands from stdin, writes responses to stdout. Commands are
-newline-terminated; some carry a length-prefixed payload.
+reads commands from stdin, writes responses to stdout, and exits on EOF.
+Commands are newline-terminated; some carry a length-prefixed payload.
 
 | request                                      | response                              |
 | -------------------------------------------- | ------------------------------------- |
@@ -24,7 +15,6 @@ newline-terminated; some carry a length-prefixed payload.
 | `bind <name> <byte-len>\n<bytes>`            | `ok\n` (until the next `reduce`)      |
 | `reduce <dag\|string> <byte-len>\n<bytes>`   | `data <len>\n<bytes>`                 |
 | `dump\n`                                     | `data <len>\n<bytes>` (evaluated env) |
-| `quit\n`                                     | `ok\n` (and exits)                    |
 
 On any failure: `err <message>\n`. `<bytes>` in responses is exactly
 `<len>` raw bytes, no trailing newline (length is exact).
@@ -147,7 +137,7 @@ a little more re-reduction as well as more sweeps.
 
 #### `RUNNER_STATS` *(default: off)*
 
-Any non-`0` value makes server mode print one line per command to
+Any non-`0` value makes the runner print one line per command to
 stderr: wall time, and under `-DRUNNER_EAGER` the evaluator's counters
 for that command (reduction steps, memo hits and writes, collections and
 what they marked, arena high water). This is how one finds out where a

@@ -101,12 +101,12 @@ su △ u
 id su △
 EOF
 request=$'~r id ~x\n~r\n'
-# No `quit`: end on EOF and the answer, which carries no trailing newline of
+# End on EOF, and the answer, which carries no trailing newline of
 # its own, is the last line of the transcript.
 transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
                printf 'bind ~x 5\n'; printf 'hello'
                printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
-             } | "$DIR/runner-eager.exe" -s)
+             } | "$DIR/runner-eager.exe")
 check "bind and reduce string round-trip" "hello" "${transcript##*$'\n'}"
 
 # A request scope ends with its request, successful or not, so nothing it bound
@@ -116,7 +116,7 @@ transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
                printf 'bind ~x 5\n'; printf 'hello'
                printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
                printf 'reduce dag %d\n' "${#again}"; printf '%s' "$again"
-             } | "$DIR/runner-eager.exe" -s)
+             } | "$DIR/runner-eager.exe")
 # Split on the answer rather than on a newline: `data` is exactly its length,
 # so what follows an answer shares a line with it.
 check "a binding does not outlive its request" \
@@ -140,7 +140,7 @@ transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
                printf 'reduce string %d\n' "${#rebuild}"; printf '%s' "$rebuild"
                printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
                printf 'reduce string %d\n' "${#rebuild}"; printf '%s' "$rebuild"
-             } | RUNNER_STATS=1 "$DIR/runner-eager.exe" -s 2>"$CACHE/long.stats")
+             } | RUNNER_STATS=1 "$DIR/runner-eager.exe" 2>"$CACHE/long.stats")
 check "a long string round-trips" "$long" "${transcript##*$'\n'}"
 arena() { sed -n "$1p" "$CACHE/long.stats" | grep -o 'arena=[0-9]*'; }
 check "binding it again makes no node" "$(arena 2)" "$(arena 3)"
@@ -155,7 +155,7 @@ transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
                printf 'bind ~w 2\nZy'; printf 'bind ~a %d\n' ${#long}; printf '%s' "$long"
                printf 'bind ~z 1\nZ'; printf 'bind ~b %d\n' $((${#long} + 1)); printf 'Z%s' "$long"
                printf 'reduce string %d\n' "${#r}"; printf '%s' "$r"
-             } | "$DIR/runner-eager.exe" -s)
+             } | "$DIR/runner-eager.exe")
 check "the node above a run is not the run's" "Z$long" "${transcript##*$'\n'}"
 
 # A run is laid at the high-water mark only while nothing freed waits there to
@@ -165,7 +165,7 @@ check "the node above a run is not the run's" "Z$long" "${transcript##*$'\n'}"
 last=$({ printf 'load %s\n' "$CACHE/id.dag"
          for c in a b c d e f g h; do s=$(printf "$c%.0s" $(seq 80000))
            printf 'bind ~x %d\n' ${#s}; printf '%s' "$s"; printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"; done
-       } | RUNNER_STATS=1 RUNNER_RSS_THRESHOLD_MB=1 "$DIR/runner-eager.exe" -s 2>&1 >/dev/null | grep -o 'arena=[0-9]*' | tail -1)
+       } | RUNNER_STATS=1 RUNNER_RSS_THRESHOLD_MB=1 "$DIR/runner-eager.exe" 2>&1 >/dev/null | grep -o 'arena=[0-9]*' | tail -1)
 check "the budget bounds the arena across long binds" 1 "$(( ${last#arena=} < 400000 ))"
 
 echo ""
