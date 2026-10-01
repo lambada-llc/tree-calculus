@@ -1,10 +1,13 @@
 name = "tree-calculus"
-defaultTargets = ["TreeCalculus"]
+defaultTargets = ["TreeCalculus", "Cpp"]
 
 [[lean_lib]]
 name = "TreeCalculus"
 # TreeCalculus.lean and every module under TreeCalculus/, imported or not.
 globs = ["TreeCalculus.*"]
+
+[[lean_lib]]
+name = "Cpp"
 
 # The benchmark's executable (benchmark/run-one.sh); not a default target, so
 # `lake build` still means the formalization.
