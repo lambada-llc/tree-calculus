@@ -91,7 +91,7 @@ fi
 # elan on PATH it is skipped like any other missing toolchain.
 [ -d "$HOME/.elan/bin" ] && export PATH="$HOME/.elan/bin:$PATH"
 LEAN_DIR="$REPO_ROOT/implementation/lean"
-if [[ ! -x "$LEAN_DIR/.lake/build/bin/tree-calculus" ]] && command -v lake &>/dev/null; then
+if ! "$LEAN_DIR/.lake/build/bin/tree-calculus" --list >/dev/null 2>&1 && command -v lake &>/dev/null; then
   printf "building Lean... "
   if (cd "$LEAN_DIR" && lake build tree-calculus) >/dev/null 2>&1; then
     printf "ok\n"
