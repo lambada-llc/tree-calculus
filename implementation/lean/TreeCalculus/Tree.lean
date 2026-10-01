@@ -7,10 +7,10 @@ import TreeCalculus.Eval
 is two `app` cells and every rule matches through nested applications. Eager
 evaluation never builds a redex, though: its inputs and outputs are values.
 `Tree` holds only those (plus `stuck`, for running out of fuel), one cell per
-node, and `applyT` is `applyS` over it.
+node, and `applyOrStuck` is `Term.applyOrStuck` over it.
 
-`applyT_toTerm` says the two agree exactly, through the embedding `toTerm`,
-so `applyT` inherits `applyS`'s soundness.
+`applyOrStuck_toTerm` says the two agree exactly, through the embedding `toTerm`,
+so `applyOrStuck` inherits `Term.applyOrStuck`'s soundness.
 -/
 
 namespace TreeCalculus
@@ -34,52 +34,52 @@ def toTerm : Tree → Term
   | fork x y => △ ⬝ x.toTerm ⬝ y.toTerm
   | stuck => Term.stuck
 
-/-- `applyS` over `Tree`: rule (1) through (3c) by constructor, `stuck`
+/-- `Term.applyOrStuck` over `Tree`: rule (1) through (3c) by constructor, `stuck`
 absorbing exactly as there. -/
-def applyT : Nat → Tree → Tree → Tree
+def applyOrStuck : Nat → Tree → Tree → Tree
   | 0, _, _ => stuck
   | _ + 1, leaf, b => stem b
   | _ + 1, stem x, b => fork x b
   | _ + 1, fork leaf y, _ => y
   | n + 1, fork (stem x) y, z =>
-      match applyT n x z with
+      match applyOrStuck n x z with
       | stuck => stuck
-      | xz => match applyT n y z with
+      | xz => match applyOrStuck n y z with
         | stuck => stuck
-        | yz => applyT n xz yz
+        | yz => applyOrStuck n xz yz
   | _ + 1, fork (fork w _) _, leaf => w
-  | n + 1, fork (fork _ x) _, stem u => applyT n x u
+  | n + 1, fork (fork _ x) _, stem u => applyOrStuck n x u
   | n + 1, fork (fork _ _) y, fork u v =>
-      match applyT n y u with
+      match applyOrStuck n y u with
       | stuck => stuck
-      | yu => applyT n yu v
+      | yu => applyOrStuck n yu v
   | _ + 1, _, _ => stuck
 
 theorem isStuck_toTerm {t : Tree} (h : t ≠ stuck) : isStuck t.toTerm = false := by
   cases t <;> first | rfl | exact absurd rfl h
 
-/-- `applyT` computes `applyS`, on any inputs. -/
-theorem applyT_toTerm (n : Nat) (a b : Tree) :
-    (applyT n a b).toTerm = applyS n a.toTerm b.toTerm := by
-  fun_induction applyT n a b with
+/-- `applyOrStuck` computes `Term.applyOrStuck`, on any inputs. -/
+theorem applyOrStuck_toTerm (n : Nat) (a b : Tree) :
+    (applyOrStuck n a b).toTerm = Term.applyOrStuck n a.toTerm b.toTerm := by
+  fun_induction applyOrStuck n a b with
   | case1 | case2 | case3 | case4 | case8 => rfl
   | case9 => rename_i ih; exact ih
   | case5 =>
     rename_i hx ihx
-    simp only [toTerm, applyS]; rw [← ihx, hx]; rfl
+    simp only [toTerm, Term.applyOrStuck]; rw [← ihx, hx]; rfl
   | case6 =>
     rename_i hy hx ihx ihy
-    simp only [toTerm, applyS]; rw [← ihx, ← ihy, hy, isStuck_toTerm hx]; rfl
+    simp only [toTerm, Term.applyOrStuck]; rw [← ihx, ← ihy, hy, isStuck_toTerm hx]; rfl
   | case7 =>
     rename_i hx hy ihx ihy ih
-    simp only [toTerm, applyS]
+    simp only [toTerm, Term.applyOrStuck]
     rw [← ihx, ← ihy, ← ih, isStuck_toTerm hx, isStuck_toTerm hy]; rfl
   | case10 =>
     rename_i hy ihy
-    simp only [toTerm, applyS]; rw [← ihy, hy]; rfl
+    simp only [toTerm, Term.applyOrStuck]; rw [← ihy, hy]; rfl
   | case11 =>
     rename_i hy ihy ih
-    simp only [toTerm, applyS]; rw [← ihy, ← ih, isStuck_toTerm hy]; rfl
+    simp only [toTerm, Term.applyOrStuck]; rw [← ihy, ← ih, isStuck_toTerm hy]; rfl
   | case12 =>
     rename_i a b h1 h2 h3 h4 h5 h6 h7
     cases a with
@@ -98,13 +98,13 @@ theorem applyT_toTerm (n : Nat) (a b : Tree) :
         | fork u v => exact (h7 w x y u v rfl rfl).elim
         | stuck => rfl
 
-/-- Soundness: whenever `applyT` does not run out of fuel on values, the
+/-- Soundness: whenever `applyOrStuck` does not run out of fuel on values, the
 big-step relation holds. -/
-theorem applyT_sound {n : Nat} {a b : Tree} (ha : IsValue a.toTerm)
-    (hb : IsValue b.toTerm) (h : applyT n a b ≠ stuck) :
-    Apply a.toTerm b.toTerm (applyT n a b).toTerm := by
-  rw [applyT_toTerm]
-  exact applyS_sound ha hb (by rw [← applyT_toTerm]; exact isStuck_toTerm h)
+theorem applyOrStuck_sound {n : Nat} {a b : Tree} (ha : IsValue a.toTerm)
+    (hb : IsValue b.toTerm) (h : applyOrStuck n a b ≠ stuck) :
+    Apply a.toTerm b.toTerm (applyOrStuck n a b).toTerm := by
+  rw [applyOrStuck_toTerm]
+  exact Term.applyOrStuck_sound ha hb (by rw [← applyOrStuck_toTerm]; exact isStuck_toTerm h)
 
 end Tree
 
