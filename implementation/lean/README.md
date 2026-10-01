@@ -77,7 +77,7 @@ theorem DropJet.reaches (h : checkDropThrough F ks n = true) : DropJet F ks s t 
 ```
 
 With `Eval.sn_steps_value`, `a ⬝ b` is strongly normalizing and reduces to `r`
-(`Runtime.lean`'s closing example).
+(`Runtime.lean`'s closing example). The C++ runtime: [`Cpp/`](Cpp/README.md).
 
 ## Building
 
@@ -91,7 +91,7 @@ lake build
 The pinned toolchain (`lean-toolchain`) is downloaded automatically on first
 use. There are no external dependencies (no mathlib); the `#guard` tests in
 `Examples.lean` run as part of the build, which also builds every module
-under `TreeCalculus/`.
+under `TreeCalculus/` and [`Cpp`](Cpp/README.md).
 
 ## Benchmark executable
 
