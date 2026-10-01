@@ -282,10 +282,10 @@ theorem Eval.sn {t v : Term} (h : Eval t v) : SN t := by
 theorem sn_of_eager_terminating {t : Term} (h : ∃ v, Eval t v) : SN t :=
   h.choose_spec.sn
 
-/-- Restatement in terms of the executable evaluator: if `evalF` returns a
+/-- Restatement in terms of the executable evaluator: if `evalWithFuel` returns a
 result for some amount of fuel, the input is strongly normalizing. -/
-theorem sn_of_evalF {n : Nat} {t v : Term} (h : evalF n t = some v) : SN t :=
-  (evalF_sound h).sn
+theorem sn_of_evalWithFuel {n : Nat} {t v : Term} (h : evalWithFuel n t = some v) : SN t :=
+  (evalWithFuel_sound h).sn
 
 /-- Summary: when eager evaluation terminates on `t` with value `v`, then
 `t` is strongly normalizing, and `v` is a genuine normal form of `t`:

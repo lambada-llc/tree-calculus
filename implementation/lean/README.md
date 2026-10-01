@@ -18,9 +18,9 @@ order can produce a different value either).
 | File | What's in it |
 | ---- | ------------ |
 | [`TreeCalculus/Basic.lean`](TreeCalculus/Basic.lean) | Terms (`△`, application), values, the five reduction rules (1), (2), (3a), (3b), (3c) as `Root`, one-step reduction `Step` (closure under contexts), multi-step `Steps`, strong normalization `SN` (defined via accessibility, with the "no infinite reduction sequence" reading proven) |
-| [`TreeCalculus/Eval.lean`](TreeCalculus/Eval.lean) | Eager evaluation, twice: as big-step derivations (`Apply`, `Eval`) and as an executable fuel-based evaluator (`applyF`, `evalF`), with soundness, monotonicity and completeness proofs connecting the two. Also `applyS`, a faster executable applier that reports running out of fuel in-band instead of through `Option`, proven sound (`applyS_sound`). Also: eager results are values, values are exactly the normal forms, and `Eval t v → t ⟶* v` |
-| [`TreeCalculus/Tree.lean`](TreeCalculus/Tree.lean) | `Tree`, values only (leaf, stem, fork) plus `stuck` for running out of fuel, one cell per node, and `applyT`, which is `applyS` over it: proven to compute exactly what `applyS` does (`applyT_toTerm`), hence sound (`applyT_sound`) |
-| [`TreeCalculus/StrongNormalization.lean`](TreeCalculus/StrongNormalization.lean) | The main theorem `Eval.sn : Eval t v → SN t` and its corollary `sn_of_evalF : evalF n t = some v → SN t` |
+| [`TreeCalculus/Eval.lean`](TreeCalculus/Eval.lean) | Eager evaluation, twice: as big-step derivations (`Apply`, `Eval`) and as an executable fuel-based evaluator (`applyWithFuel`, `evalWithFuel`), with soundness, monotonicity and completeness proofs connecting the two. Also `Term.applyOrStuck`, a faster executable applier that reports running out of fuel in-band as `stuck` instead of through `Option`, proven sound (`Term.applyOrStuck_sound`). Also: eager results are values, values are exactly the normal forms, and `Eval t v → t ⟶* v` |
+| [`TreeCalculus/Tree.lean`](TreeCalculus/Tree.lean) | `Tree`, values only (leaf, stem, fork) plus `stuck` for running out of fuel, one cell per node, and `Tree.applyOrStuck`, the same evaluator over it: proven to compute exactly what `Term.applyOrStuck` does (`Tree.applyOrStuck_toTerm`), hence sound (`Tree.applyOrStuck_sound`) |
+| [`TreeCalculus/StrongNormalization.lean`](TreeCalculus/StrongNormalization.lean) | The main theorem `Eval.sn : Eval t v → SN t` and its corollary `sn_of_evalWithFuel : evalWithFuel n t = some v → SN t` |
 | [`TreeCalculus/Examples.lean`](TreeCalculus/Examples.lean) | `#guard` tests exercising every rule, a diverging term, and example SN certificates obtained by running the evaluator inside `decide` |
 
 `Eval.sn` is proven without any axioms (`#print axioms Eval.sn` reports none —
@@ -75,8 +75,8 @@ use. There are no external dependencies (no mathlib); the `#guard` tests in
 
 ## Benchmark executable
 
-`Main.lean` wraps the verified evaluator `Tree.applyT` in a command-line program
-that [`benchmark/`](../../benchmark) times alongside the other
+`Main.lean` wraps the verified evaluator `Tree.applyOrStuck` in a command-line
+program that [`benchmark/`](../../benchmark) times alongside the other
 implementations: ternary-encoded trees on stdin, one per line, applied as a
 left fold, result printed in ternary. It is not a default target:
 

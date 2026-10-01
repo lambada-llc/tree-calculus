@@ -4,14 +4,14 @@ import TreeCalculus.Tree
 # Benchmark executable
 
 Reads ternary-encoded values from stdin, one per line, applies them as a left
-fold with the verified evaluator `Tree.applyT`, and prints the result in
+fold with the verified evaluator `Tree.applyOrStuck`, and prints the result in
 ternary. Parsing and printing use explicit stacks, so input depth never
-becomes C stack depth; `applyT` itself recurses once per nested application.
+becomes C stack depth; `applyOrStuck` itself recurses once per nested application.
 -/
 
 open TreeCalculus Tree
 
-/-- Fuel bounds `applyT`'s recursion depth, which the C stack bounds anyway. -/
+/-- Fuel bounds `applyOrStuck`'s recursion depth, which the C stack bounds anyway. -/
 def fuel : Nat := 2 ^ 62
 
 /-- Ternary is prefix notation (`0` leaf, `1x` stem, `2xy` fork), so reading it
@@ -45,7 +45,7 @@ def main : IO UInt32 := do
   let lines := (input.splitOn "\n").map String.trim |>.filter (!·.isEmpty)
   let some (t :: ts) := lines.mapM parse
     | IO.eprintln "expected ternary-encoded trees, one per line"; return 1
-  let some out := format (ts.foldl (applyT fuel) t)
+  let some out := format (ts.foldl (applyOrStuck fuel) t)
     | IO.eprintln "out of fuel"; return 1
   IO.println out
   return 0

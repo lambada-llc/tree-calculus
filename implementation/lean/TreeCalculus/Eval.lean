@@ -13,7 +13,8 @@ evaluators elsewhere in this repository do.
 
 Both are inductive *derivations*; a term on which the eager evaluator loops
 forever simply has no `Eval` derivation.  The fuel-based computable evaluator
-`evalF` below is proven equivalent (`evalF_sound`, `eval_complete`).
+`evalWithFuel` below is proven equivalent (`evalWithFuel_sound`,
+`Eval.evalWithFuel_complete`).
 -/
 
 namespace TreeCalculus
@@ -161,42 +162,42 @@ theorem Eval.steps {t v : Term} (h : Eval t v) : Steps t v := by
 
 /-! ## A computable, fuel-based eager evaluator
 
-`applyF`/`evalF` implement the same strategy as executable functions.  Fuel
-is consumed at each contraction; `none` means "out of fuel" (or, for
-`applyF`, an argument that is not a value — which never happens when called
-from `evalF`). -/
+`applyWithFuel`/`evalWithFuel` implement the same strategy as executable
+functions.  Fuel is consumed at each contraction; `none` means "out of fuel"
+(or, for `applyWithFuel`, an argument that is not a value — which never
+happens when called from `evalWithFuel`). -/
 
 /-- Fuel-based eager application of two values. -/
-def applyF : Nat → Term → Term → Option Term
+def applyWithFuel : Nat → Term → Term → Option Term
   | _, .leaf, b => some (.app .leaf b)
   | _, .app .leaf x, b => some (.app (.app .leaf x) b)
   | _ + 1, .app (.app .leaf .leaf) y, _ => some y
   | n + 1, .app (.app .leaf (.app .leaf x)) y, z => do
-      let xz ← applyF n x z
-      let yz ← applyF n y z
-      applyF n xz yz
+      let xz ← applyWithFuel n x z
+      let yz ← applyWithFuel n y z
+      applyWithFuel n xz yz
   | _ + 1, .app (.app .leaf (.app (.app .leaf w) _)) _, .leaf => some w
   | n + 1, .app (.app .leaf (.app (.app .leaf _) x)) _, .app .leaf u =>
-      applyF n x u
+      applyWithFuel n x u
   | n + 1, .app (.app .leaf (.app (.app .leaf _) _)) y, .app (.app .leaf u) v => do
-      let yu ← applyF n y u
-      applyF n yu v
+      let yu ← applyWithFuel n y u
+      applyWithFuel n yu v
   | _, _, _ => none
 
 /-- Fuel-based eager evaluation. -/
-def evalF : Nat → Term → Option Term
+def evalWithFuel : Nat → Term → Option Term
   | _, .leaf => some .leaf
   | 0, .app _ _ => none
   | n + 1, .app s t => do
-      let s' ← evalF n s
-      let t' ← evalF n t
-      applyF n s' t'
+      let s' ← evalWithFuel n s
+      let t' ← evalWithFuel n t
+      applyWithFuel n s' t'
 
 /-- Soundness: whenever the fuel-based applier returns a result, the big-step
 relation holds. -/
-theorem applyF_sound {fuel : Nat} {a b v : Term}
-    (h : applyF fuel a b = some v) : Apply a b v := by
-  fun_induction applyF fuel a b generalizing v with
+theorem applyWithFuel_sound {fuel : Nat} {a b v : Term}
+    (h : applyWithFuel fuel a b = some v) : Apply a b v := by
+  fun_induction applyWithFuel fuel a b generalizing v with
   | case1 => exact (Option.some.inj h) ▸ .underLeaf
   | case2 => exact (Option.some.inj h) ▸ .underStem
   | case3 => exact (Option.some.inj h) ▸ .k
@@ -214,113 +215,114 @@ theorem applyF_sound {fuel : Nat} {a b v : Term}
 
 /-- Soundness: whenever the fuel-based evaluator returns a result, the
 big-step relation holds. -/
-theorem evalF_sound {fuel : Nat} {t v : Term} (h : evalF fuel t = some v) :
+theorem evalWithFuel_sound {fuel : Nat} {t v : Term} (h : evalWithFuel fuel t = some v) :
     Eval t v := by
-  fun_induction evalF fuel t generalizing v with
+  fun_induction evalWithFuel fuel t generalizing v with
   | case1 => exact (Option.some.inj h) ▸ .leaf
   | case2 => simp at h
   | case3 n s t ih₁ ih₂ =>
     simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
     obtain ⟨s', hs, t', ht, hv⟩ := h
-    exact .app (ih₁ hs) (ih₂ ht) (applyF_sound hv)
+    exact .app (ih₁ hs) (ih₂ ht) (applyWithFuel_sound hv)
 
 /-- More fuel never hurts. -/
-theorem applyF_mono {fuel : Nat} {a b v : Term} (h : applyF fuel a b = some v) :
-    applyF (fuel + 1) a b = some v := by
-  fun_induction applyF fuel a b generalizing v with
-  | case1 => simp only [applyF]; exact h
-  | case2 => simp only [applyF]; exact h
-  | case3 => simp only [applyF]; exact h
+theorem applyWithFuel_mono {fuel : Nat} {a b v : Term} (h : applyWithFuel fuel a b = some v) :
+    applyWithFuel (fuel + 1) a b = some v := by
+  fun_induction applyWithFuel fuel a b generalizing v with
+  | case1 => simp only [applyWithFuel]; exact h
+  | case2 => simp only [applyWithFuel]; exact h
+  | case3 => simp only [applyWithFuel]; exact h
   | case4 n x y z ih₁ ih₂ ih₃ =>
     simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
     obtain ⟨xz, hxz, yz, hyz, hv⟩ := h
-    simp only [applyF, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    simp only [applyWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
     exact ⟨xz, ih₁ hxz, yz, ih₂ hyz, ih₃ _ _ hv⟩
-  | case5 => simp only [applyF]; exact h
-  | case6 n w x y u ih => simp only [applyF]; exact ih h
+  | case5 => simp only [applyWithFuel]; exact h
+  | case6 n w x y u ih => simp only [applyWithFuel]; exact ih h
   | case7 n w x y u v ih₁ ih₂ =>
     simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
     obtain ⟨yu, hyu, hv⟩ := h
-    simp only [applyF, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    simp only [applyWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
     exact ⟨yu, ih₁ hyu, ih₂ _ hv⟩
   | case8 => exact Option.noConfusion h
 
-theorem applyF_le {n m : Nat} (hle : n ≤ m) {a b v : Term}
-    (h : applyF n a b = some v) : applyF m a b = some v := by
+theorem applyWithFuel_le {n m : Nat} (hle : n ≤ m) {a b v : Term}
+    (h : applyWithFuel n a b = some v) : applyWithFuel m a b = some v := by
   induction hle with
   | refl => exact h
-  | step _ ih => exact applyF_mono ih
+  | step _ ih => exact applyWithFuel_mono ih
 
 /-- More fuel never hurts. -/
-theorem evalF_mono {fuel : Nat} {t v : Term} (h : evalF fuel t = some v) :
-    evalF (fuel + 1) t = some v := by
-  fun_induction evalF fuel t generalizing v with
-  | case1 => simp only [evalF]; exact h
+theorem evalWithFuel_mono {fuel : Nat} {t v : Term} (h : evalWithFuel fuel t = some v) :
+    evalWithFuel (fuel + 1) t = some v := by
+  fun_induction evalWithFuel fuel t generalizing v with
+  | case1 => simp only [evalWithFuel]; exact h
   | case2 => exact Option.noConfusion h
   | case3 n s t ih₁ ih₂ =>
     simp only [Option.bind_eq_bind, Option.bind_eq_some_iff] at h
     obtain ⟨s', hs, t', ht, hv⟩ := h
-    simp only [evalF, Option.bind_eq_bind, Option.bind_eq_some_iff]
-    exact ⟨s', ih₁ hs, t', ih₂ ht, applyF_mono hv⟩
+    simp only [evalWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    exact ⟨s', ih₁ hs, t', ih₂ ht, applyWithFuel_mono hv⟩
 
-theorem evalF_le {n m : Nat} (hle : n ≤ m) {t v : Term}
-    (h : evalF n t = some v) : evalF m t = some v := by
+theorem evalWithFuel_le {n m : Nat} (hle : n ≤ m) {t v : Term}
+    (h : evalWithFuel n t = some v) : evalWithFuel m t = some v := by
   induction hle with
   | refl => exact h
-  | step _ ih => exact evalF_mono ih
+  | step _ ih => exact evalWithFuel_mono ih
 
-/-- Completeness: every big-step application is computed by `applyF` with
+/-- Completeness: every big-step application is computed by `applyWithFuel` with
 enough fuel. -/
-theorem Apply.applyF_complete {a b v : Term} (h : Apply a b v) :
-    ∃ n, applyF n a b = some v := by
+theorem Apply.applyWithFuel_complete {a b v : Term} (h : Apply a b v) :
+    ∃ n, applyWithFuel n a b = some v := by
   induction h with
-  | underLeaf => exact ⟨0, by simp [applyF]⟩
-  | underStem => exact ⟨0, by simp [applyF]⟩
-  | k => exact ⟨1, by simp [applyF]⟩
+  | underLeaf => exact ⟨0, by simp [applyWithFuel]⟩
+  | underStem => exact ⟨0, by simp [applyWithFuel]⟩
+  | k => exact ⟨1, by simp [applyWithFuel]⟩
   | s _ _ _ ih₁ ih₂ ih₃ =>
     obtain ⟨n₁, h₁⟩ := ih₁
     obtain ⟨n₂, h₂⟩ := ih₂
     obtain ⟨n₃, h₃⟩ := ih₃
     refine ⟨max n₁ (max n₂ n₃) + 1, ?_⟩
-    simp only [applyF, Option.bind_eq_bind, Option.bind_eq_some_iff]
-    exact ⟨_, applyF_le (Nat.le_max_left _ _) h₁,
-      _, applyF_le (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)) h₂,
-      applyF_le (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)) h₃⟩
-  | fLeaf => exact ⟨1, by simp [applyF]⟩
+    simp only [applyWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    exact ⟨_, applyWithFuel_le (Nat.le_max_left _ _) h₁,
+      _, applyWithFuel_le (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)) h₂,
+      applyWithFuel_le (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)) h₃⟩
+  | fLeaf => exact ⟨1, by simp [applyWithFuel]⟩
   | fStem _ ih =>
     obtain ⟨n, h⟩ := ih
-    exact ⟨n + 1, by simpa only [applyF] using h⟩
+    exact ⟨n + 1, by simpa only [applyWithFuel] using h⟩
   | fFork _ _ ih₁ ih₂ =>
     obtain ⟨n₁, h₁⟩ := ih₁
     obtain ⟨n₂, h₂⟩ := ih₂
     refine ⟨max n₁ n₂ + 1, ?_⟩
-    simp only [applyF, Option.bind_eq_bind, Option.bind_eq_some_iff]
-    exact ⟨_, applyF_le (Nat.le_max_left _ _) h₁,
-      applyF_le (Nat.le_max_right _ _) h₂⟩
+    simp only [applyWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    exact ⟨_, applyWithFuel_le (Nat.le_max_left _ _) h₁,
+      applyWithFuel_le (Nat.le_max_right _ _) h₂⟩
 
-/-- Completeness: every big-step evaluation is computed by `evalF` with
-enough fuel.  Together with `evalF_sound`, the relation `Eval` says exactly
-"the eager evaluator terminates". -/
-theorem Eval.evalF_complete {t v : Term} (h : Eval t v) :
-    ∃ n, evalF n t = some v := by
+/-- Completeness: every big-step evaluation is computed by `evalWithFuel` with
+enough fuel.  Together with `evalWithFuel_sound`, the relation `Eval` says
+exactly "the eager evaluator terminates". -/
+theorem Eval.evalWithFuel_complete {t v : Term} (h : Eval t v) :
+    ∃ n, evalWithFuel n t = some v := by
   induction h with
   | leaf => exact ⟨0, rfl⟩
   | app _ _ ha ihs iht =>
     obtain ⟨n₁, h₁⟩ := ihs
     obtain ⟨n₂, h₂⟩ := iht
-    obtain ⟨n₃, h₃⟩ := ha.applyF_complete
+    obtain ⟨n₃, h₃⟩ := ha.applyWithFuel_complete
     refine ⟨max n₁ (max n₂ n₃) + 1, ?_⟩
-    simp only [evalF, Option.bind_eq_bind, Option.bind_eq_some_iff]
-    exact ⟨_, evalF_le (Nat.le_max_left _ _) h₁,
-      _, evalF_le (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)) h₂,
-      applyF_le (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)) h₃⟩
+    simp only [evalWithFuel, Option.bind_eq_bind, Option.bind_eq_some_iff]
+    exact ⟨_, evalWithFuel_le (Nat.le_max_left _ _) h₁,
+      _, evalWithFuel_le (Nat.le_trans (Nat.le_max_left _ _) (Nat.le_max_right _ _)) h₂,
+      applyWithFuel_le (Nat.le_trans (Nat.le_max_right _ _) (Nat.le_max_right _ _)) h₃⟩
 
 /-! ## A faster executable evaluator
 
-`applyF` pays for `Option` on every step: each result is boxed in `some` and
-unboxed again by the caller.  `applyS` reports running out of fuel in-band
-instead, as `stuck`, a term that is never a value, so a result needs no box.
-It is what the benchmark executable runs.
+`applyWithFuel` pays for `Option` on every step: each result is boxed in
+`some` and unboxed again by the caller.  `applyOrStuck` reports running out of
+fuel in-band instead, as `stuck`, a term that is never a value, so a result
+needs no box.  `Tree.applyOrStuck` (`Tree.lean`) is the same evaluator over a
+representation that holds values only.
 
 `stuck` must be absorbing: rule (1) discards its argument, so a `stuck` that
 reached it would vanish and leave a value with no `Apply` derivation behind
@@ -338,29 +340,29 @@ def isStuck : Term → Bool
 
 /-- Fuel-based eager application of two values, returning `stuck` when out
 of fuel. -/
-def applyS : Nat → Term → Term → Term
+def applyOrStuck : Nat → Term → Term → Term
   | 0, _, _ => stuck
   | _ + 1, .leaf, b => △ ⬝ b
   | _ + 1, .app .leaf x, b => △ ⬝ x ⬝ b
   | _ + 1, .app (.app .leaf .leaf) y, _ => y
   | n + 1, .app (.app .leaf (.app .leaf x)) y, z =>
-      let xz := applyS n x z
+      let xz := applyOrStuck n x z
       if isStuck xz then stuck else
-      let yz := applyS n y z
-      if isStuck yz then stuck else applyS n xz yz
+      let yz := applyOrStuck n y z
+      if isStuck yz then stuck else applyOrStuck n xz yz
   | _ + 1, .app (.app .leaf (.app (.app .leaf w) _)) _, .leaf => w
-  | n + 1, .app (.app .leaf (.app (.app .leaf _) x)) _, .app .leaf u => applyS n x u
+  | n + 1, .app (.app .leaf (.app (.app .leaf _) x)) _, .app .leaf u => applyOrStuck n x u
   | n + 1, .app (.app .leaf (.app (.app .leaf _) _)) y, .app (.app .leaf u) v =>
-      let yu := applyS n y u
-      if isStuck yu then stuck else applyS n yu v
+      let yu := applyOrStuck n y u
+      if isStuck yu then stuck else applyOrStuck n yu v
   | _ + 1, _, _ => stuck
 
-/-- On values, `applyS` either runs out of fuel or computes the big-step
+/-- On values, `applyOrStuck` either runs out of fuel or computes the big-step
 result. -/
-theorem applyS_stuck_or_apply {fuel : Nat} {a b : Term}
+theorem applyOrStuck_stuck_or_apply {fuel : Nat} {a b : Term}
     (ha : IsValue a) (hb : IsValue b) :
-    applyS fuel a b = stuck ∨ Apply a b (applyS fuel a b) := by
-  fun_induction applyS fuel a b with
+    applyOrStuck fuel a b = stuck ∨ Apply a b (applyOrStuck fuel a b) := by
+  fun_induction applyOrStuck fuel a b with
   | case1 | case5 | case6 | case10 | case12 => exact .inl rfl
   | case2 => exact .inr .underLeaf
   | case3 => exact .inr .underStem
@@ -370,9 +372,9 @@ theorem applyS_stuck_or_apply {fuel : Nat} {a b : Term}
     cases ha with | fork hx hy =>
     cases hx with | stem hx =>
     have ax : Apply x z xz := (ihx hx hb).resolve_left fun e => hxz (by
-      show isStuck (applyS n x z) = true; rw [e]; rfl)
+      show isStuck (applyOrStuck n x z) = true; rw [e]; rfl)
     have ay : Apply y z yz := (ihy hy hb).resolve_left fun e => hyz (by
-      show isStuck (applyS n y z) = true; rw [e]; rfl)
+      show isStuck (applyOrStuck n y z) = true; rw [e]; rfl)
     exact (ihr (ax.isValue hx hb) (ay.isValue hy hb)).imp id (.s ax ay)
   | case8 => exact .inr .fLeaf
   | case9 =>
@@ -386,14 +388,14 @@ theorem applyS_stuck_or_apply {fuel : Nat} {a b : Term}
     cases ha with | fork _ hy =>
     cases hb with | fork hu hv =>
     have ay : Apply y u yu := (ihy hy hu).resolve_left fun e => hyu (by
-      show isStuck (applyS n y u) = true; rw [e]; rfl)
+      show isStuck (applyOrStuck n y u) = true; rw [e]; rfl)
     exact (ihr (ay.isValue hy hu) hv).imp id (.fFork ay)
 
-/-- Soundness: whenever `applyS` does not run out of fuel on values, the
+/-- Soundness: whenever `applyOrStuck` does not run out of fuel on values, the
 big-step relation holds. -/
-theorem applyS_sound {fuel : Nat} {a b : Term} (ha : IsValue a) (hb : IsValue b)
-    (h : isStuck (applyS fuel a b) = false) : Apply a b (applyS fuel a b) :=
-  (applyS_stuck_or_apply ha hb).resolve_left fun e => by rw [e] at h; cases h
+theorem applyOrStuck_sound {fuel : Nat} {a b : Term} (ha : IsValue a) (hb : IsValue b)
+    (h : isStuck (applyOrStuck fuel a b) = false) : Apply a b (applyOrStuck fuel a b) :=
+  (applyOrStuck_stuck_or_apply ha hb).resolve_left fun e => by rw [e] at h; cases h
 
 end Term
 
