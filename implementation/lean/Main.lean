@@ -1,4 +1,5 @@
 import TreeCalculus.Tree
+import TreeCalculus.Value
 
 /-!
 # Benchmark executable
@@ -76,14 +77,24 @@ def Tree.view : Tree → Option (Shape Tree)
   | .fork x y => some (.fork x y)
   | .stuck => none
 
+def Value.view : Value → Option (Shape Value)
+  | .leaf => some .leaf
+  | .stem x => some (.stem x)
+  | .fork x y => some (.fork x y)
+
 /-- Fastest first: the first is the default. `stuck` is never a value, so an
-`OrStuck` evaluator that runs out of fuel fails to print, like `none` would. -/
+`OrStuck` evaluator that runs out of fuel fails to print, like `none` would.
+The two representations of values (`Tree`, `Value`) each beat `Term` with the
+same out-of-fuel signal, and `stuck` beats `Option` with either. -/
 def evaluators : List (String × Evaluator) :=
   [ ("Tree.applyOrStuck",
       { leaf := .leaf, stem := .stem, fork := .fork, view := Tree.view,
         apply := fun a b => some (Tree.applyOrStuck fuel a b) }),
     ("Term.applyOrStuck",
       Term.evaluator fun a b => some (Term.applyOrStuck fuel a b)),
+    ("Value.applyWithFuel",
+      { leaf := .leaf, stem := .stem, fork := .fork, view := Value.view,
+        apply := Value.applyWithFuel fuel }),
     ("Term.applyWithFuel", Term.evaluator (Term.applyWithFuel fuel)) ]
 
 def run (e : Evaluator) (input : String) : Except String String := do
