@@ -1150,30 +1150,26 @@ function loadable(text, name) {
     if (modules.has(key))
       return modules.path(key);
     const raw = as_file(text, name);
+    const fingerprints = fingerprint(text).fingerprints;
+    let used = raw;
+    let dump;
     try {
-      const fingerprints = fingerprint(text).fingerprints;
-      let used = raw;
-      let dump;
-      try {
-        const patched = delta(modules, text, fingerprints);
-        if (patched !== null)
-          used = as_file(patched, `delta-${name}`);
-        dump = ask(used, "dump");
-      } catch (error) {
-        if (used === raw)
-          throw error;
-        used = raw;
-        dump = ask(raw, "dump");
-      }
-      const final = modules.put(key, dump);
-      store(SIDECAR_STORE)?.put(key, sidecar_of(dump, fingerprints));
-      recent_dumps(modules).remember(key);
-      if (loaded === used)
-        loaded = final;
-      return final;
-    } catch {
-      return raw;
+      const patched = delta(modules, text, fingerprints);
+      if (patched !== null)
+        used = as_file(patched, `delta-${name}`);
+      dump = ask(used, "dump");
+    } catch (error) {
+      if (used === raw)
+        throw error;
+      used = raw;
+      dump = ask(raw, "dump");
     }
+    const final = modules.put(key, dump);
+    store(SIDECAR_STORE)?.put(key, sidecar_of(dump, fingerprints));
+    recent_dumps(modules).remember(key);
+    if (loaded === used)
+      loaded = final;
+    return final;
   });
 }
 function transformer2(_, program, options = {}) {

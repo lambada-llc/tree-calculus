@@ -328,27 +328,23 @@ function loadable(text: string, name: string): () => string {
     const key = text_key(text);
     if (modules.has(key)) return modules.path(key); // the entry is itself a loadable module
     const raw = as_file(text, name);
+    const fingerprints = fingerprint(text).fingerprints;
+    let used = raw;
+    let dump: Buffer;
     try {
-      const fingerprints = fingerprint(text).fingerprints;
-      let used = raw;
-      let dump: Buffer;
-      try {
-        const patched = delta(modules, text, fingerprints);
-        if (patched !== null) used = as_file(patched, `delta-${name}`);
-        dump = ask(used, 'dump');
-      } catch (error) {
-        if (used === raw) throw error;
-        used = raw; // the delta was the problem; the text itself is authoritative
-        dump = ask(raw, 'dump');
-      }
-      const final = modules.put(key, dump);
-      store(SIDECAR_STORE)?.put(key, sidecar_of(dump, fingerprints));
-      recent_dumps(modules).remember(key);
-      if (loaded === used) loaded = final; // same bindings: no need to re-load
-      return final;
-    } catch {
-      return raw; // e.g. a runner without `dump`; just load the text every time
+      const patched = delta(modules, text, fingerprints);
+      if (patched !== null) used = as_file(patched, `delta-${name}`);
+      dump = ask(used, 'dump');
+    } catch (error) {
+      if (used === raw) throw error;
+      used = raw; // the delta was the problem; the text itself is authoritative
+      dump = ask(raw, 'dump');
     }
+    const final = modules.put(key, dump);
+    store(SIDECAR_STORE)?.put(key, sidecar_of(dump, fingerprints));
+    recent_dumps(modules).remember(key);
+    if (loaded === used) loaded = final; // same bindings: no need to re-load
+    return final;
   });
 }
 
