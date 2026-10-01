@@ -75,7 +75,7 @@
 // module, and whatever the current request has bound or read. Both
 // collectors are non-moving, so a root registered once stays valid, and a
 // Tree held anywhere the collector cannot see — a local here, a frame of the
-// walk in to_dag — survives a collection unchanged.
+// walk in Renderer — survives a collection unchanged.
 //
 // Build:
 //   c++ -O3 -std=c++17 -pthread [-DRUNNER_EAGER] -o runner runner.cpp
@@ -178,53 +178,73 @@ static uint64_t to_nat_u64(Tree t) {
   return n;
 }
 
-// Render a tree as hash-consed DAG text, mirroring formatter_dag.to in
-// ../../../bin/main.js. Forces full reduction along the way (each node is
-// reduced before its children are walked), so the output is the *reduced* DAG —
-// the same byte-for-byte representation the JS path produces, suitable for
-// parsing back via Dag.parse.
-static std::string to_dag(Tree root) {
-  std::vector<std::pair<Tree, bool>> stack; // (node, exit_phase)
-  std::unordered_map<Tree, std::string> keys;
-  std::unordered_map<std::string, std::string> app_keys;
-  std::vector<std::string> lines;
-  size_t counter = 0;
+// Renders trees as hash-consed DAG lines, appended to `out`: a stem as
+// `id △ u`, a fork as `id (stem) v` — the line for its stem `△ u`, applied to
+// `v`. Each node is forced as it is reached and its children walked after, so
+// what is rendered is the *normal form*. Lines are shared by structure, not by
+// arena node: under the lazy evaluator two equal values can be two nodes.
+//
+// One renderer for both things written as DAGs: `reduce dag`'s answer, which
+// mirrors formatter_dag.to in ../../../bin/main.js byte for byte (ids from 0,
+// right child first) so it parses back via Dag.parse; and `dump`, whose ids
+// carry a `~` prefix so they can never collide with a module's own names.
+struct Renderer {
+  static constexpr uint32_t LEAF = UINT32_MAX;
+  const char* prefix;
+  std::string out;
+  std::unordered_map<Tree, uint32_t> id;           // arena node -> line
+  std::unordered_map<uint64_t, uint32_t> line_of;  // (left, right) -> line
+  uint32_t next = 0;
 
-  auto getOrAlloc = [&](const std::string& app_key) -> std::string {
-    auto it = app_keys.find(app_key);
-    if (it != app_keys.end()) return it->second;
-    std::string id = std::to_string(counter++);
-    app_keys.emplace(app_key, id);
-    lines.push_back(id + " " + app_key);
-    return id;
-  };
-
-  stack.push_back({root, false});
-  while (!stack.empty()) {
-    auto frame = stack.back(); stack.pop_back();
-    Tree node = frame.first;
-    if (keys.count(node)) continue;
-
-    if (!frame.second) {
-      Shape s = shape(node); // forces
-      stack.push_back({node, true});
-      // Right child on top so it is popped (and processed) first — mirrors
-      // `for (const c of children) todo.push(c)` in the JS implementation.
-      if (s.arity >= 1) stack.push_back({s.u, false});
-      if (s.arity == 2) stack.push_back({s.v, false});
-    } else {
-      Shape s = shape(node); // already reduced: a lookup
-      std::string current = "\xe2\x96\xb3"; // △
-      if (s.arity >= 1) current = getOrAlloc(current + " " + keys[s.u]);
-      if (s.arity == 2) current = getOrAlloc(current + " " + keys[s.v]);
-      keys[node] = current;
-    }
+  void ref(uint32_t at, std::string& to) const {
+    if (at == LEAF) { to += "\xe2\x96\xb3"; return; } // △
+    to += prefix;
+    to += std::to_string(at);
   }
 
-  std::string result;
-  for (const auto& line : lines) { result += line; result += '\n'; }
-  result += keys[root];
-  return result;
+  uint32_t line(uint32_t left, uint32_t right) {
+    const auto [it, fresh] = line_of.try_emplace(uint64_t(left) << 32 | right, next);
+    if (!fresh) return it->second;
+    ref(next, out);
+    out += ' ';
+    ref(left, out);
+    out += ' ';
+    ref(right, out);
+    out += '\n';
+    return next++;
+  }
+
+  // The reference to `root`, every line it needs already in `out`.
+  std::string operator()(Tree root) {
+    std::vector<std::pair<Tree, bool>> stack{{root, false}}; // (node, exit phase)
+    while (!stack.empty()) {
+      const auto [node, exit] = stack.back();
+      stack.pop_back();
+      if (id.count(node)) continue;
+      const Shape s = shape(node); // forces on entry; a lookup on exit
+      if (!exit) {
+        stack.push_back({node, true});
+        // Right child on top, so it is rendered first — mirrors
+        // `for (const c of children) todo.push(c)` in the JS implementation.
+        if (s.arity >= 1) stack.push_back({s.u, false});
+        if (s.arity == 2) stack.push_back({s.v, false});
+        continue;
+      }
+      uint32_t at = LEAF;
+      if (s.arity >= 1) at = line(LEAF, id.at(s.u));
+      if (s.arity == 2) at = line(at, id.at(s.v));
+      id.emplace(node, at);
+    }
+    std::string to;
+    ref(id.at(root), to);
+    return to;
+  }
+};
+
+static std::string to_dag(Tree root) {
+  Renderer render{""};
+  const std::string value = render(root);
+  return render.out + value;
 }
 
 // Encode one Unicode code point as UTF-8.
@@ -489,70 +509,16 @@ static void load_bundle(TreeEnv& env, const std::string& bundle_path) {
 // normal form, and rendering it here would be the divergence that evaluator
 // exists to avoid.
 static std::string dump_module() {
-  std::string out;
-  out.reserve(64 << 20);
-  std::unordered_map<Tree, uint32_t> id; // arena node -> structural line id
-  uint32_t next = 0;
-  std::vector<Tree> todo;
-
-  auto ref = [&](Tree t, std::string& to) {
-    if (t == 1) { to += "\xe2\x96\xb3"; return; } // △
-    to += '~';
-    to += std::to_string(id.at(t));
-  };
-
-  // Bottom-up: a node is emitted once both children (and for a fork, the stem
-  // of its left child) are. The stem is interned on the way — hash-consing
-  // makes that the same node every fork over this child shares.
-  auto emit = [&](Tree root) {
-    if (root == 1 || id.count(root)) return;
-    todo.push_back(root);
-    while (!todo.empty()) {
-      const Tree at = todo.back();
-      if (at == 1 || id.count(at)) { todo.pop_back(); continue; }
-      const Shape s = shape(at);
-      Tree stem_of = 0; // fork only: the "△ u" node its line applies to v
-      bool ready = true;
-      auto need = [&](Tree child) {
-        if (child != 1 && !id.count(child)) { todo.push_back(child); ready = false; }
-      };
-      if (s.arity == 1) {
-        need(s.u);
-      } else {
-        need(s.u);
-        need(s.v);
-        if (ready) {
-          stem_of = g_e.stem(s.u); // interned: every fork over this child shares it
-          need(stem_of);
-        }
-      }
-      if (!ready) continue;
-      todo.pop_back();
-      const uint32_t line = next++;
-      out += '~';
-      out += std::to_string(line);
-      out += ' ';
-      if (s.arity == 1) {          // ~i △ u   — apply(△, u) reloads as stem(u)
-        out += "\xe2\x96\xb3 ";
-        ref(s.u, out);
-      } else {                     // ~i (△ u) v — apply(stem u, v) reloads as fork(u, v)
-        ref(stem_of, out);
-        out += ' ';
-        ref(s.v, out);
-      }
-      out += '\n';
-      id.emplace(at, line);
-    }
-  };
-
+  Renderer render{"~"};
+  render.out.reserve(64 << 20);
   for (const auto& [name, value] : g_env_order) {
-    emit(value);
-    out += name;
-    out += ' ';
-    ref(value, out);
-    out += '\n';
+    const std::string value_ref = render(value);
+    render.out += name;
+    render.out += ' ';
+    render.out += value_ref;
+    render.out += '\n';
   }
-  return out;
+  return std::move(render.out);
 }
 #endif
 
