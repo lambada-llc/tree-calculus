@@ -1,4 +1,4 @@
-import TreeCalculus.Tree
+import TreeCalculus.ValueOrStuck
 import TreeCalculus.Value
 
 /-!
@@ -7,7 +7,7 @@ import TreeCalculus.Value
 Reads ternary-encoded values from stdin, one per line, applies them as a left
 fold with one of the formalization's verified evaluators, and prints the result
 in ternary. `--list` names the evaluators, `--evaluator NAME` picks one (default:
-the fastest, `Tree.applyOrStuck`). Parsing and printing use explicit stacks, so
+the fastest, `ValueOrStuck.applyOrStuck`). Parsing and printing use explicit stacks, so
 input depth never becomes C stack depth; the evaluators themselves recurse once
 per nested application.
 -/
@@ -71,7 +71,7 @@ def evaluator (apply : Term → Term → Option Term) : Evaluator :=
 
 end Term
 
-def Tree.view : Tree → Option (Shape Tree)
+def ValueOrStuck.view : ValueOrStuck → Option (Shape ValueOrStuck)
   | .leaf => some .leaf
   | .stem x => some (.stem x)
   | .fork x y => some (.fork x y)
@@ -84,12 +84,12 @@ def Value.view : Value → Option (Shape Value)
 
 /-- Fastest first: the first is the default. `stuck` is never a value, so an
 `OrStuck` evaluator that runs out of fuel fails to print, like `none` would.
-The two representations of values (`Tree`, `Value`) each beat `Term` with the
-same out-of-fuel signal, and `stuck` beats `Option` with either. -/
+Values (`ValueOrStuck`, `Value`) beat `Term` with the same out-of-fuel signal,
+and `stuck` beats `Option` over either. -/
 def evaluators : List (String × Evaluator) :=
-  [ ("Tree.applyOrStuck",
-      { leaf := .leaf, stem := .stem, fork := .fork, view := Tree.view,
-        apply := fun a b => some (Tree.applyOrStuck fuel a b) }),
+  [ ("ValueOrStuck.applyOrStuck",
+      { leaf := .leaf, stem := .stem, fork := .fork, view := ValueOrStuck.view,
+        apply := fun a b => some (ValueOrStuck.applyOrStuck fuel a b) }),
     ("Term.applyOrStuck",
       Term.evaluator fun a b => some (Term.applyOrStuck fuel a b)),
     ("Value.applyWithFuel",
@@ -107,7 +107,7 @@ def run (e : Evaluator) (input : String) : Except String String := do
 
 def main (args : List String) : IO UInt32 := do
   let name ← match args with
-    | [] => pure "Tree.applyOrStuck"
+    | [] => pure "ValueOrStuck.applyOrStuck"
     | ["--evaluator", name] => pure name
     | ["--list"] => do
       evaluators.forM (IO.println ·.1); return 0

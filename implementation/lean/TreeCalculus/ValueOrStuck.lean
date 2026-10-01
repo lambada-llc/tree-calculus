@@ -1,13 +1,15 @@
 import TreeCalculus.Eval
 
 /-!
-# Evaluating over values only
+# Evaluating over values, with `stuck`
 
 `Term` represents values and redexes alike, as `△` and application, so a fork
 is two `app` cells and every rule matches through nested applications. Eager
 evaluation never builds a redex, though: its inputs and outputs are values.
-`Tree` holds only those (plus `stuck`, for running out of fuel), one cell per
-node, and `applyOrStuck` is `Term.applyOrStuck` over it.
+`ValueOrStuck` holds those, one cell per node, plus `stuck`: `Term` has room for
+`Term.stuck` as one of its redexes, values do not, so it gets a constructor.
+`applyOrStuck` is `Term.applyOrStuck` over it; `Value` (`Value.lean`) is the
+same without `stuck`, for `Term.applyWithFuel`.
 
 `applyOrStuck_toTerm` says the two agree exactly, through the embedding `toTerm`,
 so `applyOrStuck` inherits `Term.applyOrStuck`'s soundness.
@@ -16,27 +18,27 @@ so `applyOrStuck` inherits `Term.applyOrStuck`'s soundness.
 namespace TreeCalculus
 
 /-- A value (leaf, stem or fork), or `stuck`: out of fuel. -/
-inductive Tree : Type
-  | leaf : Tree
-  | stem : Tree → Tree
-  | fork : Tree → Tree → Tree
-  | stuck : Tree
+inductive ValueOrStuck : Type
+  | leaf : ValueOrStuck
+  | stem : ValueOrStuck → ValueOrStuck
+  | fork : ValueOrStuck → ValueOrStuck → ValueOrStuck
+  | stuck : ValueOrStuck
 deriving DecidableEq, Repr
 
-namespace Tree
+namespace ValueOrStuck
 
 open Term
 
 /-- The embedding into terms. -/
-def toTerm : Tree → Term
+def toTerm : ValueOrStuck → Term
   | leaf => △
   | stem x => △ ⬝ x.toTerm
   | fork x y => △ ⬝ x.toTerm ⬝ y.toTerm
   | stuck => Term.stuck
 
-/-- `Term.applyOrStuck` over `Tree`: rule (1) through (3c) by constructor, `stuck`
+/-- `Term.applyOrStuck` over `ValueOrStuck`: rule (1) through (3c) by constructor, `stuck`
 absorbing exactly as there. -/
-def applyOrStuck : Nat → Tree → Tree → Tree
+def applyOrStuck : Nat → ValueOrStuck → ValueOrStuck → ValueOrStuck
   | 0, _, _ => stuck
   | _ + 1, leaf, b => stem b
   | _ + 1, stem x, b => fork x b
@@ -55,11 +57,11 @@ def applyOrStuck : Nat → Tree → Tree → Tree
       | yu => applyOrStuck n yu v
   | _ + 1, _, _ => stuck
 
-theorem isStuck_toTerm {t : Tree} (h : t ≠ stuck) : isStuck t.toTerm = false := by
+theorem isStuck_toTerm {t : ValueOrStuck} (h : t ≠ stuck) : isStuck t.toTerm = false := by
   cases t <;> first | rfl | exact absurd rfl h
 
 /-- `applyOrStuck` computes `Term.applyOrStuck`, on any inputs. -/
-theorem applyOrStuck_toTerm (n : Nat) (a b : Tree) :
+theorem applyOrStuck_toTerm (n : Nat) (a b : ValueOrStuck) :
     (applyOrStuck n a b).toTerm = Term.applyOrStuck n a.toTerm b.toTerm := by
   fun_induction applyOrStuck n a b with
   | case1 | case2 | case3 | case4 | case8 => rfl
@@ -100,12 +102,12 @@ theorem applyOrStuck_toTerm (n : Nat) (a b : Tree) :
 
 /-- Soundness: whenever `applyOrStuck` does not run out of fuel on values, the
 big-step relation holds. -/
-theorem applyOrStuck_sound {n : Nat} {a b : Tree} (ha : IsValue a.toTerm)
+theorem applyOrStuck_sound {n : Nat} {a b : ValueOrStuck} (ha : IsValue a.toTerm)
     (hb : IsValue b.toTerm) (h : applyOrStuck n a b ≠ stuck) :
     Apply a.toTerm b.toTerm (applyOrStuck n a b).toTerm := by
   rw [applyOrStuck_toTerm]
   exact Term.applyOrStuck_sound ha hb (by rw [← applyOrStuck_toTerm]; exact isStuck_toTerm h)
 
-end Tree
+end ValueOrStuck
 
 end TreeCalculus
