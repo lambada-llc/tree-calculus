@@ -172,10 +172,11 @@ content-addressed: evaluated modules under `module-v1/` (what `dump`
 returns, keyed by module text, re-loadable without reduction — plus a
 fingerprint sidecar under `module-fp-v1/` that lets the *next* version
 of a module alias every binding it did not change into the previous
-dump instead of re-evaluating it), and per-term results under
-`reduce-v1/` (what `reduce` returned, keyed by a Merkle
-fingerprint of the term, so an expect test whose term did not change is
-answered without spawning the runner at all). Reduction is
+dump instead of re-evaluating it), and symbols' values under
+`reduce-v1/` (what `reduce` returned for one, keyed by a Merkle
+fingerprint of its term, so a symbol whose term did not change is
+answered without spawning the runner at all; an expression is not kept,
+its caller decides what of its answer is worth keeping). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
 an entry refreshes its mtime, which is what lets a warmer prune by age.
 

@@ -352,31 +352,6 @@ function loadable(text: string, name: string): () => string {
   });
 }
 
-/**
- * `miss()`'s answer, kept in `named` under the term fingerprint `key` computes.
- *
- * A fingerprint addresses a term, reduction is deterministic, and the answers
- * cached here are renderings of a term's normal form — so an entry written by
- * any build, any process, either evaluator, is the answer. `key` throwing (a
- * name the fingerprints cannot see) just means this one is not cacheable.
- */
-function answered(
-  named: string,
-  key: () => Buffer | undefined,
-  miss: () => Buffer,
-): Buffer {
-  const st = store(named);
-  if (!st) return miss();
-  let fp: Buffer | undefined;
-  try { fp = key(); } catch { fp = undefined; }
-  if (!fp) return miss();
-  const hit = st.get(fp);
-  if (hit) return hit;
-  const answer = miss();
-  st.put(fp, answer);
-  return answer;
-}
-
 /** `transformer`, with the application and the reduction it needs done natively. */
 function transformer<TTree>(
   _: Evaluator<TTree>,
@@ -400,22 +375,30 @@ function environment<TTree>(
 ): Environment<TTree> {
   const path = loadable(text, 'module.dag');
   const of_answer = (answer: Buffer) => formatter_dag.of(e, answer.toString('utf8'));
-  // Fingerprints address the terms asked about, so their answers can be kept
-  // (see `answered`). Lazy: a run whose every answer is already on disk never
-  // fingerprints the module, spawns the runner, or evaluates a thing.
+  // A symbol's answer is kept under its term's fingerprint. A fingerprint
+  // addresses a term, reduction is deterministic, and what is kept is a
+  // rendering of the term's normal form — so an entry written by any build,
+  // any process, either evaluator, is the answer. Lazy: a run whose every
+  // answer is already on disk never fingerprints the module, spawns the
+  // runner, or evaluates a thing.
   const fingerprints = once(() => fingerprint(text).fingerprints);
-  // A symbol is a DAG of one word, so both halves of this interface are the
-  // same request with a different payload.
-  const get = (symbol: string) => of_answer(answered(
-    REDUCE_STORE,
-    () => fingerprints().get(symbol),
-    () => reduced(path(), 'dag', `${symbol}\n`)));
+  const get = (symbol: string) => {
+    const kept = store(REDUCE_STORE);
+    const key = kept && fingerprints().get(symbol);
+    const hit = key && kept.get(key);
+    if (hit) return of_answer(hit);
+    const answer = reduced(path(), 'dag', `${symbol}\n`);
+    if (key) kept.put(key, answer);
+    return of_answer(answer);
+  };
   // The runner reads the payload in a scope of its own, so this leaves the
   // loaded module exactly as it found it — see `reduce` in runner.cpp.
-  get.reduce = (text: string) => of_answer(answered(
-    REDUCE_STORE,
-    () => fingerprint(text, name => fingerprints().get(name)).value,
-    () => reduced(path(), 'dag', text)));
+  //
+  // Not kept: an expression is the caller's, and so is what is worth keeping
+  // of its answer — an expect test keeps its rendered result, not the raw
+  // tree it was rendered from. And a question asked only to have the module
+  // read (`△`, say) has to reach the runner to do that.
+  get.reduce = (text: string) => of_answer(reduced(path(), 'dag', text));
   return get;
 }
 

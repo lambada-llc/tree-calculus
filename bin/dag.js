@@ -1176,25 +1176,6 @@ function loadable(text, name) {
     }
   });
 }
-function answered(named, key, miss) {
-  const st = store(named);
-  if (!st)
-    return miss();
-  let fp;
-  try {
-    fp = key();
-  } catch {
-    fp = void 0;
-  }
-  if (!fp)
-    return miss();
-  const hit = st.get(fp);
-  if (hit)
-    return hit;
-  const answer = miss();
-  st.put(fp, answer);
-  return answer;
-}
 function transformer2(_, program, options = {}) {
   const path = loadable(program, "program.dag");
   const symbol = once(() => terminator(program));
@@ -1209,9 +1190,19 @@ function environment2(e, text, _ = {}) {
   const path = loadable(text, "module.dag");
   const of_answer = (answer) => dag_default.of(e, answer.toString("utf8"));
   const fingerprints = once(() => fingerprint(text).fingerprints);
-  const get = (symbol) => of_answer(answered(REDUCE_STORE, () => fingerprints().get(symbol), () => reduced(path(), "dag", `${symbol}
-`)));
-  get.reduce = (text2) => of_answer(answered(REDUCE_STORE, () => fingerprint(text2, (name) => fingerprints().get(name)).value, () => reduced(path(), "dag", text2)));
+  const get = (symbol) => {
+    const kept = store(REDUCE_STORE);
+    const key = kept && fingerprints().get(symbol);
+    const hit = key && kept.get(key);
+    if (hit)
+      return of_answer(hit);
+    const answer = reduced(path(), "dag", `${symbol}
+`);
+    if (key)
+      kept.put(key, answer);
+    return of_answer(answer);
+  };
+  get.reduce = (text2) => of_answer(reduced(path(), "dag", text2));
   return get;
 }
 var native = ["1", "eager"].includes(process.env.TREE_CALCULUS_RUNNER ?? "") ? { transformer: transformer2, environment: environment2 } : null;

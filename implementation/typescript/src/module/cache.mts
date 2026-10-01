@@ -4,7 +4,7 @@
 // keyed by the term's fingerprint (see fingerprint.mts). Two stores live here:
 //
 //   reduce/  the reduced DAG text of a term, keyed by the term's fingerprint —
-//            what lets an expect test or an `eval` skip reduction entirely
+//            what lets an `eval` of a symbol skip reduction entirely
 //            when nothing it depends on changed.
 //   module/  the fully evaluated form of a whole module, keyed by a hash of
 //            its text — what lets a module be re-loaded without re-reducing
