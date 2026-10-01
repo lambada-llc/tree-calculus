@@ -75,12 +75,14 @@ use. There are no external dependencies (no mathlib); the `#guard` tests in
 
 ## Benchmark executable
 
-`Main.lean` wraps the verified evaluator `Tree.applyOrStuck` in a command-line
-program that [`benchmark/`](../../benchmark) times alongside the other
-implementations: ternary-encoded trees on stdin, one per line, applied as a
-left fold, result printed in ternary. It is not a default target:
+`Main.lean` wraps the verified evaluators (`Tree.applyOrStuck`,
+`Term.applyOrStuck`, `Term.applyWithFuel`) in a command-line program that
+[`benchmark/`](../../benchmark) times alongside the other implementations:
+ternary-encoded trees on stdin, one per line, applied as a left fold, result
+printed in ternary. It is not a default target:
 
 ```sh
 lake build tree-calculus
-.lake/build/bin/tree-calculus
+.lake/build/bin/tree-calculus --list                   # the evaluators, fastest first
+.lake/build/bin/tree-calculus --evaluator NAME         # default: Tree.applyOrStuck
 ```

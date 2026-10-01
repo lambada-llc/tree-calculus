@@ -189,12 +189,16 @@ else
 fi
 
 # --- Lean ---
-# The formalization's own verified evaluator (Tree.applyOrStuck), compiled to native code.
+# The formalization's own verified evaluators, compiled to native code. Like
+# C++, the binary names them (implementation/lean/Main.lean).
 LEAN_BIN="$REPO_ROOT/implementation/lean/.lake/build/bin/tree-calculus"
-if [[ -x "$LEAN_BIN" ]]; then
-  bench "Lean" --stdin "$LEAN_BIN"
-else
+LEAN_EVALUATORS=$("$LEAN_BIN" --list 2>/dev/null || true)
+if [[ -z "$LEAN_EVALUATORS" ]]; then
   printf "  %-35s SKIP  not built\n" "Lean"
+else
+  for eval in $LEAN_EVALUATORS; do
+    bench "Lean $eval" --stdin "$LEAN_BIN" --evaluator "$eval"
+  done
 fi
 
 # --- WASM ---
