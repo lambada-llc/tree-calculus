@@ -170,42 +170,21 @@ its caller decides what of its answer is worth keeping). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
 an entry refreshes its mtime, which is what lets a warmer prune by age.
 
-### Read by the build scripts that drive `runner`
-
-#### `RUNNER_WORKERS` *(default: 1)*
-
-Read by `build/rules/compile/compile-all.js` and
-`build/rules/dag-test.js`. Number of node worker threads, each owning
-its own `runner -s` subprocess. Defaults to 1 because each subprocess can
-peak at hundreds of MiB to a few GiB on heavy chunks/tests, and total
-memory scales linearly with the count.
-
-Set `RUNNER_WORKERS=$(nproc)` on a beefy local machine to parallelise.
-
-#### `RUNNER_ARENA_MB` *(default: 64)*
-
-Read by `build/rules/compile/compile-all.js`, which passes it as this
-process's `RUNNER_RSS_THRESHOLD_MB`. A compile worker holds one runner
-for every chunk it has, so what bounds its memory is the collection
-budget rather than how often the process is replaced.
-
-64 rather than the runner's own 512 because compiling is thousands of
-independent reductions with nothing carried between them: a tight budget
-costs a little re-reduction and keeps peak RSS flat. A phase whose
-reductions are few and large wants the opposite, and says so by not
-passing one.
-
 #### `CXX` *(default: `c++`)*
 
-Compiler used for the on-demand build of `runner.cpp` to `.runner.exe`. The
-build flags are fixed: `-O3 -std=c++17 -pthread`.
+Compiler used for the on-demand build of `runner.cpp`, next to it, to
+`runner.exe` (or `runner-eager.exe` under `TREE_CALCULUS_RUNNER=eager`).
+The build flags are fixed: `-O3 -std=c++17 -pthread`.
 
 ## Tuning recipes
+
+How many runners a build keeps busy is the build's to say: each one is
+a process of its own, and can peak at hundreds of MiB to a few GiB on a
+heavy request, so memory scales with the count.
 
 | environment            | recommended setting                            |
 | ---------------------- | ---------------------------------------------- |
 | Hosted CI (Cloudflare) | leave defaults                                 |
-| Local 8-core, 16 GiB   | `RUNNER_WORKERS=$(nproc)`                          |
-| Local with lots of RAM | `RUNNER_WORKERS=$(nproc) RUNNER_RSS_THRESHOLD_MB=4096` |
-| Debugging stack issues | `RUNNER_WORKER_STACK_MB=256`                       |
-| Disable auto-recycle   | `RUNNER_RSS_THRESHOLD_MB=0`                        |
+| Local with lots of RAM | `RUNNER_RSS_THRESHOLD_MB=4096`                 |
+| Debugging stack issues | `RUNNER_WORKER_STACK_MB=256`                   |
+| Never collect          | `RUNNER_RSS_THRESHOLD_MB=0`                    |
