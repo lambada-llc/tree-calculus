@@ -23,9 +23,14 @@ order can produce a different value either).
 | [`TreeCalculus/Value.lean`](TreeCalculus/Value.lean) | `Value`, the same without `stuck`, and `Value.applyWithFuel`, `Term.applyWithFuel` over it: proven to compute exactly what `Term.applyWithFuel` does (`Value.applyWithFuel_toTerm`), hence sound (`Value.applyWithFuel_sound`) |
 | [`TreeCalculus/StrongNormalization.lean`](TreeCalculus/StrongNormalization.lean) | The main theorem `Eval.sn : Eval t v → SN t` and its corollary `sn_of_evalWithFuel : evalWithFuel n t = some v → SN t` |
 | [`TreeCalculus/Examples.lean`](TreeCalculus/Examples.lean) | `#guard` tests exercising every rule, a diverging term, and example SN certificates obtained by running the evaluator inside `decide` |
+| [`TreeCalculus/Machine.lean`](TreeCalculus/Machine.lean) | `step`: `Apply` as a loop over a stack of frames; `run_iff_apply` |
+| [`TreeCalculus/Runtime.lean`](TreeCalculus/Runtime.lean) | `RStep J`: `step` with a memo (any policy) and jets `J`; `runtime_sound` |
+| [`TreeCalculus/Symbolic.lean`](TreeCalculus/Symbolic.lean) | `sstep`: `step` on values with variables; `sstep_next` |
+| [`TreeCalculus/Check.lean`](TreeCalculus/Check.lean) | `checkRun`, `checkDropThrough`: kernel-decided, sound for every argument; `DropJet.reaches` |
 
 `Eval.sn` is proven without any axioms (`#print axioms Eval.sn` reports none —
-not even `propext` or choice).
+not even `propext` or choice). So are `run_iff_apply` and `runtime_sound`; the
+checkers' soundness uses `propext`, `Classical.choice` and `Quot.sound`.
 
 ## Why the theorem is interesting
 
@@ -61,6 +66,19 @@ theory:
 The converse (`SN` implies eager termination) is comparatively boring: on a
 strongly normalizing term every strategy terminates, the eager one included.
 
+## The machine, a runtime, and jets
+
+```lean
+theorem run_iff_apply : Run a b r ↔ Apply a.toTerm b.toTerm r.toTerm
+theorem runtime_sound (hj : ∀ s t, J s t → Reaches s t) (hm : m.Sound)
+    (h : Star (RStep J) ⟨.reduce a b [], [], m⟩ ⟨.dispatch r [], [], m'⟩) :
+    Apply a.toTerm b.toTerm r.toTerm ∧ m'.Sound
+theorem DropJet.reaches (h : checkDropThrough F ks n = true) : DropJet F ks s t → Reaches s t
+```
+
+With `Eval.sn_steps_value`, `a ⬝ b` is strongly normalizing and reduces to `r`
+(`Runtime.lean`'s closing example).
+
 ## Building
 
 Install [elan](https://github.com/leanprover/elan) (the Lean toolchain
@@ -72,7 +90,8 @@ lake build
 
 The pinned toolchain (`lean-toolchain`) is downloaded automatically on first
 use. There are no external dependencies (no mathlib); the `#guard` tests in
-`Examples.lean` run as part of the build.
+`Examples.lean` run as part of the build, which also builds every module
+under `TreeCalculus/`.
 
 ## Benchmark executable
 
