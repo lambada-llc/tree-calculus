@@ -44,3 +44,16 @@ jobs:
 
       - name: Python implementation
         run: python3 implementation/python/test_tree_calculus.py
+
+  # --wfail: a `sorry` is only a warning.
+  lean:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: lake build
+        working-directory: implementation/lean
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          ~/.elan/bin/lake build --wfail
