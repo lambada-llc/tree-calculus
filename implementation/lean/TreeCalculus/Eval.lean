@@ -321,8 +321,8 @@ theorem Eval.evalWithFuel_complete {t v : Term} (h : Eval t v) :
 `applyWithFuel` pays for `Option` on every step: each result is boxed in
 `some` and unboxed again by the caller.  `applyOrStuck` reports running out of
 fuel in-band instead, as `stuck`, a term that is never a value, so a result
-needs no box.  `Tree.applyOrStuck` (`Tree.lean`) is the same evaluator over a
-representation that holds values only.
+needs no box.  `ValueOrStuck.applyOrStuck` (`ValueOrStuck.lean`) is the same
+evaluator over a representation that holds values (and `stuck`) only.
 
 `stuck` must be absorbing: rule (1) discards its argument, so a `stuck` that
 reached it would vanish and leave a value with no `Apply` derivation behind

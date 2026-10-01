@@ -3,11 +3,10 @@ import TreeCalculus.Eval
 /-!
 # Evaluating over values, without `stuck`
 
-`Tree` adds `stuck` to the values so that running out of fuel can be reported
-in-band. `Value` is the values alone, leaf, stem and fork, so every inhabitant
-is one, and running out of fuel goes through `Option` instead: `applyWithFuel`
-is `Term.applyWithFuel` over it, completing the matrix of representation
-(`Term`, `Tree`, `Value`) against out-of-fuel signal (`Option`, `stuck`).
+`ValueOrStuck` (`ValueOrStuck.lean`) without `stuck`: values only, one cell per
+node, so running out of fuel goes through `Option` instead. `applyWithFuel` is
+`Term.applyWithFuel` over it. Each of `Term.applyWithFuel` and
+`Term.applyOrStuck` thus has a counterpart over values.
 
 `applyWithFuel_toTerm` says the two agree exactly, through the embedding
 `toTerm`, so `applyWithFuel` inherits `Term.applyWithFuel`'s soundness.
