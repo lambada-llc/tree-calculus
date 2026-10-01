@@ -1008,7 +1008,7 @@ var server = once(() => {
   (0, import_child_process.execFileSync)("mkfifo", [to5, from]);
   const write_fd = (0, import_fs3.openSync)(to5, "r+");
   const read_fd = (0, import_fs3.openSync)(from, "r+");
-  const runner = (0, import_child_process.spawn)(exe, ["-s"], { stdio: [write_fd, read_fd, "inherit"] });
+  const runner = (0, import_child_process.spawn)(exe, [], { stdio: [write_fd, read_fd, "inherit"] });
   runner.unref();
   process.on("exit", () => runner.kill());
   const byte = Buffer.alloc(1);

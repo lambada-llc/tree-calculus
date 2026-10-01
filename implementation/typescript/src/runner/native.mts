@@ -99,7 +99,7 @@ const executable = once(() => {
 });
 
 /**
- * A runner in server mode, talked to over a pair of FIFOs.
+ * A runner, talked to over a pair of FIFOs.
  *
  * One long-lived process rather than one per request, because a request is not
  * where the interesting state lives: the module stays parsed between commands,
@@ -122,7 +122,7 @@ const server = once(() => {
   execFileSync('mkfifo', [to, from]);
   const write_fd = openSync(to, 'r+');
   const read_fd = openSync(from, 'r+');
-  const runner = spawn(exe, ['-s'], { stdio: [write_fd, read_fd, 'inherit'] });
+  const runner = spawn(exe, [], { stdio: [write_fd, read_fd, 'inherit'] });
   // Waiting for the runner is never what keeps this process alive: it only ever
   // has something to say in response to being asked, and it is asked
   // synchronously.

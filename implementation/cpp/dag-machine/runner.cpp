@@ -1,30 +1,17 @@
 // runner.cpp — minimal fast tree-calculus program runner
 //
-// The other DAG machines in this directory are pure DAG→DAG transforms:
-// reduce.cpp reduces a tree, canonicalize.cpp hash-conses it, a tree in
-// on stdin and a tree out on stdout. This one instead *runs a program
-// against data*: it marshals host strings/bytes into tree-calculus
-// values, applies the program to them, and decodes the result back to a
-// string — and it can hold one loaded program and answer many such
-// queries. It's a fast, purpose-built subset of bin/main.js (which
-// "applies tree calculus programs to arguments"), covering just the
-// invocation patterns a LambAda build needs.
+// reduce_canonicalize.cpp in this directory is a pure DAG→DAG transform: a
+// module in on stdin, the same module reduced and hash-consed out on stdout.
+// This one instead *runs a program against data*: it marshals host strings
+// into tree-calculus values, applies the program to them, and decodes the
+// result back — holding one loaded module and answering many such queries,
+// so reductions of shared sub-terms are amortised across them.
 //
-// One-shot mode:
+//   runner
 //
-//   runner <dag-file> <string>
-//
-// reads the DAG from <dag-file>, applies it to <string> (marshalled
-// as a TC list-of-bytes), reduces, and prints the result as a string
-// (with a trailing newline, matching `console.log`).
-//
-// Server mode — a single process loads the bundle once and answers many
-// requests, so reductions of shared sub-terms are amortised across them:
-//
-//   runner -s
-//
-// reads commands from stdin, writes responses to stdout. Commands are
-// newline-terminated. Some commands carry a length-prefixed payload.
+// reads commands from stdin, writes responses to stdout, and exits on EOF.
+// Commands are newline-terminated. Some commands carry a length-prefixed
+// payload.
 //
 //   load <path>\n
 //     -> ok\n                                (replaces env)
@@ -37,8 +24,6 @@
 //                                             bound, rendered as asked)
 //   dump\n
 //     -> data <len>\n<bytes>                 (the evaluated module; eager only)
-//   quit\n
-//     -> ok\n                                (and exits)
 //
 // Two commands, because there are two questions: what to reduce, and how to
 // render it. A name in the module is a payload of one word, so looking a symbol
@@ -87,7 +72,7 @@
 // RUNNER_RSS_THRESHOLD_MB. A single request can allocate a thousand times
 // what it keeps, so waiting until it has answered is not enough. Everything
 // that has to survive is registered as a root: every binding of the loaded
-// module, and the argument and application a one-off `apply` builds. Both
+// module, and whatever the current request has bound or read. Both
 // collectors are non-moving, so a root registered once stays valid, and a
 // Tree held anywhere the collector cannot see — a local here, a frame of the
 // walk in to_dag — survives a collection unchanged.
@@ -135,7 +120,8 @@ static inline void hold(Tree t) { g_e.roots().push_back(t); }
 
 static inline void set_collection_budget(size_t nodes) { g_e.set_budget(nodes); }
 
-// die() throws so server-mode commands can recover; main() catches and reports.
+// die() throws so a failing command can be answered with `err` and the server
+// carry on; run_server catches.
 [[noreturn]] static void die(const char* msg) {
   throw std::runtime_error(msg);
 }
@@ -356,9 +342,8 @@ using TreeEnv = std::unordered_map<std::string, Tree>;
 // that scrambled definition order would not be the same module.
 static std::vector<std::pair<std::string, Tree>> g_env_order;
 
-// Returns the value of any 1-word (terminator) line if present, else 0.
-// Bundles used in server mode typically have no terminator; one-shot mode
-// expects one.
+// Returns the value of any 1-word (terminator) line if present, else 0: a
+// module has none, a `reduce` payload must.
 //
 // `outer` is an enclosing scope to resolve names `env` does not define. That is
 // what makes it possible to read an expression *against* a loaded module rather
@@ -438,7 +423,7 @@ static std::string read_file(const char* path) {
   return buf.str();
 }
 
-// ─── server mode ──────────────────────────────────────────────────────────
+// ─── server ─────────────────────────────────────────────────────────────────
 
 static void write_data(const std::string& s) {
   std::fprintf(stdout, "data %zu\n", s.size());
@@ -671,12 +656,6 @@ static int run_server() {
         ? std::string_view{}
         : std::string_view(line.data() + sp + 1, line.size() - sp - 1);
 
-    if (verb == "quit") {
-      std::fputs("ok\n", stdout);
-      std::fflush(stdout);
-      return 0;
-    }
-
     try {
       CommandStats cs;
       if (stats) cs.begin(line);
@@ -748,51 +727,16 @@ static int run_server() {
 
 // ─── main ─────────────────────────────────────────────────────────────────
 
-// Real entry point — runs on a worker thread that has a large stack.
+// The server — run on a worker thread that has a large stack.
 // Forcing a term is recursive and can chain tens of thousands of frames deep on
 // number-crunching benchmark suites; the main thread's 8 MiB stack isn't enough.
-struct WorkerArgs { int argc; char** argv; int result; };
-
 static void* worker_main(void* p) {
-  auto* w = static_cast<WorkerArgs*>(p);
-  int argc = w->argc;
-  char** argv = w->argv;
-
   set_collection_budget(collection_budget_nodes());
-
-  if (argc == 2 && std::strcmp(argv[1], "-s") == 0) {
-    w->result = run_server();
-    return nullptr;
-  }
-
-  if (argc != 3) {
-    std::fprintf(stderr,
-                 "Usage:\n"
-                 "  %s <dag-file> <string>     one-shot apply\n"
-                 "  %s -s                      stdin/stdout server mode\n",
-                 argv[0], argv[0]);
-    w->result = 1;
-    return nullptr;
-  }
-
-  try {
-    TreeEnv env;
-    Tree dag = parse_dag_into(read_file(argv[1]), env);
-    if (!dag) die("dag representation was not terminated by a value");
-    const Tree result = g_e.apply(dag, of_string(argv[2]));
-    hold(result);
-    std::string out = to_string_marshal(result);
-    std::fwrite(out.data(), 1, out.size(), stdout);
-    std::fputc('\n', stdout);
-    w->result = 0;
-  } catch (const std::exception& e) {
-    std::fprintf(stderr, "%s\n", e.what());
-    w->result = 1;
-  }
+  *static_cast<int*>(p) = run_server();
   return nullptr;
 }
 
-int main(int argc, char** argv) {
+int main() {
   // Worker stack: 64 MiB by default — enough for the deepest reduction
   // chains we've observed in Forest (Poly.Bench, Nat.Bench) while staying
   // friendly to constrained hosted-CI builders. Override with
@@ -811,14 +755,14 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  WorkerArgs args{argc, argv, 1};
+  int result = 1;
   pthread_t tid;
-  if (int rc = pthread_create(&tid, &attr, worker_main, &args)) {
+  if (int rc = pthread_create(&tid, &attr, worker_main, &result)) {
     std::fprintf(stderr, "runner: pthread_create(stack=%zu MiB): %s\n",
                  stack_mb, std::strerror(rc));
     return 1;
   }
   pthread_attr_destroy(&attr);
   pthread_join(tid, nullptr);
-  return args.result;
+  return result;
 }
