@@ -1,5 +1,23 @@
+// reduce_canonicalize.cpp — reduce every binding of a module, hash-consed
+//
+//   reduce_canonicalize [--fuel=<steps>] [--stats-per-symbol] < module > reduced
+//
+// Reads a DAG module, reduces each application as it is read (memoized, so a
+// shared sub-term is reduced once), and writes the module back with every
+// binding in normal form: nodes as `:N` ids, hash-consed, unreachable ones
+// dropped, and every naming (2-word) line and terminator kept, in order.
+//
+// The eager runner's `load` + `dump` (runner.cpp) also normalizes a whole
+// module, and this is not that, for what its output says: a node built by
+// applying a name another line defines refers to it *by that name*, so the
+// reduced module still says which symbol each part was built through. A dump
+// keys nodes by value and writes structural `~` ids, which is right for a cache
+// and loses exactly that attribution. Also its own: `--fuel` caps reduction
+// steps (exit 1 when spent), so a non-terminating binding fails a build rather
+// than hanging it; `--stats-per-symbol` writes `Symbol,steps` CSV to stderr —
+// the contractions each exported binding cost — ending in a `TOTAL` row.
+
 #include <cstdint>
-#include <iomanip>
 #include <iostream>
 #include <string>
 #include <unordered_map>
@@ -65,11 +83,8 @@ static std::unordered_map<std::pair<int32_t, int32_t>, int32_t, PairHash> hash_c
 static std::unordered_map<std::pair<int32_t, int32_t>, int32_t, PairHash> apply_memo;
 
 static int32_t canon_counter = 0;
-static bool stats_enabled = false;
 static bool stats_per_symbol = false;
 static int64_t stat_contractions = 0;
-static int64_t stat_reduction_steps = 0;
-static int64_t stat_output_lines = 0;
 static int64_t fuel_remaining = -1; // -1 = unlimited
 static int32_t current_lineno = 0;
 
@@ -163,7 +178,6 @@ static void process_apply(int32_t target, int32_t func, int32_t arg) {
   stack.push_back({target, func, arg, {}});
 
   while (!stack.empty()) {
-    if (stats_enabled) ++stat_reduction_steps;
     if (fuel_remaining >= 0) {
       if (fuel_remaining == 0) {
         std::cerr << "fuel exhausted";
@@ -210,7 +224,7 @@ static void process_apply(int32_t target, int32_t func, int32_t arg) {
         break;
       }
       case FORK: {
-        if (stats_enabled) ++stat_contractions;
+        if (stats_per_symbol) ++stat_contractions;
         Info iu = env[info.a];
         switch (iu.type) {
           case LEAF: {
@@ -269,14 +283,15 @@ static void process_apply(int32_t target, int32_t func, int32_t arg) {
 }
 
 int main(int argc, char* argv[]) {
-  bool progress = false;
   for (int i = 1; i < argc; ++i) {
     std::string arg(argv[i]);
-    if (arg == "--progress") progress = true;
-    else if (arg == "--stats") stats_enabled = true;
-    else if (arg == "--stats-per-symbol") { stats_enabled = true; stats_per_symbol = true; }
-    else if (arg == "--fuel" && i + 1 < argc) fuel_remaining = std::stoll(argv[++i]);
+    if (arg == "--stats-per-symbol") stats_per_symbol = true;
     else if (arg.rfind("--fuel=", 0) == 0) fuel_remaining = std::stoll(arg.substr(7));
+    else {
+      std::cerr << "reduce_canonicalize: unrecognized argument " << arg << "\n"
+                << "usage: reduce_canonicalize [--fuel=<steps>] [--stats-per-symbol] < module\n";
+      return 2;
+    }
   }
 
   // Pre-allocate for typical workload
@@ -317,7 +332,6 @@ int main(int argc, char* argv[]) {
     if (p < end) ++p;
 
     ++current_lineno;
-    if (progress) std::cerr << current_lineno << " " << words[0] << "\n";
 
     if (nwords == 0) continue;
     int32_t a = intern(words[0]);
@@ -402,15 +416,8 @@ int main(int argc, char* argv[]) {
       out += named_strs[entry.w1];
     }
     out += '\n';
-    if (stats_enabled) ++stat_output_lines;
   }
   fwrite(out.data(), 1, out.size(), stdout);
 
-  if (stats_per_symbol) {
-    std::cerr << "TOTAL," << stat_contractions << '\n';
-  } else if (stats_enabled) {
-    std::cerr << std::left << std::setw(17) << "Contractions:" << stat_contractions << "\n";
-    std::cerr << std::left << std::setw(17) << "Reduction steps:" << stat_reduction_steps << "\n";
-    std::cerr << std::left << std::setw(17) << "Output lines:" << stat_output_lines << "\n";
-  }
+  if (stats_per_symbol) std::cerr << "TOTAL," << stat_contractions << '\n';
 }
