@@ -2,10 +2,14 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <sstream>
 #include <string>
 #include <stdexcept>
+#include <unordered_map>
 #include <vector>
 #include <sys/mman.h>
+
+#include "jets.hpp"
 
 // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
 // evaluator an eager module build needs, which none of the eager evaluators
@@ -75,6 +79,10 @@
 // arena is sized to match: 2^31 nodes, 16 GiB. Nothing moves, so a Tree stays
 // the index it was across a collection — which is what lets every Tree a caller
 // is holding survive one without being registered anywhere.
+//
+// EagerGraphNilMmap32Jets also answers lambada's skip_line natively, a jet
+// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
+// without it.
 
 // Anonymous memory, reserved rather than committed: a page is only committed
 // the first time it is touched, so a region can be mapped at the most it will
@@ -95,7 +103,7 @@ static void *map_pages(size_t bytes) {
   return mem;
 }
 
-class EagerGraphNilMmap32 {
+template <bool JETS> class BasicEagerGraphNilMmap32 {
 public:
   using Tree = uint32_t;
 
@@ -187,6 +195,7 @@ public:
   // traffic they count, so they are unconditional.
   struct Stats {
     uint64_t steps = 0, memo_hits = 0, memo_puts = 0, gcs = 0, gc_marked = 0;
+    uint64_t jets = 0, skipped = 0; // jets taken, and list elements they skipped
   };
   Stats stats_counters;
 
@@ -253,6 +262,12 @@ private:
   // since one was last made (see recall). Small on purpose: it is read on every
   // lookup, so it has to stay in cache where the memo cannot.
   uint8_t _cold[1 << 16];
+
+  // jets.hpp's trees, interned on a fresh arena and marked by every collection,
+  // so that each stays the index of its tree: interning is exact, so comparing
+  // an index with them compares trees. 0, which no tree is, while jets are off.
+  Tree _skip_line = 0, _newline = 0;
+  bool _jets = JETS;
 
   static size_t round_up_pow2(size_t n) {
     size_t p = MIN_TABLE;
@@ -459,6 +474,52 @@ private:
     return 0;
   }
 
+  /** The tree a jets.hpp DAG denotes, read as dag2lean.mjs reads it: a line of
+   * three words builds a stem or a fork, and the line of one names the tree. */
+  Tree intern_dag(const char *dag) {
+    std::unordered_map<std::string, Tree> env{{"\xe2\x96\xb3", leaf()}}; // △
+    std::istringstream lines(dag);
+    Tree value = 0;
+    for (std::string line; std::getline(lines, line);) {
+      std::istringstream words(line);
+      std::string w[3];
+      words >> w[0] >> w[1] >> w[2];
+      if (!w[2].empty()) { // △ x is △x, △u x is △ux
+        const Tree u = _arena[env.at(w[1])].u, x = env.at(w[2]);
+        env[w[0]] = u ? fork(u, x) : stem(x);
+      } else if (!w[0].empty()) value = env.at(w[0]);
+    }
+    return value;
+  }
+
+  void intern_jets() {
+    if constexpr (JETS) {
+      _skip_line = _newline = 0;
+      if (_jets) _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+    }
+  }
+
+  /**
+   * apply(skip_line, xs) by DropJet's transitions (TreeCalculus/Check.lean):
+   * skip each element that is not the newline, and answer what follows the
+   * first that is, or the leaf ending the list, recorded as RStep's put for the
+   * MEMOIZE frame recall() pushed, if it did: the jet takes no steps, so that
+   * frame would not. A stem ending the list has no transition: 0, and xs the
+   * stem, for the rules.
+   */
+  Tree skip_line(Tree &xs) {
+    const Tree b = xs;
+    ++stats_counters.jets;
+    for (Node n; (n = _arena[xs]).u; xs = n.v, ++stats_counters.skipped) {
+      if (!n.v) return 0;
+      if (n.u == _newline) { xs = n.v; break; }
+    }
+    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
+        _stack.back().arg1() == _skip_line && _stack.back().arg2() == b)
+      memo_put(_skip_line, b, xs);
+    return xs;
+  }
+
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
    * are permanent (padding and the shared leaf), so they count as live. */
   bool marked(Tree at) const {
@@ -574,20 +635,28 @@ private:
 public:
   // No collection until set_budget() says so: an unregistered root set makes
   // everything look garbage, so opting in has to be the caller's decision.
-  EagerGraphNilMmap32() : _budget(ARENA_NODES) {
+  BasicEagerGraphNilMmap32() : _budget(ARENA_NODES) {
     map_arena();
     rebuild_interned(MIN_TABLE);
     size_memo();
+    intern_jets();
   }
 
-  ~EagerGraphNilMmap32() {
+  ~BasicEagerGraphNilMmap32() {
     munmap(_arena, ARENA_BYTES);
     munmap(_interned, MAX_INTERNED * sizeof(Tree));
     munmap(_memo, MAX_MEMO * sizeof(Memo));
   }
 
-  EagerGraphNilMmap32(const EagerGraphNilMmap32 &) = delete;
-  EagerGraphNilMmap32 &operator=(const EagerGraphNilMmap32 &) = delete;
+  BasicEagerGraphNilMmap32(const BasicEagerGraphNilMmap32 &) = delete;
+  BasicEagerGraphNilMmap32 &operator=(const BasicEagerGraphNilMmap32 &) = delete;
+
+  /** Whether apply() takes jets, on by default. Off, their trees are not even
+   * interned, so it reduces as EagerGraphNilMmap32 does. Clears, as clear(). */
+  void set_jets(bool on) {
+    _jets = on;
+    clear();
+  }
 
   /** Drop everything allocated so far. Every Tree handed out becomes invalid. */
   void clear() {
@@ -601,6 +670,7 @@ public:
     _grey.shrink_to_fit();
     rebuild_interned(MIN_TABLE);
     size_memo();
+    intern_jets();
   }
 
   /**
@@ -629,6 +699,7 @@ public:
       mark(f.arg1());
       mark(f.arg2());
     }
+    if constexpr (JETS) mark(_skip_line), mark(_newline);
     // Between mark and sweep is the one moment liveness is written on the
     // nodes themselves, which is what lets the memo be filtered rather than
     // dropped: nothing moves, so an entry whose operands and result all
@@ -801,6 +872,11 @@ public:
         }
         {                                                //   b = △de: apply(apply(y, d), e)
           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          // After the memo, so that the jet never makes slower what it answers.
+          if (JETS && a == _skip_line) {
+            if ((result = skip_line(b))) goto dispatch;
+            goto reduce;
+          }
           _stack.emplace_back(APPLY_TO, bn.v, 0);
           a = y;
           b = bn.u;
@@ -844,3 +920,6 @@ public:
     }
   }
 };
+
+using EagerGraphNilMmap32 = BasicEagerGraphNilMmap32<false>;
+using EagerGraphNilMmap32Jets = BasicEagerGraphNilMmap32<true>;

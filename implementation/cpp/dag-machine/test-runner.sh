@@ -168,6 +168,26 @@ last=$({ printf 'load %s\n' "$CACHE/id.dag"
        } | RUNNER_STATS=1 RUNNER_RSS_THRESHOLD_MB=1 "$DIR/runner-eager.exe" 2>&1 >/dev/null | grep -o 'arena=[0-9]*' | tail -1)
 check "the budget bounds the arena across long binds" 1 "$(( ${last#arena=} < 400000 ))"
 
+# skip_line's jet, which test-jets.cpp tests itself: RUNNER_STATS counts each request's
+# jets and the elements they skipped, and RUNNER_JETS=0 turns them off. skip_line applied
+# to "ab\ncd" and then, in the same session, to "abc\nef": "ef" either way.
+skip_line="$DIR/../../lean/Cpp/trees/skipLine.dag"
+request="$(sed '$d' "$skip_line")"$'\n'"~r $(tail -1 "$skip_line") ~x"$'\n~r\n'
+jets() { # [env...] — the last answer, and each reduce's jets= and skipped=
+  local answer
+  answer=$({ printf 'load %s\n' "$CACHE/id.dag"
+             for x in $'ab\ncd' $'abc\nef'; do
+               printf 'bind ~x %d\n%s' "${#x}" "$x"
+               printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
+             done
+           } | env RUNNER_STATS=1 "$@" "$DIR/runner-eager.exe" 2>"$CACHE/jets.stats")
+  echo "${answer##*$'\n'}" $(grep '| reduce' "$CACHE/jets.stats" | grep -o 'jets=[0-9]* skipped=[0-9]*')
+}
+check "RUNNER_STATS counts each request's jets and what they skipped" \
+  "ef jets=1 skipped=2 jets=1 skipped=3" "$(jets)"
+check "RUNNER_JETS=0 turns them off, and answers the same" \
+  "ef jets=0 skipped=0 jets=0 skipped=0" "$(jets RUNNER_JETS=0)"
+
 echo ""
 echo "runner: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

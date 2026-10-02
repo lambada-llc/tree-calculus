@@ -4,8 +4,14 @@ set -euo pipefail
 DIR="$(cd "$(dirname "$0")" && pwd)"
 MAIN_JS="$DIR/../../../bin/main.js"
 
+# jets.hpp and the Lean trees are what trees/*.dag make.
+node "$DIR/../../lean/Cpp/trees/embed.mjs" --check
+
 # Compile
 "$DIR/compile.sh"
+
+"${CXX:-c++}" "$DIR/test-jets.cpp" -O3 -std=c++17 -o "$DIR/test-jets.exe"
+"$DIR/test-jets.exe"
 
 # The runner has an end-to-end suite of its own: native evaluators and the
 # reduction cache against the pure-Node evaluator as oracle.
