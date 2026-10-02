@@ -47,7 +47,7 @@ __export(main_dag_exports, {
   transformer: () => transformer3
 });
 module.exports = __toCommonJS(main_dag_exports);
-var import_fs4 = require("fs");
+var import_fs3 = require("fs");
 
 // src/common.mjs
 var import_worker_threads = require("worker_threads");
@@ -391,19 +391,19 @@ var DagModule = class _DagModule {
     const { absorb_internal_aliases = true } = options;
     const module2 = new _DagModule();
     const latest = /* @__PURE__ */ Object.create(null);
-    const resolve3 = (symbol) => latest[symbol] ?? (latest[symbol] = box(symbol));
+    const resolve2 = (symbol) => latest[symbol] ?? (latest[symbol] = box(symbol));
     for (const raw of text.split("\n")) {
       const trimmed = raw.trim();
       if (!trimmed)
         continue;
       const words = trimmed.split(/\s+/);
       if (absorb_internal_aliases && words.length === 3 && words[1] === ":i") {
-        latest[words[0]] = resolve3(words[2]);
+        latest[words[0]] = resolve2(words[2]);
         continue;
       }
       const is_definition = words.length === 2 || words.length === 3;
       const head = is_definition ? box(words[0]) : null;
-      module2.lines.push(words.map((word, i) => i === 0 && head ? head : resolve3(word)));
+      module2.lines.push(words.map((word, i) => i === 0 && head ? head : resolve2(word)));
       if (head)
         latest[head.symbol] = head;
     }
@@ -831,65 +831,27 @@ function link(fragments) {
 }
 
 // src/module/transform.mjs
+var import_crypto2 = require("crypto");
+
+// src/module/cache.mjs
 var import_crypto = require("crypto");
 var import_fs = require("fs");
 var import_path = require("path");
-var sha256 = (s) => (0, import_crypto.createHash)("sha256").update(s).digest("hex");
-function memoize(run2, program, options = {}) {
-  const { cache_dir: cache_dir2 } = options;
-  if (cache_dir2 === void 0)
-    return run2;
-  (0, import_fs.mkdirSync)(cache_dir2, { recursive: true });
-  const program_hash = sha256(program);
-  return (input) => {
-    const path = (0, import_path.resolve)(cache_dir2, sha256(`${program_hash}
-${input}`));
-    if (!(0, import_fs.existsSync)(path)) {
-      const temporary = `${path}.${writer}.tmp`;
-      try {
-        (0, import_fs.writeFileSync)(temporary, run2(input));
-        (0, import_fs.renameSync)(temporary, path);
-      } catch (error) {
-        (0, import_fs.rmSync)(temporary, { force: true });
-        throw error;
-      }
-    }
-    return (0, import_fs.readFileSync)(path, "utf8");
-  };
-}
-function transformer(e, program, options = {}) {
-  const m2 = marshal(e);
-  let tree = null;
-  return memoize((input) => {
-    tree ?? (tree = dag_default.of(e, program));
-    return m2.to_string(e.apply(tree, m2.of_string(input)));
-  }, program, options);
-}
-
-// src/runner/native.mjs
-var import_child_process = require("child_process");
-var import_fs3 = require("fs");
-var import_os = require("os");
-var import_path3 = require("path");
-
-// src/module/cache.mjs
-var import_crypto2 = require("crypto");
-var import_fs2 = require("fs");
-var import_path2 = require("path");
 var cache_dir = () => process.env.TREE_CALCULUS_CACHE || void 0;
 var REDUCE_STORE = "reduce-v1";
 var MODULE_STORE = "module-v1";
-var text_key = (text) => (0, import_crypto2.createHash)("sha256").update(text).digest();
+var TRANSFORM_STORE = "transform-v1";
+var text_key = (text) => (0, import_crypto.createHash)("sha256").update(text).digest();
 function store(name) {
   const base = cache_dir();
   if (base === void 0)
     return null;
-  const directory = (0, import_path2.join)(base, name);
-  (0, import_fs2.mkdirSync)(directory, { recursive: true });
-  const path = (key) => (0, import_path2.join)(directory, key.toString("hex"));
+  const directory = (0, import_path.join)(base, name);
+  (0, import_fs.mkdirSync)(directory, { recursive: true });
+  const path = (key) => (0, import_path.join)(directory, key.toString("hex"));
   const touch = (at) => {
     try {
-      (0, import_fs2.utimesSync)(at, /* @__PURE__ */ new Date(), /* @__PURE__ */ new Date());
+      (0, import_fs.utimesSync)(at, /* @__PURE__ */ new Date(), /* @__PURE__ */ new Date());
     } catch {
     }
   };
@@ -897,32 +859,64 @@ function store(name) {
     path,
     has: (key) => {
       const at = path(key);
-      if (!(0, import_fs2.existsSync)(at))
+      if (!(0, import_fs.existsSync)(at))
         return false;
       touch(at);
       return true;
     },
     get: (key) => {
       const at = path(key);
-      if (!(0, import_fs2.existsSync)(at))
+      if (!(0, import_fs.existsSync)(at))
         return null;
       touch(at);
-      return (0, import_fs2.readFileSync)(at);
+      return (0, import_fs.readFileSync)(at);
     },
     put: (key, data) => {
       const at = path(key);
       const temporary = `${at}.${writer}.tmp`;
       try {
-        (0, import_fs2.writeFileSync)(temporary, data);
-        (0, import_fs2.renameSync)(temporary, at);
+        (0, import_fs.writeFileSync)(temporary, data);
+        (0, import_fs.renameSync)(temporary, at);
       } catch (error) {
-        (0, import_fs2.rmSync)(temporary, { force: true });
+        (0, import_fs.rmSync)(temporary, { force: true });
         throw error;
       }
       return at;
     }
   };
 }
+
+// src/module/transform.mjs
+function memoize(run2, program) {
+  const kept = store(TRANSFORM_STORE);
+  if (!kept)
+    return run2;
+  const program_key = text_key(program).toString("hex");
+  return (input) => {
+    const key = (0, import_crypto2.createHash)("sha256").update(`${program_key}
+${input}`).digest();
+    const hit = kept.get(key);
+    if (hit)
+      return hit.toString("utf8");
+    const output = run2(input);
+    kept.put(key, output);
+    return output;
+  };
+}
+function transformer(e, program) {
+  const m2 = marshal(e);
+  let tree = null;
+  return memoize((input) => {
+    tree ?? (tree = dag_default.of(e, program));
+    return m2.to_string(e.apply(tree, m2.of_string(input)));
+  }, program);
+}
+
+// src/runner/native.mjs
+var import_child_process = require("child_process");
+var import_fs2 = require("fs");
+var import_os = require("os");
+var import_path2 = require("path");
 
 // src/module/fingerprint.mjs
 var import_crypto3 = require("crypto");
@@ -935,7 +929,7 @@ var mix = (parts) => {
 var LEAF_FINGERPRINT = mix([Buffer.from("tree-calculus:leaf")]);
 function fingerprint(text, outer) {
   const fingerprints = /* @__PURE__ */ new Map();
-  const resolve3 = (name) => {
+  const resolve2 = (name) => {
     if (name === LEAF)
       return LEAF_FINGERPRINT;
     const own = fingerprints.get(name) ?? outer?.(name);
@@ -947,11 +941,11 @@ function fingerprint(text, outer) {
   for (const line of text.split(/\r?\n/)) {
     const words = line.split(" ").filter(Boolean);
     if (words.length === 3)
-      fingerprints.set(words[0], mix([resolve3(words[1]), resolve3(words[2])]));
+      fingerprints.set(words[0], mix([resolve2(words[1]), resolve2(words[2])]));
     else if (words.length === 2)
-      fingerprints.set(words[0], resolve3(words[1]));
+      fingerprints.set(words[0], resolve2(words[1]));
     else if (words.length === 1)
-      value = resolve3(words[0]);
+      value = resolve2(words[0]);
   }
   return { fingerprints, value };
 }
@@ -963,31 +957,31 @@ function once(f) {
   return () => value === void 0 ? value = f() : value;
 }
 var scratch = once(() => {
-  const directory = (0, import_fs3.mkdtempSync)((0, import_path3.join)((0, import_os.tmpdir)(), "tree-calculus-"));
-  process.on("exit", () => (0, import_fs3.rmSync)(directory, { recursive: true, force: true }));
+  const directory = (0, import_fs2.mkdtempSync)((0, import_path2.join)((0, import_os.tmpdir)(), "tree-calculus-"));
+  process.on("exit", () => (0, import_fs2.rmSync)(directory, { recursive: true, force: true }));
   return directory;
 });
 function source() {
-  for (let directory = __dirname; ; directory = (0, import_path3.dirname)(directory)) {
-    const candidate = (0, import_path3.join)(directory, SOURCE);
-    if ((0, import_fs3.existsSync)(candidate))
+  for (let directory = __dirname; ; directory = (0, import_path2.dirname)(directory)) {
+    const candidate = (0, import_path2.join)(directory, SOURCE);
+    if ((0, import_fs2.existsSync)(candidate))
       return candidate;
-    if ((0, import_path3.dirname)(directory) === directory)
+    if ((0, import_path2.dirname)(directory) === directory)
       raise(`no ${SOURCE} above ${__dirname}`);
   }
 }
 function source_mtime(from) {
-  const headers = (0, import_path3.resolve)((0, import_path3.dirname)(from), "..");
-  return (0, import_fs3.readdirSync)(headers).filter((name) => name.endsWith(".hpp")).map((name) => (0, import_fs3.statSync)((0, import_path3.join)(headers, name)).mtimeMs).reduce((a, b) => Math.max(a, b), (0, import_fs3.statSync)(from).mtimeMs);
+  const headers = (0, import_path2.resolve)((0, import_path2.dirname)(from), "..");
+  return (0, import_fs2.readdirSync)(headers).filter((name) => name.endsWith(".hpp")).map((name) => (0, import_fs2.statSync)((0, import_path2.join)(headers, name)).mtimeMs).reduce((a, b) => Math.max(a, b), (0, import_fs2.statSync)(from).mtimeMs);
 }
 var eager = () => process.env.TREE_CALCULUS_RUNNER === "eager";
 var executable = once(() => {
   const from = source();
   const name = eager() ? "runner-eager" : "runner";
-  const exe = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.exe`);
-  const current = (0, import_fs3.existsSync)(exe) && (0, import_fs3.statSync)(exe).mtimeMs >= source_mtime(from);
+  const exe = (0, import_path2.join)((0, import_path2.dirname)(from), `${name}.exe`);
+  const current = (0, import_fs2.existsSync)(exe) && (0, import_fs2.statSync)(exe).mtimeMs >= source_mtime(from);
   if (!current) {
-    const mine = (0, import_path3.join)((0, import_path3.dirname)(from), `${name}.${writer}.exe`);
+    const mine = (0, import_path2.join)((0, import_path2.dirname)(from), `${name}.${writer}.exe`);
     (0, import_child_process.execFileSync)(process.env.CXX ?? "c++", [
       "-O3",
       "-std=c++17",
@@ -997,17 +991,17 @@ var executable = once(() => {
       "-o",
       mine
     ], { stdio: "inherit" });
-    (0, import_fs3.renameSync)(mine, exe);
+    (0, import_fs2.renameSync)(mine, exe);
   }
   return exe;
 });
 var server = once(() => {
   const exe = executable();
-  const to5 = (0, import_path3.join)(scratch(), "to-runner");
-  const from = (0, import_path3.join)(scratch(), "from-runner");
+  const to5 = (0, import_path2.join)(scratch(), "to-runner");
+  const from = (0, import_path2.join)(scratch(), "from-runner");
   (0, import_child_process.execFileSync)("mkfifo", [to5, from]);
-  const write_fd = (0, import_fs3.openSync)(to5, "r+");
-  const read_fd = (0, import_fs3.openSync)(from, "r+");
+  const write_fd = (0, import_fs2.openSync)(to5, "r+");
+  const read_fd = (0, import_fs2.openSync)(from, "r+");
   const runner = (0, import_child_process.spawn)(exe, [], { stdio: [write_fd, read_fd, "inherit"] });
   runner.unref();
   process.on("exit", () => runner.kill());
@@ -1015,7 +1009,7 @@ var server = once(() => {
   const line = () => {
     let text = "";
     for (; ; ) {
-      if ((0, import_fs3.readSync)(read_fd, byte, 0, 1, null) === 0)
+      if ((0, import_fs2.readSync)(read_fd, byte, 0, 1, null) === 0)
         raise("runner: no response");
       if (byte[0] === 10)
         return text;
@@ -1025,14 +1019,14 @@ var server = once(() => {
   const bytes = (length) => {
     const buffer = Buffer.alloc(length);
     for (let got = 0; got < length; )
-      got += (0, import_fs3.readSync)(read_fd, buffer, got, length - got, null);
+      got += (0, import_fs2.readSync)(read_fd, buffer, got, length - got, null);
     return buffer;
   };
   return (command, payload) => {
-    (0, import_fs3.writeSync)(write_fd, `${command}
+    (0, import_fs2.writeSync)(write_fd, `${command}
 `);
     if (payload)
-      (0, import_fs3.writeSync)(write_fd, payload);
+      (0, import_fs2.writeSync)(write_fd, payload);
     const head = line();
     if (head === "ok")
       return Buffer.alloc(0);
@@ -1066,21 +1060,21 @@ function terminator(text) {
   return words.length === 1 ? words[0] : raise("dag representation was unexpectedly not terminated by a value");
 }
 function as_file(text, name) {
-  const path = (0, import_path3.join)(scratch(), name);
-  (0, import_fs3.writeFileSync)(path, text);
+  const path = (0, import_path2.join)(scratch(), name);
+  (0, import_fs2.writeFileSync)(path, text);
   return path;
 }
 var SIDECAR_STORE = "module-fp-v1";
 function recent_dumps(modules) {
-  const at = (0, import_path3.join)((0, import_path3.dirname)(modules.path(text_key(""))), "RECENT");
-  const list = (0, import_fs3.existsSync)(at) ? (0, import_fs3.readFileSync)(at, "utf8").split("\n").filter(Boolean) : [];
+  const at = (0, import_path2.join)((0, import_path2.dirname)(modules.path(text_key(""))), "RECENT");
+  const list = (0, import_fs2.existsSync)(at) ? (0, import_fs2.readFileSync)(at, "utf8").split("\n").filter(Boolean) : [];
   return {
     list,
     remember(key) {
       const next = [key.toString("hex"), ...list.filter((k) => k !== key.toString("hex"))];
       const temporary = `${at}.${writer}.tmp`;
-      (0, import_fs3.writeFileSync)(temporary, next.slice(0, 8).join("\n") + "\n");
-      (0, import_fs3.renameSync)(temporary, at);
+      (0, import_fs2.writeFileSync)(temporary, next.slice(0, 8).join("\n") + "\n");
+      (0, import_fs2.renameSync)(temporary, at);
     }
   };
 }
@@ -1172,7 +1166,7 @@ function loadable(text, name) {
     return final;
   });
 }
-function transformer2(_, program, options = {}) {
+function transformer2(_, program) {
   const path = loadable(program, "program.dag");
   const symbol = once(() => terminator(program));
   return memoize((input) => {
@@ -1180,7 +1174,7 @@ function transformer2(_, program, options = {}) {
     return reduced(path(), "string", `~result ${symbol()} ${argument}
 ~result
 `).toString("utf8");
-  }, program, options);
+  }, program);
 }
 function environment2(e, text, _ = {}) {
   const path = loadable(text, "module.dag");
@@ -1294,7 +1288,7 @@ function parse_args(argv) {
   }
   return { command, files, options };
 }
-var read = (file) => (0, import_fs4.readFileSync)(file === "-" ? 0 : file, "utf8");
+var read = (file) => (0, import_fs3.readFileSync)(file === "-" ? 0 : file, "utf8");
 var read_input = (files) => read(files.length ? files[0] : "-");
 function last_symbol(text) {
   let last = null;

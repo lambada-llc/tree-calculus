@@ -24,7 +24,7 @@ import formatter_dag from "../format/dag.mjs";
 import { MODULE_STORE, REDUCE_STORE, Store, store, text_key } from "../module/cache.mjs";
 import { EnvOptions, Environment } from "../module/env.mjs";
 import { fingerprint } from "../module/fingerprint.mjs";
-import { memoize, TransformerOptions } from "../module/transform.mjs";
+import { memoize } from "../module/transform.mjs";
 
 const SOURCE = 'implementation/cpp/dag-machine/runner.cpp';
 
@@ -352,7 +352,6 @@ function loadable(text: string, name: string): () => string {
 function transformer<TTree>(
   _: Evaluator<TTree>,
   program: string,
-  options: TransformerOptions = {},
 ): (input: string) => string {
   const path = loadable(program, 'program.dag');
   const symbol = once(() => terminator(program));
@@ -360,7 +359,7 @@ function transformer<TTree>(
     const argument = bound(path(), '~input', input);
     return reduced(path(), 'string', `~result ${symbol()} ${argument}\n~result\n`)
       .toString('utf8');
-  }, program, options);
+  }, program);
 }
 
 /** `environment`, reducing each symbol natively and reading the value back as a DAG. */

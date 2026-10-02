@@ -8,26 +8,20 @@
 //   compile('\\x x');
 //
 // Because a tree is a pure function, the same input always gives the same
-// output, which makes the result safe to keep on disk forever. `cache_dir` does
-// that, keyed on the transformation and its input together, so a rebuild only
-// pays for the parts that actually changed — and changing the program correctly
-// invalidates everything.
+// output, which makes the result safe to keep on disk forever. With
+// TREE_CALCULUS_CACHE set it is kept there, beside every other reduction cache
+// (see cache.mts), keyed on the transformation and its input together, so a
+// rebuild only pays for the parts that actually changed — and changing the
+// program correctly invalidates everything.
 
 import { createHash } from "crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "fs";
-import { resolve } from "path";
-import { Evaluator, marshal, writer } from "../common.mjs";
+import { Evaluator, marshal } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
-
-export interface TransformerOptions {
-  /** Directory to memoize results in. Omit for no caching. */
-  cache_dir?: string;
-}
-
-const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+import { store, text_key, TRANSFORM_STORE } from "./cache.mjs";
 
 /**
- * `run`, with its results kept on disk, keyed by the program and the input.
+ * `run`, with its results kept in the transform store, keyed by the program
+ * and the input.
  *
  * Separate from `transformer` because who *runs* the tree is not fixed — the
  * native runner in ../runner/native.mts transforms the same text with the same
@@ -37,28 +31,18 @@ const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
 export function memoize(
   run: (input: string) => string,
   program: string,
-  options: TransformerOptions = {},
 ): (input: string) => string {
-  const { cache_dir } = options;
-  if (cache_dir === undefined) return run;
+  const kept = store(TRANSFORM_STORE);
+  if (!kept) return run;
 
-  mkdirSync(cache_dir, { recursive: true });
-  const program_hash = sha256(program);
+  const program_key = text_key(program).toString('hex');
   return (input: string): string => {
-    const path = resolve(cache_dir, sha256(`${program_hash}\n${input}`));
-    if (!existsSync(path)) {
-      // Through a temporary and a rename, so a parallel writer filling the
-      // same cache never shows a reader half an entry.
-      const temporary = `${path}.${writer}.tmp`;
-      try {
-        writeFileSync(temporary, run(input));
-        renameSync(temporary, path);
-      } catch (error) {
-        rmSync(temporary, { force: true });
-        throw error;
-      }
-    }
-    return readFileSync(path, 'utf8');
+    const key = createHash('sha256').update(`${program_key}\n${input}`).digest();
+    const hit = kept.get(key);
+    if (hit) return hit.toString('utf8');
+    const output = run(input);
+    kept.put(key, output);
+    return output;
   };
 }
 
@@ -71,12 +55,11 @@ export function memoize(
 export function transformer<TTree>(
   e: Evaluator<TTree>,
   program: string,
-  options: TransformerOptions = {},
 ): (input: string) => string {
   const m = marshal(e);
   let tree: TTree | null = null;
   return memoize((input: string): string => {
     tree ??= formatter_dag.of(e, program);
     return m.to_string(e.apply(tree, m.of_string(input)));
-  }, program, options);
+  }, program);
 }
