@@ -820,8 +820,12 @@ public:
    * and these two operands — and the memo, consulted on the way into the three
    * shapes that go on to reduce something. Everything else only reads nodes and
    * interns, neither of which collects.
+   *
+   * Out of line, so that the step loop has the registers to itself: inlined
+   * into runner.cpp's parse_dag_into, it reloads the arena and the stack on
+   * every step.
    */
-  Tree apply(Tree a, Tree b) {
+  [[gnu::noinline]] Tree apply(Tree a, Tree b) {
     const size_t base = _stack.size();
     Tree result;
 
