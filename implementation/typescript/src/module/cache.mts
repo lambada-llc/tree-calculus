@@ -1,7 +1,7 @@
 // The on-disk reduction cache, opted into with TREE_CALCULUS_CACHE=<dir>.
 //
 // Reduction is pure, so anything derived from a term can be kept forever,
-// keyed by the term's fingerprint (see fingerprint.mts). Two stores live here:
+// keyed by what decides it. Three stores live here:
 //
 //   reduce/  the reduced DAG text of a term, keyed by the term's fingerprint —
 //            what lets an `eval` of a symbol skip reduction entirely
@@ -9,6 +9,9 @@
 //   module/  the fully evaluated form of a whole module, keyed by a hash of
 //            its text — what lets a module be re-loaded without re-reducing
 //            every binding (see `dump` in the native runner).
+//   transform/  a transformer's output, keyed by a hash of the program and the
+//            input — what lets a rebuild compile only the sources that
+//            changed (see transform.mts).
 //
 // Writes go through a temporary file and a rename, so a concurrent reader —
 // or a parallel warmer filling the same cache — never sees half an entry.
@@ -29,6 +32,7 @@ export const cache_dir = (): string | undefined =>
 // runtime will read.
 export const REDUCE_STORE = 'reduce-v1';
 export const MODULE_STORE = 'module-v1';
+export const TRANSFORM_STORE = 'transform-v1';
 
 export const text_key = (text: string): Buffer =>
   createHash('sha256').update(text).digest();

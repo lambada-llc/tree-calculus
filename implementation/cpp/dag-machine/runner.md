@@ -166,7 +166,9 @@ dump instead of re-evaluating it), and symbols' values under
 `reduce-v1/` (what `reduce` returned for one, keyed by a Merkle
 fingerprint of its term, so a symbol whose term did not change is
 answered without spawning the runner at all; an expression is not kept,
-its caller decides what of its answer is worth keeping). Reduction is
+its caller decides what of its answer is worth keeping), and a
+transformer's outputs under `transform-v1/` (keyed by the program and
+the input, so a rebuild compiles only the sources that changed). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
 an entry refreshes its mtime, which is what lets a warmer prune by age.
 

@@ -87,6 +87,19 @@ check "the changed module was dumped too" 2 "$entries"
 # The lazy runner answers a question nobody cached yet, over the same cache.
 check "lazy runner matches Node" "$(oracle "$M1" p3)" "$(evaluate 1 "$M1" p3)"
 
+# A transformer keeps its outputs in the same cache, under transform-v1: asked
+# the same thing again, a fresh process answers without spawning the runner.
+# The program is the identity, fork(stem(stem △), △), so the answer is the input.
+transform() { # -> the output, then the runner's stats lines
+  TREE_CALCULUS_RUNNER=eager TREE_CALCULUS_CACHE=$CACHE RUNNER_STATS=1 node -e '
+    const tc = require(process.argv[1]);
+    process.stdout.write(tc.transformer(tc.evaluator, "s △ △\nu △ s\nsu △ u\nid su △\nid\n")("hello"));
+  ' "$DAG_JS" 2>&1
+}
+check "transformer answers" "hello" "$(transform | grep -v runner-stats)"
+check "a kept transform spawns no runner" "hello" "$(transform)"
+check "it is kept in transform-v1" 1 "$(ls "$CACHE/transform-v1" | wc -l)"
+
 # The wire protocol itself. Everything above asks for a symbol; `bind` — how
 # host text becomes an argument, and the half of `transformer` no oracle here
 # covers — is only reached by spelling a request out. The runtime built the
