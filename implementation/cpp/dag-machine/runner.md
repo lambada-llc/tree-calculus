@@ -94,7 +94,8 @@ binding as the module is read. That is a claim about the module — one
 definition that only converges lazily hangs the build — so it is the
 caller's to make, and `TREE_CALCULUS_RUNNER=eager` is where they make it.
 In exchange, a repository that holds itself to eager termination builds
-in about half the time.
+in about half the time. It also answers lambada's `skip_line` natively, a
+jet proven sound in [`implementation/lean/Cpp/`](../../lean/Cpp/README.md).
 
 Both keep memory bounded by a non-moving mark-and-sweep over `roots()`,
 run from inside the reduction loop (see `RUNNER_RSS_THRESHOLD_MB`), and
@@ -140,8 +141,14 @@ a little more re-reduction as well as more sweeps.
 Any non-`0` value makes the runner print one line per command to
 stderr: wall time, and under `-DRUNNER_EAGER` the evaluator's counters
 for that command (reduction steps, memo hits and writes, collections and
-what they marked, arena high water). This is how one finds out where a
-build's time actually goes before optimizing anything.
+what they marked, jets taken and the list elements they skipped, arena
+high water). This is how one finds out where a build's time actually
+goes before optimizing anything.
+
+#### `RUNNER_JETS` *(default: on)*
+
+`0` makes the eager runner reduce what its jets would answer, as it
+would without them, step for step.
 
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
