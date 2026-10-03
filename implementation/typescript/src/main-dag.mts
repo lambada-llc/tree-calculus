@@ -27,10 +27,9 @@ export {
 } from "./module/link.mjs";
 export { to_file, of_file, is_plausible_file_name } from "./format/file.mjs";
 export { evaluator, formatters, m as marshal } from "./format/formats.mjs";
-// The reduction cache's addressing scheme, for cache warmers that want to
-// know — before spawning anything — which answers are already on disk.
+// The cache's addressing scheme, for a build tool keeping its own store.
 export { fingerprint } from "./module/fingerprint.mjs";
-export { store as cache_store, REDUCE_STORE, MODULE_STORE } from "./module/cache.mjs";
+export { store as cache_store } from "./module/cache.mjs";
 
 const USAGE = `Usage: dag <command> [options] [file...]
 

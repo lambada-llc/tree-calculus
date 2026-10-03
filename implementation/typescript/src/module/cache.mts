@@ -28,8 +28,7 @@ export const cache_dir = (): string | undefined =>
 
 // Store names carry the format version of what is in them: bump one when its
 // entries' meaning or encoding changes, and old entries are simply never found
-// again. Exported because a cache warmer needs to probe the same stores the
-// runtime will read.
+// again.
 export const REDUCE_STORE = 'reduce-v1';
 export const MODULE_STORE = 'module-v1';
 export const TRANSFORM_STORE = 'transform-v1';
