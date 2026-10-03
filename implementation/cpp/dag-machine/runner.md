@@ -95,7 +95,9 @@ definition that only converges lazily hangs the build — so it is the
 caller's to make, and `TREE_CALCULUS_RUNNER=eager` is where they make it.
 In exchange, a repository that holds itself to eager termination builds
 in about half the time. It also answers lambada's `skip_line` natively, a
-jet proven sound in [`implementation/lean/Cpp/`](../../lean/Cpp/README.md).
+jet proven sound in [`implementation/lean/Cpp/`](../../lean/Cpp/README.md),
+and arboretum's `Nat.divmod__fastest` (so `div__fastest` and `mod__fastest`),
+one not proven yet.
 
 Both keep memory bounded by a non-moving mark-and-sweep over `roots()`,
 run from inside the reduction loop (see `RUNNER_RSS_THRESHOLD_MB`), and
