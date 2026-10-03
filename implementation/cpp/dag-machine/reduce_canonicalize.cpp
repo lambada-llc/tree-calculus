@@ -294,12 +294,18 @@ int main(int argc, char* argv[]) {
     }
   }
 
-  // Pre-allocate for typical workload
+  // Pre-allocate for typical workload — for the maps, a library's: growing one
+  // rehashes every entry it holds, so on forest's library (6.8M memo entries,
+  // 2.1M nodes) reserving them up front halves the run time. A tiny module
+  // pays ~0.14 s and ~200 MB for it.
   env.reserve(1 << 20);
   alias_v.reserve(1 << 20);
   canon_v.reserve(1 << 20);
   named_strs.reserve(1 << 18);
   output_buffer.reserve(1 << 18);
+  apply_memo.reserve(1 << 24);
+  hash_cons.reserve(1 << 22);
+  node_defs_idx.reserve(1 << 22);
 
   int32_t leaf_id = intern("\xe2\x96\xb3"); // △
   ensure_id(leaf_id);
