@@ -176,6 +176,21 @@ private:
     uint32_t meta() const { return hi >> 32; }     // MEMOIZE: low bits of the step counter at push
   };
 
+  // The stack's allocator, which is where set_limit() holds it: the stack only
+  // grows by asking it, so a step that does not grow the stack pays nothing.
+  struct StackAllocator {
+    using value_type = Frame;
+    template <typename> struct rebind { using other = StackAllocator; };
+    const BasicEagerGraphNilMmap32 *e;
+    Frame *allocate(size_t frames) {
+      if (frames > e->_max_frames) e->out_of_memory("the stack");
+      return std::allocator<Frame>().allocate(frames);
+    }
+    void deallocate(Frame *at, size_t frames) { std::allocator<Frame>().deallocate(at, frames); }
+    bool operator==(const StackAllocator &other) const { return e == other.e; }
+    bool operator!=(const StackAllocator &other) const { return e != other.e; }
+  };
+
   /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
   struct Memo {
     uint32_t a;
@@ -190,6 +205,12 @@ private:
   size_t _live = 0;    // what the last collection found, for sizing the next one
   size_t _budget;      // collect once _head reaches this
 
+  // What set_limit() allows (0 MB: no limit): the most a collection may raise
+  // the budget to, and the most frames the stack may take.
+  size_t _limit_mb = 0;
+  size_t _max_budget = ARENA_NODES;
+  size_t _max_frames = SIZE_MAX;
+
 public:
   // Counters for RUNNER_STATS; incrementing them is noise next to the memory
   // traffic they count, so they are unconditional.
@@ -203,7 +224,7 @@ private:
   // The continuations being unwound, reused across calls. Nested apply() calls
   // take the region above the size they found, so an outer reduction's frames
   // stay where they are — and stay roots — while an inner one runs.
-  std::vector<Frame> _stack;
+  std::vector<Frame, StackAllocator> _stack{StackAllocator{this}};
   std::vector<Tree> _roots;
   std::vector<Tree> _grey; // mark stack, reused across collections
 
@@ -596,12 +617,27 @@ private:
    * most of what starting a runner cost — and a small request never fills one.
    */
   void size_memo() {
-    const size_t cap = _budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP;
-    _memo_cap = std::min(round_up_pow2(_budget / 8), cap);
+    _memo_cap = memo_cap(_budget);
     std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
     _memo_mask = MIN_TABLE - 1;
     _memo_puts = 0;
     std::fill(std::begin(_cold), std::end(_cold), 0);
+  }
+
+  static size_t memo_cap(size_t budget) {
+    return std::min(round_up_pow2(budget / 8), budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP);
+  }
+
+  /** What a budget of `nodes` holds at most, in bytes: the arena up to it, and
+   * the hash-consing table and memo at the sizes it takes them to. */
+  size_t footprint(size_t nodes) const {
+    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Tree) + memo_cap(nodes) * sizeof(Memo);
+  }
+
+  /** `what` would grow past what set_limit() allows, or with no limit, the arena. */
+  [[noreturn, gnu::noinline]] void out_of_memory(const char *what) const {
+    throw std::runtime_error(std::string("out of memory: ") + what + " would pass " +
+                             (_limit_mb ? "RUNNER_RSS_LIMIT_MB=" + std::to_string(_limit_mb) : "2^31 nodes"));
   }
 
   /**
@@ -625,9 +661,8 @@ private:
     // is what keeps a genuinely big term from turning into a collection per
     // allocation. There is nothing left to grow into at the ceiling.
     while (_live * 2 > _budget) {
-      if (_budget >= ARENA_NODES)
-        throw std::runtime_error("arena exhausted: the live set does not fit in 2^31 nodes");
-      _budget = std::min(_budget * 2, ARENA_NODES);
+      if (_budget >= _max_budget) out_of_memory("the live set");
+      _budget = std::min(_budget * 2, _max_budget);
       size_memo();
     }
   }
@@ -732,10 +767,31 @@ public:
   /** How many nodes the last collection found reachable. */
   size_t live() const { return _live; }
 
-  /** Collect at most every `nodes` allocations. 0 never collects. */
+  /** Collect at most every `nodes` allocations, lowered to what set_limit()
+   * allows. 0 never collects, unless a limit says otherwise. */
   void set_budget(size_t nodes) {
-    _budget = nodes ? nodes : ARENA_NODES;
+    _budget = std::min(nodes ? nodes : ARENA_NODES, _max_budget);
     size_memo();
+  }
+
+  /**
+   * Fail a reduction, with "out of memory", rather than let it hold more than
+   * `mb` MiB (0: no limit) in the arena up to its budget, the hash-consing table
+   * and memo that budget sizes, and the stack — all a reduction grows. It runs
+   * away by a live set that keeps raising the budget, or a stack that never
+   * unwinds, so each gets a ceiling, fixed here so that whether a request fits
+   * does not depend on what ran before it: for the budget, the largest power of
+   * two whose footprint fits in three quarters of the limit (and the budget is
+   * lowered to it if above), for the stack, the frames that fit in the rest with
+   * room for the copy it is moved into as it grows.
+   */
+  void set_limit(size_t mb) {
+    const size_t bytes = mb ? mb << 20 : SIZE_MAX;
+    _limit_mb = mb;
+    _max_budget = ARENA_NODES;
+    while (footprint(_max_budget) > bytes / 4 * 3) _max_budget /= 2;
+    _max_frames = (bytes - footprint(_max_budget)) / sizeof(Frame) / 3 * 2;
+    set_budget(_budget);
   }
 
   std::string stats() {
@@ -918,8 +974,11 @@ public:
       return result;
     } catch (...) {
       // An exhausted arena leaves half a reduction on the stack; drop it, so the
-      // frames of a request that failed do not stay roots for every later one.
+      // frames of a request that failed do not stay roots for every later one,
+      // and once no reduction is left, the memory they took: a runaway's is most
+      // of the limit.
       _stack.resize(base);
+      if (!base) _stack.shrink_to_fit();
       throw;
     }
   }

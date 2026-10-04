@@ -699,11 +699,14 @@ static int run_server() {
 // Forcing a term is recursive and can chain tens of thousands of frames deep on
 // number-crunching benchmark suites; the main thread's 8 MiB stack isn't enough.
 static void* worker_main(void* p) {
+  set_collection_budget(collection_budget_nodes());
 #ifdef RUNNER_EAGER
   // RUNNER_JETS=0: reduce what a jet would answer (see test-runner.sh).
   if (const char* jets = std::getenv("RUNNER_JETS")) g_e.set_jets(std::strcmp(jets, "0") != 0);
+  // RUNNER_RSS_LIMIT_MB: fail a request that would take the runner past it,
+  // rather than the machine (see runner.md). Unset or 0, no limit.
+  if (const char* mb = std::getenv("RUNNER_RSS_LIMIT_MB")) g_e.set_limit(std::strtoull(mb, nullptr, 10));
 #endif
-  set_collection_budget(collection_budget_nodes());
   *static_cast<int*>(p) = run_server();
   return nullptr;
 }
