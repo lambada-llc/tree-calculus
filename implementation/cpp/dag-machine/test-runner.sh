@@ -100,6 +100,57 @@ check "transformer answers" "hello" "$(transform | grep -v runner-stats)"
 check "a kept transform spawns no runner" "hello" "$(transform)"
 check "it is kept in transform-v1" 1 "$(ls "$CACHE/transform-v1" | wc -l)"
 
+# A runner lives as long as its client and no longer: each holds only its own
+# ends of the FIFOs, so either going away is EOF to the other. A worker thread
+# asks the runner something, the way a build tool's jobs do, then either hands
+# over the runner's pid and waits for more until it is terminated, or kills the
+# runner and asks again. Nobody may be left waiting: not the runner for a client
+# that is gone, nor the client for an answer from a runner that is.
+lifetime() { # terminate|kill
+  env -u TREE_CALCULUS_CACHE TREE_CALCULUS_RUNNER=eager node -e '
+    const { spawnSync } = require("child_process");
+    const { Worker } = require("worker_threads");
+    const worker = new Worker(`
+      const { execFileSync } = require("child_process");
+      const { parentPort, workerData: [dag, module, how] } = require("worker_threads");
+      const tc = require(dag);
+      const ask = tc.environment(tc.evaluator, require("fs").readFileSync(module, "utf8"));
+      ask("d2");
+      const runner = Number(execFileSync("pgrep", ["-P", String(process.pid)]));
+      if (how === "kill") process.kill(runner, "SIGKILL"), ask("p4");
+      parentPort.on("message", () => {}).postMessage(runner);
+    `, { eval: true, workerData: process.argv.slice(1) });
+    // A zombie is gone too: nothing is left in the terminated thread to reap it.
+    const alive = pid =>
+      /^[^Z]/.test(spawnSync("ps", ["-o", "stat=", "-p", `${pid}`], { encoding: "utf8" }).stdout.trim());
+    // "error" only for one saying that the runner is gone; anything else as it is.
+    worker.on("error", e => console.log(/^(runner: no response|EPIPE)/.test(e.message) ? "error" : e.message));
+    worker.on("message", async runner => {
+      await worker.terminate();
+      for (let i = 0; i < 50 && alive(runner); i++) await new Promise(go => setTimeout(go, 100));
+      console.log(alive(runner) ? (process.kill(runner), "alive") : "gone");
+    });
+    // Exiting would wait for a worker that waits for ever.
+    setTimeout(() => (console.log("hangs"), process.kill(process.pid, "SIGKILL")), 10000).unref();
+  ' "$DAG_JS" "$M1" "$1"
+}
+check "a terminated worker leaves no runner behind" gone "$(lifetime terminate)"
+check "a runner that died is an error to its client" error "$(lifetime kill)"
+# Halfway through an answer too: a runner that announces 100 bytes, sends 10 and
+# exits, found by a copy of the runtime where it looks for runner.cpp's binary.
+fake=$CACHE/fake/implementation/cpp/dag-machine
+mkdir -p "$fake" "$CACHE/fake/bin"
+cp "$DAG_JS" "$CACHE/fake/bin/"
+touch "$fake/runner.cpp"
+cat > "$fake/runner-eager.exe" <<'EOF'
+#!/bin/sh
+read -r load && echo ok
+read -r reduce && head -c "${reduce##* }" > /dev/null
+printf 'data 100\n0123456789'
+EOF
+chmod +x "$fake/runner-eager.exe"
+check "so is one that died halfway through an answer" error "$(DAG_JS=$CACHE/fake/bin/dag.js lifetime kill)"
+
 # The wire protocol itself. Everything above asks for a symbol; `bind` — how
 # host text becomes an argument, and the half of `transformer` no oracle here
 # covers — is only reached by spelling a request out. The runtime built the
