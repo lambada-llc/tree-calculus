@@ -14,8 +14,8 @@
 
 import { execFileSync, spawn } from "child_process";
 import {
-  existsSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync,
-  renameSync, rmSync, statSync, writeFileSync, writeSync,
+  closeSync, constants, existsSync, mkdtempSync, openSync, readdirSync, readFileSync,
+  readSync, renameSync, rmSync, statSync, writeFileSync, writeSync,
 } from "fs";
 import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
@@ -99,6 +99,18 @@ const executable = once(() => {
 });
 
 /**
+ * A FIFO's two ends, [read, write], as a pipe has them. Opening one end waits
+ * for the other to be open, so a non-blocking reader stands in meanwhile.
+ */
+function ends(path: string): [number, number] {
+  const hold = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK);
+  const write = openSync(path, 'w');
+  const read = openSync(path, 'r');
+  closeSync(hold);
+  return [read, write];
+}
+
+/**
  * A runner, talked to over a pair of FIFOs.
  *
  * One long-lived process rather than one per request, because a request is not
@@ -107,10 +119,11 @@ const executable = once(() => {
  * further along for the next one.
  *
  * FIFOs rather than the pipes `spawn` would set up, because everything in this
- * library is synchronous and Node only offers those asynchronously. Opened
- * read-write so that neither end blocks waiting for the other and neither side
- * ever reads EOF, `readSync` blocks until the runner answers — which is exactly
- * the behaviour a synchronous client wants.
+ * library is synchronous and Node only offers those asynchronously. Used as
+ * pipes all the same, each side holding only the ends it uses, so that either
+ * side going away is EOF to the other: a runner reads it once the process or
+ * thread that asked is gone (Node closes a worker's fds on its way out) and
+ * exits, and a client reads it once its runner is gone and says so.
  */
 const server = once(() => {
   // Built before the FIFOs are made: `once` remembers only what succeeded, so a
@@ -120,27 +133,31 @@ const server = once(() => {
   const to = join(scratch(), 'to-runner');
   const from = join(scratch(), 'from-runner');
   execFileSync('mkfifo', [to, from]);
-  const write_fd = openSync(to, 'r+');
-  const read_fd = openSync(from, 'r+');
-  const runner = spawn(exe, [], { stdio: [write_fd, read_fd, 'inherit'] });
+  const [stdin, write_fd] = ends(to);
+  const [read_fd, stdout] = ends(from);
+  const runner = spawn(exe, [], { stdio: [stdin, stdout, 'inherit'] });
+  closeSync(stdin);
+  closeSync(stdout);
   // Waiting for the runner is never what keeps this process alive: it only ever
   // has something to say in response to being asked, and it is asked
   // synchronously.
   runner.unref();
-  process.on('exit', () => runner.kill());
 
+  // EOF, before an answer or halfway through one, is a runner that is gone.
+  const read = (buffer: Buffer, at: number, length: number): number =>
+    readSync(read_fd, buffer, at, length, null) || raise('runner: no response');
   const byte = Buffer.alloc(1);
   const line = (): string => {
     let text = '';
     for (; ;) {
-      if (readSync(read_fd, byte, 0, 1, null) === 0) raise('runner: no response');
+      read(byte, 0, 1);
       if (byte[0] === 10) return text;
       text += String.fromCharCode(byte[0]);
     }
   };
   const bytes = (length: number): Buffer => {
     const buffer = Buffer.alloc(length);
-    for (let got = 0; got < length;) got += readSync(read_fd, buffer, got, length - got, null);
+    for (let got = 0; got < length;) got += read(buffer, got, length - got);
     return buffer;
   };
 

@@ -993,22 +993,30 @@ var executable = once(() => {
   }
   return exe;
 });
+function ends(path) {
+  const hold = (0, import_fs2.openSync)(path, import_fs2.constants.O_RDONLY | import_fs2.constants.O_NONBLOCK);
+  const write = (0, import_fs2.openSync)(path, "w");
+  const read2 = (0, import_fs2.openSync)(path, "r");
+  (0, import_fs2.closeSync)(hold);
+  return [read2, write];
+}
 var server = once(() => {
   const exe = executable();
   const to5 = (0, import_path2.join)(scratch(), "to-runner");
   const from = (0, import_path2.join)(scratch(), "from-runner");
   (0, import_child_process.execFileSync)("mkfifo", [to5, from]);
-  const write_fd = (0, import_fs2.openSync)(to5, "r+");
-  const read_fd = (0, import_fs2.openSync)(from, "r+");
-  const runner = (0, import_child_process.spawn)(exe, [], { stdio: [write_fd, read_fd, "inherit"] });
+  const [stdin, write_fd] = ends(to5);
+  const [read_fd, stdout] = ends(from);
+  const runner = (0, import_child_process.spawn)(exe, [], { stdio: [stdin, stdout, "inherit"] });
+  (0, import_fs2.closeSync)(stdin);
+  (0, import_fs2.closeSync)(stdout);
   runner.unref();
-  process.on("exit", () => runner.kill());
+  const read2 = (buffer, at, length) => (0, import_fs2.readSync)(read_fd, buffer, at, length, null) || raise("runner: no response");
   const byte = Buffer.alloc(1);
   const line = () => {
     let text = "";
     for (; ; ) {
-      if ((0, import_fs2.readSync)(read_fd, byte, 0, 1, null) === 0)
-        raise("runner: no response");
+      read2(byte, 0, 1);
       if (byte[0] === 10)
         return text;
       text += String.fromCharCode(byte[0]);
@@ -1017,7 +1025,7 @@ var server = once(() => {
   const bytes = (length) => {
     const buffer = Buffer.alloc(length);
     for (let got = 0; got < length; )
-      got += (0, import_fs2.readSync)(read_fd, buffer, got, length - got, null);
+      got += read2(buffer, got, length - got);
     return buffer;
   };
   return (command, payload) => {
