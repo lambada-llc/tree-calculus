@@ -181,6 +181,26 @@ last=$({ printf 'load %s\n' "$CACHE/id.dag"
        } | RUNNER_STATS=1 RUNNER_RSS_THRESHOLD_MB=1 "$DIR/runner-eager.exe" 2>&1 >/dev/null | grep -o 'arena=[0-9]*' | tail -1)
 check "the budget bounds the arena across long binds" 1 "$(( ${last#arena=} < 400000 ))"
 
+# A request that would take the runner past RUNNER_RSS_LIMIT_MB fails, saying
+# which way it ran away, and the next one is answered. W W, for W = △(△△)(S I I),
+# is △ W (W W): a recursion that never returns, so the stack. A bound string is
+# live, so at 1 MB the 80,000 cells of $long are a live set that does not fit.
+runaway=$'~a △ id\n~b △ ~a\n~sii ~b id\n~c △ △\n~d △ ~c\n~w ~d ~sii\n~r ~w ~w\n~r\n'
+transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
+               printf 'reduce dag %d\n' "${#runaway}"; printf '%s' "$runaway"
+               printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
+               printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
+               printf 'bind ~x 5\nhello'
+               printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
+             } | RUNNER_RSS_LIMIT_MB=1 "$DIR/runner-eager.exe")
+check "RUNNER_RSS_LIMIT_MB fails a runaway, and the runner goes on" "ok
+err out of memory: the stack would pass RUNNER_RSS_LIMIT_MB=1
+ok
+err out of memory: the live set would pass RUNNER_RSS_LIMIT_MB=1
+ok
+data 5
+hello" "$transcript"
+
 # skip_line's jet, which test-jets.cpp tests itself: RUNNER_STATS counts each request's
 # jets and the elements they skipped, and RUNNER_JETS=0 turns them off. skip_line applied
 # to "ab\ncd" and then, in the same session, to "abc\nef": "ef" either way.

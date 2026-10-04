@@ -118,7 +118,8 @@ These influence runtime behaviour. All are optional; defaults aim to
 Collection budget, in MiB of arena. Once the arena passes it, the
 evaluator marks from its root set — every binding of the loaded module,
 plus whatever the request itself is holding — and sweeps the rest onto a
-free list. `0` lets the arena grow unchecked.
+free list. `0` lets the arena grow unchecked. A `RUNNER_RSS_LIMIT_MB`
+lowers the budget to what fits under it, `0` included (see below).
 
 This runs from *inside* the reduction loop, not between commands: a
 single `reduce` can allocate a thousand times what it keeps, so peak
@@ -135,6 +136,32 @@ does not turn into a collection per allocation.
 Under `-DRUNNER_EAGER` the same setting also sizes the memo, which is the
 rest of what a collection has to bound; a tighter budget therefore costs
 a little more re-reduction as well as more sweeps.
+
+#### `RUNNER_RSS_LIMIT_MB` *(default: none; eager only)*
+
+The most the eager runner may hold, in MiB: its arena up to the
+collection budget, the hash-consing table and memo that budget sizes,
+and its continuation stack. A request that would take it past this
+answers `err out of memory: the stack would pass RUNNER_RSS_LIMIT_MB=…`
+(or `the live set …`), and the runner goes on to the next one.
+
+Those are the two ways a reduction runs away: a live set that keeps
+growing keeps raising the budget, and a recursion that never returns
+grows the stack — as does a tail loop that runs long enough, since each
+of its steps the memo is to record leaves a frame until the loop ends.
+Each gets its ceiling once, as the runner starts: the budget, the
+largest power of two whose footprint fits in three quarters of the limit
+(lowering `RUNNER_RSS_THRESHOLD_MB` to it, and making `0` collect after
+all); the stack, what is left. So whether a request fits never depends
+on what the runner answered before it, and since each is checked only as
+it grows, a step pays nothing. At the default threshold, 2048 leaves the
+budget as it is and stops the stack at 2^25 frames.
+
+Unset or `0`, nothing holds a runner back but the machine: a runaway
+grows until the kernel refuses it an allocation (`std::bad_alloc`), and
+with several runners at once the OOM killer comes first, naming no
+request. A build that runs a runner per core sets this to each one's
+share of memory.
 
 #### `RUNNER_STATS` *(default: off)*
 
@@ -197,3 +224,4 @@ heavy request, so memory scales with the count.
 | Local with lots of RAM | `RUNNER_RSS_THRESHOLD_MB=4096`                 |
 | Debugging stack issues | `RUNNER_WORKER_STACK_MB=256`                   |
 | Never collect          | `RUNNER_RSS_THRESHOLD_MB=0`                    |
+| A runner per core      | `RUNNER_RSS_LIMIT_MB=<memory per runner>`      |
