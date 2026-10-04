@@ -182,18 +182,20 @@ last=$({ printf 'load %s\n' "$CACHE/id.dag"
 check "the budget bounds the arena across long binds" 1 "$(( ${last#arena=} < 400000 ))"
 
 # A request that would take the runner past RUNNER_RSS_LIMIT_MB fails, saying
-# which way it ran away, and the next one is answered. W W, for W = △(△△)(S I I),
-# is △ W (W W): a recursion that never returns, so the stack. A bound string is
-# live, so at 1 MB the 80,000 cells of $long are a live set that does not fit.
-runaway=$'~a △ id\n~b △ ~a\n~sii ~b id\n~c △ △\n~d △ ~c\n~w ~d ~sii\n~r ~w ~w\n~r\n'
+# which way it would, and the next one is answered. Applied to anything, a list
+# of stems reduces its tail first (the fork-stem rule), a frame a cell: at 1 MB
+# the stack stops at 2^14 frames, short of these 20,000 cells. A bound string is
+# live, so the 80,000 cells of $long are a live set that does not fit. Both are
+# finite, so a runner that ignores the limit answers them instead.
+deep=$'~k △ △\n~e △ ~k\n~p △ ~e\n~c0 △\n'$(seq 20000 | awk '{print "~c" $1 " ~p ~c" $1 - 1}')$'\n~r ~c20000 △\n~r\n'
 transcript=$({ printf 'load %s\n' "$CACHE/id.dag"
-               printf 'reduce dag %d\n' "${#runaway}"; printf '%s' "$runaway"
+               printf 'reduce dag %d\n' "${#deep}"; printf '%s' "$deep"
                printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
                printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
                printf 'bind ~x 5\nhello'
                printf 'reduce string %d\n' "${#request}"; printf '%s' "$request"
              } | RUNNER_RSS_LIMIT_MB=1 "$DIR/runner-eager.exe")
-check "RUNNER_RSS_LIMIT_MB fails a runaway, and the runner goes on" "ok
+check "RUNNER_RSS_LIMIT_MB fails what would pass it, and the runner goes on" "ok
 err out of memory: the stack would pass RUNNER_RSS_LIMIT_MB=1
 ok
 err out of memory: the live set would pass RUNNER_RSS_LIMIT_MB=1
