@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <stdexcept>
@@ -51,18 +52,20 @@
 // would need every one of them registered and written back, at which point the
 // evaluator's interface stops being an index.
 
-class LazyGraphNilMmap32 {
+template <unsigned ARENA_BITS = 30> class BasicLazyGraphNilMmap32 {
 public:
   using Tree = uint32_t;
 
 private:
   // The two top bits of the left field are tags: APP marks an unreduced
   // application, MARK is set by a collection and cleared before it returns. An
-  // index is therefore 30 bits, and the arena is sized to match.
+  // index is therefore 30 bits, and the arena is sized to match: smaller only
+  // for a test, which has to reach the end without 8 GiB of it.
   static constexpr uint32_t APP = 0x80000000u;
   static constexpr uint32_t MARK = 0x40000000u;
   static constexpr uint32_t IDX = 0x3fffffffu;
-  static constexpr size_t ARENA_NODES = size_t(1) << 30;
+  static_assert(ARENA_BITS <= 30);
+  static constexpr size_t ARENA_NODES = size_t(1) << ARENA_BITS;
   static constexpr size_t ARENA_BYTES = ARENA_NODES * 8;
 
   struct Node {
@@ -158,12 +161,12 @@ private:
 public:
   // No collection until set_budget() says so: an unregistered root set makes
   // everything look garbage, so opting in has to be the caller's decision.
-  LazyGraphNilMmap32() : _budget(ARENA_NODES) { map_arena(); }
+  BasicLazyGraphNilMmap32() : _budget(ARENA_NODES) { map_arena(); }
 
-  ~LazyGraphNilMmap32() { munmap(_arena, ARENA_BYTES); }
+  ~BasicLazyGraphNilMmap32() { munmap(_arena, ARENA_BYTES); }
 
-  LazyGraphNilMmap32(const LazyGraphNilMmap32 &) = delete;
-  LazyGraphNilMmap32 &operator=(const LazyGraphNilMmap32 &) = delete;
+  BasicLazyGraphNilMmap32(const BasicLazyGraphNilMmap32 &) = delete;
+  BasicLazyGraphNilMmap32 &operator=(const BasicLazyGraphNilMmap32 &) = delete;
 
   /** Drop everything allocated so far. Every Tree handed out becomes invalid. */
   void clear() {
@@ -200,14 +203,20 @@ public:
    * did not leave much room.
    *
    * Called from the reduction loop, so a single long request stays bounded rather
-   * than only being tidied up once it is over. Growing the budget when the live
-   * set turns out to be a large share of it is what keeps a genuinely big term
-   * from turning into a collection per allocation.
+   * than only being tidied up once it is over. A step allocates up to two nodes,
+   * so it leaves room for two: with room for one, the second would land past the
+   * budget, which once the budget is the whole arena is past its end. Growing the
+   * budget when the live set turns out to be a large share of it is what keeps a
+   * genuinely big term from turning into a collection per allocation, up to the
+   * arena's end, past which there is nothing left to grow into.
    */
   void collect_if_over_budget() {
-    if (_free || _head < _budget) return; // room left, either reused or untouched
+    if ((_free && _arena[_free].v) || _head + 2 <= _budget) return; // two, reused or untouched
     collect();
-    while (_live * 2 > _budget) _budget *= 2;
+    while (_live * 2 > _budget) {
+      if (_budget >= ARENA_NODES) throw std::runtime_error("arena exhausted: the live set does not fit");
+      _budget = std::min(_budget * 2, ARENA_NODES);
+    }
   }
 
   /** The arena's high-water mark in nodes, which is what it costs in memory. */
@@ -216,8 +225,8 @@ public:
   /** How many nodes the last collection found reachable. */
   size_t live() const { return _live; }
 
-  /** Collect at most every `nodes` allocations. 0 never collects. */
-  void set_budget(size_t nodes) { _budget = nodes ? nodes : ARENA_NODES; }
+  /** Collect at most every `nodes` allocations; 0, or more than the arena holds, at its end. */
+  void set_budget(size_t nodes) { _budget = nodes && nodes < ARENA_NODES ? nodes : ARENA_NODES; }
 
   std::string stats() { return std::to_string(allocated()) + " nodes in arena"; }
 
@@ -247,6 +256,22 @@ public:
    * finished, and nothing is allocated across a nested force.
    */
   void whnf(Tree x) {
+    // An exhausted arena leaves half a reduction on the spine and the roots;
+    // drop it, so the redexes of a request that failed do not stay roots for
+    // every later one. Here rather than in force(), which recurses: a handler
+    // there costs each of its frames stack (72 bytes to 104 under clang).
+    const size_t spine = _spine.size(), roots = _roots.size();
+    try {
+      force(x);
+    } catch (...) {
+      _spine.resize(spine);
+      _roots.resize(roots);
+      throw;
+    }
+  }
+
+private:
+  void force(Tree x) {
     if (!(_arena[x].u & APP)) return;
     _roots.push_back(x);
     const size_t base = _spine.size();
@@ -273,10 +298,10 @@ public:
       } else {
         // △ u y @ b — the reduction rules, dispatching on u and then on b.
         const Tree y = head.v;
-        whnf(head.u);
+        force(head.u);
         const Node u = _arena[head.u];
         if (u.u == 0) {           // K: △ △ y @ b = y
-          whnf(y);
+          force(y);
           _arena[s] = _arena[y];
         } else if (u.v == 0) {    // S: △ (△ x) y @ b = (x @ b) (y @ b)
           // Peeking at x, as peek.hpp does for the eager evaluators: the reduct
@@ -286,7 +311,7 @@ public:
           // that matters is x = △ △ x2, which absorbs b — two of every five
           // reductions in a real program. See peek.hpp for the full table.
           const Tree x = u.u;
-          whnf(x);
+          force(x);
           const Node xn = _arena[x];
           const Tree w = xn.u;
           if (w == 0) {                   // x = △        -> △ b (y @ b)
@@ -297,7 +322,7 @@ public:
           }
           bool absorber = false;          // x = △ △ x2, the shape that discards b
           if (xn.v != 0) {
-            whnf(w);
+            force(w);
             absorber = _arena[w].u == 0;
           }
           if (absorber) {
@@ -305,7 +330,7 @@ public:
             // comes first: r would be unreachable across it, and a collection can
             // happen in there.
             const Tree x2 = xn.v;
-            whnf(x2);
+            force(x2);
             const Node x2n = _arena[x2];
             const Tree r = apply(y, b);
             if (x2n.u == 0)      _arena[s] = {r, 0};          // x2 = △    -> △ r
@@ -315,10 +340,10 @@ public:
             _arena[s] = {apply(x, b) | APP, apply(y, b)};
           }
         } else {                  // F: △ (△ w x) y @ b — triage on b
-          whnf(b);
+          force(b);
           const Node arg = _arena[b];
           if (arg.u == 0) {       // b = △     -> w
-            whnf(u.u);
+            force(u.u);
             _arena[s] = _arena[u.u];
           } else if (arg.v == 0) { // b = △d    -> x @ d
             _arena[s] = {u.v | APP, arg.u};
@@ -333,6 +358,7 @@ public:
     _roots.pop_back();
   }
 
+public:
   // Callables are template parameters (not std::function) so the reduction
   // driving this — to_dag, marshalling, Evaluator's utilities — inlines straight
   // through the dispatch, as it does for the eager backends.
@@ -347,3 +373,5 @@ public:
     return fork_case(n.u, n.v);
   }
 };
+
+using LazyGraphNilMmap32 = BasicLazyGraphNilMmap32<>;

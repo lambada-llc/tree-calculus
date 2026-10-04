@@ -10,8 +10,10 @@ node "$DIR/../../lean/Cpp/trees/embed.mjs" --check
 # Compile
 "$DIR/compile.sh"
 
-"${CXX:-c++}" "$DIR/test-jets.cpp" -O3 -std=c++17 -o "$DIR/test-jets.exe"
-"$DIR/test-jets.exe"
+for t in jets lazy; do
+  "${CXX:-c++}" "$DIR/test-$t.cpp" -O3 -std=c++17 -o "$DIR/test-$t.exe"
+  "$DIR/test-$t.exe"
+done
 
 # The runner has an end-to-end suite of its own: native evaluators and the
 # reduction cache against the pure-Node evaluator as oracle.
