@@ -130,7 +130,9 @@ having.
 Bump this on a roomy local machine (e.g. `RUNNER_RSS_THRESHOLD_MB=4096`)
 to collect less often. The budget also raises itself if a collection
 finds that most of the arena is still live, so a genuinely large term
-does not turn into a collection per allocation.
+does not turn into a collection per allocation. It stops at the size of
+the arena (8 GiB lazy, 16 GiB eager): a request that needs it raised
+further fails with `arena exhausted`.
 
 Under `-DRUNNER_EAGER` the same setting also sizes the memo, which is the
 rest of what a collection has to bound; a tighter budget therefore costs
