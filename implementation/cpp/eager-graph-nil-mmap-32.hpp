@@ -595,7 +595,10 @@ private:
       }
       _q[i / 64] |= uint64_t(1) << i % 64;
     }
-    return answered(p, b, fork(natural(_q), natural(_r)));
+    // r before q on every compiler, rather than in argument order, which is the
+    // compiler's: the indices they get decide memo slots, hence step counts.
+    const Tree r = natural(_r);
+    return answered(p, b, fork(natural(_q), r));
   }
 
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
