@@ -1,0 +1,134 @@
+
+== :t  (size 1 nodes)  = △
+  :t x  =  △ x    [steps 1; pattern open nodes 1]
+  (:t x) y  =  △ x y    [steps 1; pattern open nodes 1]
+  ((:t x) y) z  ->  △ x y z    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: needs shape of hole in function position x; frames 0; new open nodes 0]
+
+== :k  (size 2 nodes)  = △ △
+  :k x  =  △ △ x    [steps 1; pattern open nodes 1]
+  (:k x) y  ->  x    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/1/0/0/0/0; halts with value; new open nodes 0]
+
+== :i  (size 5 nodes)  = △ :ct △
+  :i x  ->  x    [steps 4; rules L/S/K/S/FL/FS/FF 1/1/1/1/0/0/0; halts with value; new open nodes 0]
+
+== :s  (size 6 nodes)  = △ Pair.match △
+  :s f  =  △ (△ f)    [steps 4; pattern open nodes 2]
+  (:s f) g  =  △ (△ f) g    [steps 1; pattern open nodes 2]
+  ((:s f) g) x  ->  f x (g x)    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/1/0/0/0; stops: applies hole g; frames 1; new open nodes 0]
+
+== :b  (size 12 nodes)  = #13[12]
+  :b f  =  △ (△ (△ △ f))    [steps 7; pattern open nodes 3]
+  (:b f) g  =  △ (△ (△ △ f)) g    [steps 1; pattern open nodes 3]
+  ((:b f) g) x  ->  △ △ f x (g x)    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/1/0/0/0; stops: applies hole g; frames 1; new open nodes 0]
+
+== :c  (size 28 nodes)  = #21[28]
+  :c f  =  △ (△ (△ △ (△ (△ f)))) :k    [steps 16; pattern open nodes 5]
+  (:c f) g  =  △ (△ f) (△ △ g)    [steps 4; pattern open nodes 3]
+  ((:c f) g) x  ->  f x g    [steps 2; rules L/S/K/S/FL/FS/FF 0/0/1/1/0/0/0; stops: applies hole f; frames 1; new open nodes 0]
+
+== :ct  (size 3 nodes)  = △ :k
+  :ct x  =  △ :k x    [steps 1; pattern open nodes 1]
+  (:ct x) y  ->  △ y (x y)    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/1/0/0/0; stops: applies hole x; frames 1; new open nodes 0]
+
+== fix  (size 57 nodes)  = #127[57]
+  fix f  =  △ #120[15] (△ (△ (△ (△ △ f)) #121[16]))    [steps 16; pattern open nodes 5]
+  (fix f) x  ->  f (△ #120[15] (△ (△ (△ (△ △ f)) #121[16]))) x    [steps 13; rules L/S/K/S/FL/FS/FF 2/3/3/4/0/0/1; stops: applies hole f; frames 1; new open nodes 0]
+
+== fix__wait  (size 64 nodes)  = #108[64]
+  fix__wait f  =  △ #98[18] (△ △ (△ (△ (△ △ f)) #99[19]))    [steps 16; pattern open nodes 5]
+  (fix__wait f) x  ->  f (△ #98[18] (△ △ (△ (△ (△ △ f)) #99[19]))) x    [steps 17; rules L/S/K/S/FL/FS/FF 1/5/5/6/0/0/0; stops: applies hole f; frames 1; new open nodes 0]
+
+== fix__naive  (size 76 nodes)  = #82[76]
+  fix__naive f  =  △ #72[21] (△ △ (△ (△ (△ △ f)) #77[28]))    [steps 16; pattern open nodes 5]
+  (fix__naive f) x  ->  f (△ #72[21] (△ △ (△ (△ (△ △ f)) #77[28]))) x    [steps 23; rules L/S/K/S/FL/FS/FF 2/6/7/8/0/0/0; stops: applies hole f; frames 1; new open nodes 0]
+
+== triage  (size 10 nodes)  = #25[10]
+  triage a  =  △ Pair.match (△ a)    [steps 4; pattern open nodes 2]
+  (triage a) b  =  △ (△ a b)    [steps 4; pattern open nodes 2]
+  ((triage a) b) c  =  △ (△ a b) c    [steps 1; pattern open nodes 2]
+  (((triage a) b) c) x  ->  △ (△ a b) c x    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: triage on hole x; frames 0; new open nodes 0]
+    x = △:  ->  a    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/1/0/0; halts with value; new open nodes 0]
+    x = △x':  ->  b x'    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/1/0; stops: applies hole b; frames 0; new open nodes 0]
+    x = △x'x'':  ->  c x' x''    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/1; stops: applies hole c; frames 1; new open nodes 0]
+
+== wait  (size 60 nodes)  = #43[60]
+  wait a  =  △ (△ (△ △ (△ (△ (△ (△ (△ △ (△ (△ a)))) :k))))) :k    [steps 34; pattern open nodes 10]
+  (wait a) b  =  △ (△ (△ (△ (△ △ (△ (△ a)))) :k)) (△ △ b)    [steps 4; pattern open nodes 8]
+  ((wait a) b) c  ->  a b c    [steps 8; rules L/S/K/S/FL/FS/FF 0/2/3/3/0/0/0; stops: applies hole a; frames 1; new open nodes 0]
+
+== compose  (size 12 nodes)  = #13[12]
+  compose f  =  △ (△ (△ △ f))    [steps 7; pattern open nodes 3]
+  (compose f) g  =  △ (△ (△ △ f)) g    [steps 1; pattern open nodes 3]
+  ((compose f) g) x  ->  △ △ f x (g x)    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/1/0/0/0; stops: applies hole g; frames 1; new open nodes 0]
+
+== const  (size 2 nodes)  = △ △
+  const x  =  △ △ x    [steps 1; pattern open nodes 1]
+  (const x) y  ->  x    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/1/0/0/0/0; halts with value; new open nodes 0]
+
+== let  (size 13 nodes)  = #47[13]
+  let x  =  △ (△ :i) (△ △ x)    [steps 4; pattern open nodes 2]
+  (let x) f  ->  f x    [steps 6; rules L/S/K/S/FL/FS/FF 1/1/2/2/0/0/0; stops: applies hole f; frames 0; new open nodes 0]
+
+== id  (size 5 nodes)  = △ :ct △
+  id x  ->  x    [steps 4; rules L/S/K/S/FL/FS/FF 1/1/1/1/0/0/0; halts with value; new open nodes 0]
+
+== self_apply  (size 12 nodes)  = #28[12]
+  self_apply x  ->  x x    [steps 9; rules L/S/K/S/FL/FS/FF 2/2/2/3/0/0/0; stops: applies hole x; frames 0; new open nodes 0]
+
+== stage  (size 34 nodes)  = #128[34]
+  stage f  =  △ (△ (△ △ (△ (△ (△ △ f))))) :k    [steps 19; pattern open nodes 6]
+  (stage f) x  =  △ (△ (△ △ f)) (△ △ x)    [steps 4; pattern open nodes 4]
+  ((stage f) x) y  ->  f x    [steps 3; rules L/S/K/S/FL/FS/FF 0/0/2/1/0/0/0; stops: applies hole f; frames 0; new open nodes 0]
+
+== List.match  (size 15 nodes)  = #199[15]
+  List.match n  =  △ (△ n △)    [steps 10; pattern open nodes 2]
+  (List.match n) c  =  △ (△ n △) c    [steps 1; pattern open nodes 2]
+  ((List.match n) c) l  ->  △ (△ n △) c l    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: triage on hole l; frames 0; new open nodes 0]
+    l = △:  ->  n    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/1/0/0; halts with value; new open nodes 0]
+    l = △l':  ->  △ l'    [steps 2; rules L/S/K/S/FL/FS/FF 1/0/0/0/0/1/0; halts with value; new open nodes 1]
+    l = △l'l'':  ->  c l' l''    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/1; stops: applies hole c; frames 1; new open nodes 0]
+
+== Bool.match  (size 69 nodes)  = #158[69]
+  Bool.match t  =  △ (△ (△ (△ (△ △ (△ Pair.match (△ t)))) :k)) (△ △ △)    [steps 40; pattern open nodes 7]
+  (Bool.match t) f  =  △ (△ t (△ △ f)) △    [steps 10; pattern open nodes 3]
+  ((Bool.match t) f) b  ->  △ (△ t (△ △ f)) △ b    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: triage on hole b; frames 0; new open nodes 0]
+    b = △:  ->  t    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/1/0/0; halts with value; new open nodes 0]
+    b = △b':  ->  f    [steps 2; rules L/S/K/S/FL/FS/FF 0/0/1/0/0/1/0; halts with value; new open nodes 0]
+    b = △b'b'':  ->  △ b' b''    [steps 3; rules L/S/K/S/FL/FS/FF 1/1/0/0/0/0/1; halts with value; new open nodes 1]
+
+== Option.match  (size 47 nodes)  = #584[47]
+  Option.match n  =  △ (△ (△ Pair.match (△ n))) (△ △ △)    [steps 28; pattern open nodes 4]
+  (Option.match n) s  =  △ (△ n s) △    [steps 7; pattern open nodes 2]
+  ((Option.match n) s) o  ->  △ (△ n s) △ o    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: triage on hole o; frames 0; new open nodes 0]
+    o = △:  ->  n    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/1/0/0; halts with value; new open nodes 0]
+    o = △o':  ->  s o'    [steps 1; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/1/0; stops: applies hole s; frames 0; new open nodes 0]
+    o = △o'o'':  ->  △ o' o''    [steps 3; rules L/S/K/S/FL/FS/FF 1/1/0/0/0/0/1; halts with value; new open nodes 1]
+
+== Pair.match  (size 4 nodes)  = △ (△ △ △)
+  Pair.match f  =  △ (△ △ △) f    [steps 1; pattern open nodes 1]
+  (Pair.match f) p  ->  △ (△ △ △) f p    [steps 0; rules L/S/K/S/FL/FS/FF 0/0/0/0/0/0/0; stops: triage on hole p; frames 0; new open nodes 0]
+
+== List.map  (size 130 nodes)  = #239[130]
+  List.map f  =  △ #120[15] (△ (△ (△ (△ △ (△ (△ (△ △ Pair.match)) (△ (△ (△ △ (△ (△ (△ #33[15] (△ Pair.match f)))))) :k)))) #121[16]))    [steps 43; pattern open nodes 13]
+  (List.map f) l  ->  △ (△ △ △) (△ (△ (△ #33[15] (△ Pair.match f))) (△ △ (△ #120[15] (△ (△ (△ (△ △ (△ (△ (△ △ Pair.match)) (△ (△ (△ △ (△ (△ (△ #33[15] (△ Pair.match f)))))) :k)))) #121[16]))))) l    [steps 20; rules L/S/K/S/FL/FS/FF 2/6/5/6/0/0/1; stops: triage on hole l; frames 0; new open nodes 3]
+    l = △:  ->  △    [steps 21; rules L/S/K/S/FL/FS/FF 2/6/5/6/1/0/1; halts with value; new open nodes 0]
+    l = △l':  ->  △ l'    [steps 22; rules L/S/K/S/FL/FS/FF 3/6/5/6/0/1/1; halts with value; new open nodes 1]
+    l = △l'l'':  ->  #32[14] l' (△ △ △ l' (f l')) (△ #120[15] (△ (△ (△ (△ △ (△ (△ (△ △ Pair.match)) (△ (△ (△ △ (△ (△ (△ #33[15] (△ Pair.match f)))))) :k)))) #121[16]))) l''    [steps 25; rules L/S/K/S/FL/FS/FF 2/6/6/9/0/0/2; stops: applies hole f; frames 4; new open nodes 0]
+
+== List.length  (size 149 nodes)  = #612[149]
+  List.length l  ->  #887[253] l    [steps 20; rules L/S/K/S/FL/FS/FF 2/6/5/6/0/0/1; stops: triage on hole l; frames 0; new open nodes 0]
+    l = △:  ->  △    [steps 21; rules L/S/K/S/FL/FS/FF 2/6/5/6/1/0/1; halts with value; new open nodes 0]
+    l = △l':  ->  △ l'    [steps 22; rules L/S/K/S/FL/FS/FF 3/6/5/6/0/1/1; halts with value; new open nodes 1]
+    l = △l'l'':  ->  #485[96] l'' (#887[253] l'')    [steps 43; rules L/S/K/S/FL/FS/FF 4/12/11/13/0/0/3; stops: triage on hole l''; frames 1; new open nodes 0]
+      l'' = △:  ->  △ :k △    [steps 46; rules L/S/K/S/FL/FS/FF 4/12/12/13/2/0/3; halts with value; new open nodes 0]
+      l'' = △l''':  ->  △ l'''    [steps 48; rules L/S/K/S/FL/FS/FF 6/12/12/13/0/2/3; halts with value; new open nodes 1]
+      l'' = △l'''l'''':  ->  #485[96] (△ l''' l'''') (#485[96] l'''' (#887[253] l''''))    [steps 66; rules L/S/K/S/FL/FS/FF 6/18/17/20/0/0/5; stops: triage on hole l''''; frames 2; new open nodes 1]
+
+== List.length__fastest  (size 272 nodes)  = #604[272]
+  List.length__fastest l  ->  #595[130] l #601[138]    [steps 2; rules L/S/K/S/FL/FS/FF 0/0/1/1/0/0/0; stops: triage on hole l; frames 1; new open nodes 0]
+    l = △:  ->  △    [steps 4; rules L/S/K/S/FL/FS/FF 0/0/2/1/1/0/0; halts with value; new open nodes 0]
+    l = △l':  ->  △ l' #601[138]    [steps 5; rules L/S/K/S/FL/FS/FF 1/1/1/1/0/1/0; halts with value; new open nodes 1]
+    l = △l'l'':  ->  #485[96] #601[138] (#595[130] l'' #601[138])    [steps 29; rules L/S/K/S/FL/FS/FF 2/7/9/10/0/0/1; stops: triage on hole l''; frames 2; new open nodes 0]
+      l'' = △:  ->  △ :k △    [steps 33; rules L/S/K/S/FL/FS/FF 2/7/11/10/2/0/1; halts with value; new open nodes 0]
+      l'' = △l''':  ->  #293[32] l''' Nat._succ_body:1 #601[138]    [steps 36; rules L/S/K/S/FL/FS/FF 3/8/11/11/0/1/2; stops: triage on hole l'''; frames 2; new open nodes 0]
+      l'' = △l'''l'''':  ->  #485[96] #601[138] (#485[96] #601[138] (#595[130] l'''' #601[138]))    [steps 56; rules L/S/K/S/FL/FS/FF 4/14/17/19/0/0/2; stops: triage on hole l''''; frames 3; new open nodes 0]

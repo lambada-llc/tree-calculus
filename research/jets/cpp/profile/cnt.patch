@@ -1,0 +1,263 @@
+--- eager-graph-nil-mmap-32.hpp	2026-10-08 03:29:17.365468288 +0000
++++ eager-cnt.hpp	2026-10-08 03:40:44.535059260 +0000
+@@ -10,6 +10,10 @@
+ #include <sys/mman.h>
+ 
+ #include "jets.hpp"
++#include <x86intrin.h>
++#include <sys/resource.h>
++#include <cstdio>
++#define C(...) __VA_ARGS__
+ 
+ // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
+ // evaluator an eager module build needs, which none of the eager evaluators
+@@ -198,6 +202,39 @@
+     uint64_t jets = 0, skipped = 0; // jets taken, and list elements they skipped
+   };
+   Stats stats_counters;
++  struct Cnt {
++    uint64_t k_leaf=0,k_stem=0,k_K=0,k_S=0,k_TL=0,k_TS=0,k_TF=0,k_jet=0;
++    uint64_t rc_calls=0, rc_coldskip=0, rc_lookups=0, rc_hits=0, rc_miss=0;
++    uint64_t in_calls=0, in_newest=0, in_search=0, in_probes=0, in_hit=0, in_run_hit=0, in_fresh=0, in_free=0, in_head=0;
++    double in_load_sum=0; uint64_t ins_calls=0, ins_probes=0;
++    uint64_t rb_calls[4]={0,0,0,0}, rb_nodes=0, rb_cycles=0, rb_cap_max=0;
++    uint64_t gm_calls=0, gm_cycles=0, gc_calls=0, gc_cycles=0, gc_live=0;
++    uint64_t mp_puts=0, mp_evict=0, mp_skip_min=0;
++    uint64_t fr_apply_to=0, fr_caa=0, fr_memo=0;
++    uint64_t ap_cycles=0, ap_calls=0;
++  } cnt;
++  int rb_why = 3; // 0 growth, 1 collect, 2 end_run, 3 init/clear
++  void cnt_dump(FILE* f, const char* label) {
++    auto &c = cnt;
++    { rusage ru; getrusage(RUSAGE_THREAD, &ru);
++      std::fprintf(f, "RU minflt=%ld majflt=%ld utime_us=%ld stime_us=%ld nvcsw=%ld nivcsw=%ld\n", ru.ru_minflt, ru.ru_majflt,
++        ru.ru_utime.tv_sec * 1000000L + ru.ru_utime.tv_usec, ru.ru_stime.tv_sec * 1000000L + ru.ru_stime.tv_usec, ru.ru_nvcsw, ru.ru_nivcsw); }
++    std::fprintf(f, "CNT %s steps=%llu leaf=%llu stem=%llu K=%llu S=%llu TL=%llu TS=%llu TF=%llu jet=%llu "
++      "rc_calls=%llu rc_coldskip=%llu rc_lookups=%llu rc_hits=%llu rc_miss=%llu "
++      "in_calls=%llu in_newest=%llu in_search=%llu in_probes=%llu in_hit=%llu in_run_hit=%llu in_fresh=%llu in_free=%llu in_head=%llu in_load_avg=%.4f "
++      "ins_calls=%llu ins_probes=%llu rb_growth=%llu rb_gc=%llu rb_endrun=%llu rb_init=%llu rb_nodes=%llu rb_cycles=%llu rb_cap_max=%llu "
++      "gm_calls=%llu gm_cycles=%llu gc_calls=%llu gc_cycles=%llu gc_live=%llu mp_puts=%llu mp_evict=%llu mp_skip_min=%llu "
++      "fr_apply_to=%llu fr_caa=%llu fr_memo=%llu interned=%zu mask=%zu head=%u memo_slots=%zu\n",
++      label, (unsigned long long)stats_counters.steps,
++      (unsigned long long)c.k_leaf,(unsigned long long)c.k_stem,(unsigned long long)c.k_K,(unsigned long long)c.k_S,(unsigned long long)c.k_TL,(unsigned long long)c.k_TS,(unsigned long long)c.k_TF,(unsigned long long)c.k_jet,
++      (unsigned long long)c.rc_calls,(unsigned long long)c.rc_coldskip,(unsigned long long)c.rc_lookups,(unsigned long long)c.rc_hits,(unsigned long long)c.rc_miss,
++      (unsigned long long)c.in_calls,(unsigned long long)c.in_newest,(unsigned long long)c.in_search,(unsigned long long)c.in_probes,(unsigned long long)c.in_hit,(unsigned long long)c.in_run_hit,(unsigned long long)c.in_fresh,(unsigned long long)c.in_free,(unsigned long long)c.in_head,
++      c.in_search? c.in_load_sum/c.in_search : 0.0,
++      (unsigned long long)c.ins_calls,(unsigned long long)c.ins_probes,(unsigned long long)c.rb_calls[0],(unsigned long long)c.rb_calls[1],(unsigned long long)c.rb_calls[2],(unsigned long long)c.rb_calls[3],(unsigned long long)c.rb_nodes,(unsigned long long)c.rb_cycles,(unsigned long long)c.rb_cap_max,
++      (unsigned long long)c.gm_calls,(unsigned long long)c.gm_cycles,(unsigned long long)c.gc_calls,(unsigned long long)c.gc_cycles,(unsigned long long)c.gc_live,(unsigned long long)c.mp_puts,(unsigned long long)c.mp_evict,(unsigned long long)c.mp_skip_min,
++      (unsigned long long)c.fr_apply_to,(unsigned long long)c.fr_caa,(unsigned long long)c.fr_memo,
++      _interned_count, _interned_mask+1, _head, _memo_mask+1);
++  }
+ 
+ private:
+   // The continuations being unwound, reused across calls. Nested apply() calls
+@@ -300,9 +337,11 @@
+   Tree alloc(uint32_t u, uint32_t v) {
+     Tree result;
+     if (_free) {
++      C(++cnt.in_free;)
+       result = _free;
+       _free = _arena[_free].v;
+     } else {
++      C(++cnt.in_head;)
+       result = _head++;
+     }
+     _arena[result] = {u, v};
+@@ -313,7 +352,8 @@
+   void insert_interned(Tree at) {
+     const Node n = _arena[at];
+     size_t i = hash(n.u, n.v) & _interned_mask;
+-    while (_interned[i]) i = (i + 1) & _interned_mask;
++    C(++cnt.ins_calls; ++cnt.ins_probes;)
++    while (_interned[i]) { i = (i + 1) & _interned_mask; C(++cnt.ins_probes;) }
+     _interned[i] = at;
+     ++_interned_count;
+   }
+@@ -324,6 +364,7 @@
+    * twice the size, and which of its helpers the compiler inlined then hung on
+    * any edit to it, for as much as 13% more instructions a step. */
+   [[gnu::noinline]] void rebuild_interned(size_t capacity) {
++    C(const uint64_t t0 = __rdtsc(); ++cnt.rb_calls[rb_why]; const uint64_t ins0 = cnt.ins_calls, pr0 = cnt.ins_probes; struct Rst { int &w; ~Rst(){ w = 3; } } rst{rb_why};)
+     std::fill_n(_interned, capacity, 0);
+     _interned_mask = capacity - 1;
+     _interned_count = 0;
+@@ -335,6 +376,7 @@
+     };
+     insert_live(2, _run + 1);
+     insert_live(_run_end + 1, _head);
++    C(cnt.rb_nodes += cnt.ins_calls - ins0; cnt.ins_calls = ins0; cnt.ins_probes = pr0; cnt.rb_cycles += __rdtsc() - t0; if (capacity > cnt.rb_cap_max) cnt.rb_cap_max = capacity;)
+   }
+ 
+   /** The cell of the run that is (u, v), or 0: the one above v, if v is a tail in the run. */
+@@ -354,7 +396,7 @@
+   /** Put the run's cells in the table, so that it no longer takes a run to find them. */
+   [[gnu::noinline]] void end_run() {
+     const size_t capacity = capacity_for(_interned_count + (_run_end - _run));
+-    if (capacity != _interned_mask + 1) rebuild_interned(capacity); // which leaves the run out
++    if (capacity != _interned_mask + 1) { C(rb_why = 2;) rebuild_interned(capacity); } // which leaves the run out
+     for (Tree at = _run + 1; at <= _run_end; ++at) insert_interned(at);
+     _run = _run_end = 0;
+   }
+@@ -368,7 +410,7 @@
+    * compiler that walks every character of it). */
+   void reserve_interned(size_t more) {
+     if ((_interned_count + more) * 10 > (_interned_mask + 1) * 7)
+-      rebuild_interned(capacity_for(_interned_count + more + (_run_end - _run)));
++      C(rb_why = 0,) rebuild_interned(capacity_for(_interned_count + more + (_run_end - _run)));
+   }
+ 
+   /** The table's size, doubled as often as it takes to hold `nodes`. */
+@@ -381,6 +423,7 @@
+   /** The slot holding the node for this shape, or the empty one it would take. */
+   size_t slot(uint32_t u, uint32_t v) const {
+     for (size_t i = hash(u, v) & _interned_mask;; i = (i + 1) & _interned_mask) {
++      C(++const_cast<Cnt&>(cnt).in_probes;)
+       const Tree at = _interned[i];
+       if (!at) return i;
+       const Node n = _arena[at];
+@@ -398,15 +441,19 @@
+    * a search to wait on, the table write overlaps with the steps after it.
+    */
+   Tree intern(uint32_t u, uint32_t v) {
++    C(++cnt.in_calls;)
+     if (u == _newest || v == _newest) {
++      C(++cnt.in_newest;)
+       const Tree fresh = alloc(u, v);
+       insert_interned(fresh);
+       reserve_interned(0);
+       return fresh;
+     }
++    C(++cnt.in_search; cnt.in_load_sum += double(_interned_count) / double(_interned_mask + 1);)
+     const size_t i = slot(u, v);
+-    if (_interned[i]) return _interned[i];
+-    if (const Tree cell = in_run(u, v)) return cell;
++    if (_interned[i]) { C(++cnt.in_hit;) return _interned[i]; }
++    if (const Tree cell = in_run(u, v)) { C(++cnt.in_run_hit;) return cell; }
++    C(++cnt.in_fresh;)
+     const Tree fresh = alloc(u, v);
+     _interned[i] = fresh;
+     ++_interned_count;
+@@ -424,6 +471,7 @@
+    * as it has slots, until it reaches its bound. */
+   void memo_put(uint32_t a, uint32_t b, uint32_t r) {
+     ++stats_counters.memo_puts;
++    C(++cnt.mp_puts; if (_memo[hash(a, b) & _memo_mask].a) ++cnt.mp_evict;)
+     _memo[hash(a, b) & _memo_mask] = {a, b, r};
+     if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
+   }
+@@ -434,6 +482,7 @@
+    * added — so no entry moves onto another.
+    */
+   [[gnu::noinline]] void grow_memo() {
++    C(const uint64_t t0 = __rdtsc(); ++cnt.gm_calls; struct T_ { uint64_t t0; uint64_t &acc; ~T_(){ acc += __rdtsc() - t0; } } tt{t0, cnt.gm_cycles};)
+     const size_t half = _memo_mask + 1;
+     std::fill_n(_memo + half, half, Memo{0, 0, 0});
+     _memo_mask = 2 * half - 1;
+@@ -463,12 +512,16 @@
+    * does with every lookup made.
+    */
+   Tree recall(Tree a, Tree b) {
++    C(++cnt.rc_calls;)
+     uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
+-    if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) return 0;
++    if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) { C(++cnt.rc_coldskip;) return 0; }
++    C(++cnt.rc_lookups;)
+     if (const Tree hit = memo_get(a, b)) {
++      C(++cnt.rc_hits;)
+       cold = 0;
+       return hit;
+     }
++    C(++cnt.rc_miss; ++cnt.fr_memo;)
+     cold = std::min(cold + 1, int(MEMO_COLD)); // a sampled miss counts afresh
+     _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+     return 0;
+@@ -694,6 +747,7 @@
+    * cache, so re-earning its entries is the cheaper correctness.
+    */
+   [[gnu::noinline]] void collect() {
++    C(const uint64_t t0 = __rdtsc(); ++cnt.gc_calls;)
+     for (Tree root : _roots) mark(root);
+     for (const Frame &f : _stack) { // a reduction in progress is live
+       mark(f.arg1());
+@@ -723,7 +777,9 @@
+     // survived: the arena keeps its high-water mark, so the free list will fill
+     // back up to about here before the next collection, and shrinking now only
+     // buys a run of rehashes on the way back.
++    C(rb_why = 1;)
+     rebuild_interned(_interned_mask + 1);
++    C(cnt.gc_cycles += __rdtsc() - t0; cnt.gc_live += _live;)
+   }
+ 
+   /** The arena's high-water mark in nodes, which is what it costs in memory. */
+@@ -838,10 +894,12 @@
+         const Node an = _arena[a];
+ 
+         if (!an.u) {                                     // apply(△, b) = △b
++          C(++cnt.k_leaf;)
+           result = stem(b);
+           goto dispatch;
+         }
+         if (!an.v) {                                     // apply(△u, b) = △ub
++          C(++cnt.k_stem;)
+           result = fork(an.u, b);
+           goto dispatch;
+         }
+@@ -851,11 +909,14 @@
+         const Node un = _arena[an.u];
+ 
+         if (!un.u) {                                     // apply(△△y, b) = y
++          C(++cnt.k_K;)
+           result = y;
+           goto dispatch;
+         }
+         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
++          C(++cnt.k_S;)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
++          C(++cnt.fr_caa;)
+           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
+           a = y;
+           goto reduce;
+@@ -865,22 +926,27 @@
+         const Node bn = _arena[b];
+ 
+         if (!bn.u) {                                     //   b = △:  w
++          C(++cnt.k_TL;)
+           result = un.u;
+           goto dispatch;
+         }
+         if (!bn.v) {                                     //   b = △d: apply(x, d)
++          C(++cnt.k_TS;)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+           a = un.v;
+           b = bn.u;
+           goto reduce;
+         }
+         {                                                //   b = △de: apply(apply(y, d), e)
++          C(++cnt.k_TF;)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+           // After the memo, so that the jet never makes slower what it answers.
+           if (JETS && a == _skip_line) {
++            C(++cnt.k_jet;)
+             if ((result = skip_line(b))) goto dispatch;
+             goto reduce;
+           }
++          C(++cnt.fr_apply_to;)
+           _stack.emplace_back(APPLY_TO, bn.v, 0);
+           a = y;
+           b = bn.u;
+@@ -901,6 +967,7 @@
+           // to let their entries evict a slower one from the memo.
+           if ((uint32_t)stats_counters.steps - f.meta() >= MEMO_MIN_STEPS)
+             memo_put(f.arg1(), f.arg2(), result);
++          C(else ++cnt.mp_skip_min;)
+           continue;
+         }
+         if (f.tag() == APPLY_TO) {
+@@ -909,6 +976,7 @@
+           a = result;
+           b = f.arg1();
+         } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
++          C(++cnt.fr_apply_to;)
+           _stack.emplace_back(APPLY_TO, result, 0);
+           a = f.arg1();
+           b = f.arg2();

@@ -1,0 +1,177 @@
+--- eager-graph-nil-mmap-32.hpp	2026-10-08 03:29:17.365468288 +0000
++++ eager-own.hpp	2026-10-08 03:45:06.041296144 +0000
+@@ -10,6 +10,8 @@
+ #include <sys/mman.h>
+ 
+ #include "jets.hpp"
++#include <cstdio>
++#define OW(...) __VA_ARGS__
+ 
+ // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
+ // evaluator an eager module build needs, which none of the eager evaluators
+@@ -399,15 +401,19 @@
+    */
+   Tree intern(uint32_t u, uint32_t v) {
+     if (u == _newest || v == _newest) {
++      OW(own_intern(u, v, true);)
+       const Tree fresh = alloc(u, v);
++      OW(own_born(fresh, true);)
+       insert_interned(fresh);
+       reserve_interned(0);
+       return fresh;
+     }
++    OW(own_intern(u, v, false);)
+     const size_t i = slot(u, v);
+-    if (_interned[i]) return _interned[i];
++    if (_interned[i]) { OW(own_search_hit();) return _interned[i]; }
+     if (const Tree cell = in_run(u, v)) return cell;
+     const Tree fresh = alloc(u, v);
++    OW(own_born(fresh, false);)
+     _interned[i] = fresh;
+     ++_interned_count;
+     reserve_interned(0);
+@@ -424,6 +430,7 @@
+    * as it has slots, until it reaches its bound. */
+   void memo_put(uint32_t a, uint32_t b, uint32_t r) {
+     ++stats_counters.memo_puts;
++    OW(own_memo_put(a, b, r);)
+     _memo[hash(a, b) & _memo_mask] = {a, b, r};
+     if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
+   }
+@@ -466,11 +473,14 @@
+     uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
+     if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) return 0;
+     if (const Tree hit = memo_get(a, b)) {
++      OW(own_probe(true);)
+       cold = 0;
+       return hit;
+     }
++    OW(own_probe(false);)
+     cold = std::min(cold + 1, int(MEMO_COLD)); // a sampled miss counts afresh
+     _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
++    OW(own_push();)
+     return 0;
+   }
+ 
+@@ -615,7 +625,7 @@
+    * held in registers and have to be named.
+    */
+   void collect_if_over_budget(Tree a, Tree b) {
+-    if (_free || _head < _budget) return; // room left, either reused or untouched
++    if (_free || _head < _budget || nogc) return; // room left, either reused or untouched
+     _roots.push_back(a);
+     _roots.push_back(b);
+     collect();
+@@ -632,6 +642,7 @@
+     }
+   }
+ 
++#include "own.inc"
+ public:
+   // No collection until set_budget() says so: an unregistered root set makes
+   // everything look garbage, so opting in has to be the caller's decision.
+@@ -640,6 +651,7 @@
+     rebuild_interned(MIN_TABLE);
+     size_memo();
+     intern_jets();
++    own_init();
+   }
+ 
+   ~BasicEagerGraphNilMmap32() {
+@@ -828,20 +840,24 @@
+   [[gnu::noinline]] Tree apply(Tree a, Tree b) {
+     const size_t base = _stack.size();
+     Tree result;
++    OW(own_apply_enter();)
+ 
+     try {
+     reduce: // ---- evaluate apply(a, b) ----
+       {
+         ++stats_counters.steps;
++        OW(own_step(a, b);)
+         collect_if_over_budget(a, b);
+ 
+         const Node an = _arena[a];
+ 
+         if (!an.u) {                                     // apply(△, b) = △b
++          OW(own_kind(0);)
+           result = stem(b);
+           goto dispatch;
+         }
+         if (!an.v) {                                     // apply(△u, b) = △ub
++          OW(own_kind(1);)
+           result = fork(an.u, b);
+           goto dispatch;
+         }
+@@ -851,12 +867,15 @@
+         const Node un = _arena[an.u];
+ 
+         if (!un.u) {                                     // apply(△△y, b) = y
++          OW(own_kind(2);)
+           result = y;
+           goto dispatch;
+         }
+         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
++          OW(own_kind(3);)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
++          OW(own_push();)
+           a = y;
+           goto reduce;
+         }
+@@ -865,16 +884,19 @@
+         const Node bn = _arena[b];
+ 
+         if (!bn.u) {                                     //   b = △:  w
++          OW(own_kind(4);)
+           result = un.u;
+           goto dispatch;
+         }
+         if (!bn.v) {                                     //   b = △d: apply(x, d)
++          OW(own_kind(5);)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+           a = un.v;
+           b = bn.u;
+           goto reduce;
+         }
+         {                                                //   b = △de: apply(apply(y, d), e)
++          OW(own_kind(6);)
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+           // After the memo, so that the jet never makes slower what it answers.
+           if (JETS && a == _skip_line) {
+@@ -882,6 +904,7 @@
+             goto reduce;
+           }
+           _stack.emplace_back(APPLY_TO, bn.v, 0);
++          OW(own_push();)
+           a = y;
+           b = bn.u;
+           goto reduce;
+@@ -894,6 +917,7 @@
+       while (_stack.size() != base) {
+         const Frame f = _stack.back();
+         _stack.pop_back();
++        OW(own_pop();)
+         if (f.tag() == MEMOIZE) {
+           // A tail step (`b = △d`) shares its result with the step it became,
+           // so consecutive MEMOIZE frames all record the same normal form.
+@@ -910,16 +934,19 @@
+           b = f.arg1();
+         } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
+           _stack.emplace_back(APPLY_TO, result, 0);
++          OW(own_push();)
+           a = f.arg1();
+           b = f.arg2();
+         }
+         goto reduce;
+       }
++      OW(own_apply_exit();)
+       return result;
+     } catch (...) {
+       // An exhausted arena leaves half a reduction on the stack; drop it, so the
+       // frames of a request that failed do not stay roots for every later one.
+       _stack.resize(base);
++      OW(own_unwind(base); own_apply_exit();)
+       throw;
+     }
+   }

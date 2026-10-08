@@ -1,0 +1,1848 @@
+diff -ruN a/implementation/cpp/eager-graph-nil-mmap-32.hpp b/implementation/cpp/eager-graph-nil-mmap-32.hpp
+--- a/implementation/cpp/eager-graph-nil-mmap-32.hpp	2026-10-08 04:52:50.787734850 +0000
++++ b/implementation/cpp/eager-graph-nil-mmap-32.hpp	2026-10-08 04:52:50.789645212 +0000
+@@ -6,8 +6,11 @@
+ #include <string>
+ #include <stdexcept>
+ #include <unordered_map>
++#include <functional>
++#include <type_traits>
+ #include <vector>
+ #include <sys/mman.h>
++#include <x86intrin.h> // PROTOTYPE: __rdtsc for derivation time
+ 
+ #include "jets.hpp"
+ 
+@@ -103,7 +106,77 @@
+   return mem;
+ }
+ 
+-template <bool JETS> class BasicEagerGraphNilMmap32 {
++// ---- PROTOTYPE: derived bigger-step rules (see the RULES section below) ----
++#ifndef RULE_THRESH
++#define RULE_THRESH 8          // memo misses of one head (RULE_MG: of the bucket's candidate head) before its rule is derived
++#endif
++#ifndef RULE_MAX_STEPS
++#define RULE_MAX_STEPS 256     // cap on the symbolic reduce steps of one derivation
++#endif
++#ifndef RULE_MAX_NODES
++#define RULE_MAX_NODES 64      // cap on template nodes (hole-dependent nodes) of one derivation
++#endif
++#ifndef RULE_MAX_FRAMES
++#define RULE_MAX_FRAMES 64     // cap on symbolic frames
++#endif
++#ifndef RULE_MIN_LEN
++#define RULE_MIN_LEN 2         // a rule of fewer steps is recorded as "no rule"
++#endif
++#ifndef RULE_BITS
++#define RULE_BITS 16           // rule table: 2^RULE_BITS direct-mapped slots
++#endif
++#ifndef RULE_MEMO_FRAMES
++#define RULE_MEMO_FRAMES 0     // keep hole-dependent MEMOIZE frames still open at the residual (1 is much slower: their keys must be built)
++#endif
++#ifndef RULE_SPLIT
++#define RULE_SPLIT 0           // variant 2: split once on the argument's shape (leaf/stem/fork)
++#endif
++#ifndef RULE_POOL_MAX
++#define RULE_POOL_MAX (1u << 22) // template pool words before the cache is flushed
++#endif
++#ifndef RULE_PROV
++#define RULE_PROV 0            // variant 3: pattern rules for closures value templates build
++#endif
++#ifndef RULE_PROV_BITS
++#define RULE_PROV_BITS 14      // provenance table: 2^RULE_PROV_BITS direct-mapped slots
++#endif
++#ifndef RULE_PROV_THRESH
++#define RULE_PROV_THRESH 2     // applications of a template's closures before its child rule is derived
++#endif
++#ifndef RULE_MIN_LEN_CHILD
++#define RULE_MIN_LEN_CHILD 2   // the same, for a child rule
++#endif
++#ifndef RULE_COMPACT
++#define RULE_COMPACT 1         // on a full pool keep the rules the table names, rather than none
++#endif
++#ifndef RULE_SHAPEJETS
++#define RULE_SHAPEJETS 0       // also runtime-map's B / C-R3 shape jets (new APPLY_FN frame) for heads without a rule
++#endif
++#ifndef RULE_COLOC
++#define RULE_COLOC 1           // rule state in the _cold bytes' cache lines (needs RULE_BITS 16, RULE_THRESH < 128)
++#endif
++#ifndef RULE_DERIVE_PUT
++#define RULE_DERIVE_PUT 1      // record the hole-free sub-applications a derivation reduces in the memo
++#endif
++#ifndef RULE_INLINE_INTERN
++#define RULE_INLINE_INTERN 1
++#endif
++#if RULE_INLINE_INTERN
++#define RULE_HOT [[gnu::always_inline]]
++#else
++#define RULE_HOT
++#endif
++#ifndef RULE_PROTECT
++#define RULE_PROTECT 0         // a slot whose rule keeps firing is not evicted by another head's count
++#endif
++#ifndef RULE_MG
++#define RULE_MG 1              // RULE_COLOC: count misses per candidate head (tagged), not per bucket
++#endif
++#ifndef RULE_NEVER
++#define RULE_NEVER 0           // check overhead only: count, call derive, never derive
++#endif
++
++template <bool JETS, bool RULES = false> class BasicEagerGraphNilMmap32 {
+ public:
+   using Tree = uint32_t;
+ 
+@@ -158,7 +231,7 @@
+   //
+   // Every argument is a Tree the reduction still needs, which is what makes
+   // this stack the collector's root set as well as the VM's.
+-  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE };
++  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, APPLY_FN /* PROTOTYPE shape jets: on r, apply(fn, r) */ };
+ 
+   // A frame is two 8-byte words, written whole and read back whole, because
+   // it is usually popped within a few instructions of being pushed: a load
+@@ -196,6 +269,15 @@
+   struct Stats {
+     uint64_t steps = 0, memo_hits = 0, memo_puts = 0, gcs = 0, gc_marked = 0;
+     uint64_t jets = 0, skipped = 0; // jets taken, and list elements they skipped
++    uint64_t shape_b = 0, shape_c = 0; // PROTOTYPE shape jets (RULE_SHAPEJETS)
++    uint64_t interns = 0, allocs = 0;  // PROTOTYPE COUNT_INTERNS
++    // PROTOTYPE rules. `steps` keeps counting machine-equivalent steps (a firing adds the
++    // steps its rule stands for), so real reduce-loop iterations = steps - rule_skipped.
++    uint64_t rule_derived = 0, rule_negative = 0, rule_fires = 0, rule_skipped = 0, rule_nodes = 0,
++             rule_frames = 0, rule_derive_steps = 0, rule_derive_hits = 0, rule_clears = 0, rule_split_fires = 0,
++             rule_tmpl_nodes = 0, rule_tmpl_frames = 0, rule_len_sum = 0, rule_stop[5] = {0, 0, 0, 0, 0}, rule_derive_cycles = 0,
++             rule_child_derived = 0, rule_child_negative = 0, rule_child_fires = 0, rule_prov_records = 0,
++             rule_compactions = 0, rule_protected = 0;
+   };
+   Stats stats_counters;
+ 
+@@ -261,7 +343,19 @@
+   // a row have missed, up to MEMO_COLD, and past it how many it has skipped
+   // since one was last made (see recall). Small on purpose: it is read on every
+   // lookup, so it has to stay in cache where the memo cannot.
+-  uint8_t _cold[1 << 16];
++  // PROTOTYPE (RULE_COLOC): with rules, each cold byte shares its 2 bytes with the rule
++  // state of the same hash bucket — misses counted towards a derivation in the low 7
++  // bits, and 0x80 when the bucket's rule slot holds a rule — so that a head with no
++  // rule costs the rule check no cache line that recall() has not already loaded.
++  struct ColdRuleMG { uint8_t cold, rule, tag; }; // RULE_MG: + 8 hash bits naming the bucket's candidate head
++  struct ColdRule2 { uint8_t cold, rule; };
++  using ColdRule = std::conditional_t<RULE_MG, ColdRuleMG, ColdRule2>;
++  static_assert(!(RULES && RULE_COLOC) || (RULE_BITS == 16 && RULE_THRESH < 128), "RULE_COLOC shares _cold's 2^16 buckets and 7 bits of count");
++  std::conditional_t<RULES && RULE_COLOC, ColdRule, uint8_t> _cold[1 << 16];
++  uint8_t &cold_at(uint32_t i) {
++    if constexpr (RULES && RULE_COLOC) return _cold[i].cold;
++    else return _cold[i];
++  }
+ 
+   // jets.hpp's trees, interned on a fresh arena and marked by every collection,
+   // so that each stays the index of its tree: interning is exact, so comparing
+@@ -269,6 +363,65 @@
+   Tree _skip_line = 0, _newline = 0;
+   bool _jets = JETS;
+ 
++  // ---- PROTOTYPE: derived bigger-step rules -------------------------------------
++  //
++  // A rule for a head `a` (a fork △(△u')y, i.e. an S-branch step) is the machine's
++  // own transitions from reduce(a, H), H an opaque argument, run symbolically until
++  // a transition needs a hole's shape or applies a hole (or a cap): what is left is
++  // a residual state over the holes. Recorded as a template — the hole-dependent
++  // nodes the residual reaches (each built by intern at firing, so hash-consing
++  // stays exact; nodes that do not depend on a hole were interned at derivation, as
++  // were the results of every hole-free sub-application, which the derivation
++  // reduces itself) plus the residual: reduce(a', b') or a result, and the frames
++  // above the root.
++  //
++  // Pattern rules (RULE_PROV): a template whose residual is a value — a closure
++  // built from its holes — records each node it builds as its result, with the
++  // holes it was built from, in a provenance table. Applying that node later finds
++  // the rule for *every* closure that template builds (its "child", derived once,
++  // with the recorded holes as bindings B0..), so closures that differ only in what
++  // they captured share one rule: an order-1b rule whose head pattern is the
++  // template, matched by provenance rather than by structure.
++  //
++  // Values in a template: below SYM a Tree, else SYM | i, i indexing the
++  // instantiation array: 0 = H (the argument b), 1 = H's left child, 2 = H's right
++  // child (split rules only), 3 + j = binding Bj, 8 + k = template node k.
++  struct RuleSlot { uint32_t key, off; };
++  static constexpr uint32_t MAX_BIND = 4;
++  static constexpr uint32_t SYM = 0x80000000u, HOLE = SYM, HOLE_U = SYM | 1, HOLE_V = SYM | 2, BIND0 = SYM | 3,
++                            NODE0 = SYM | 8;
++  // Template header words; a split header (T_MODE 2) has its leaf/stem/fork templates at T_HDR.
++  // T_NSEED: for a child rule, how many of its first nodes are the head closure's own,
++  // bound at firing by walking the head (the last of them is the head) rather than built.
++  enum : uint32_t { T_LEN, T_NN, T_NF, T_MODE, T_A, T_B, T_NBIND, T_PROV, T_CHILD, T_CCOUNT, T_NSEED, T_HDR };
++  struct SFrame { uint32_t tag, a1, a2, meta; };
++  struct Prov { uint32_t key, off; };
++  RuleSlot *_rules = nullptr;                  // keyed by hash(a, 0), as _cold
++  using RuleCount = std::conditional_t<(RULE_THRESH > 255), uint16_t, uint8_t>;
++  RuleCount *_rule_count = nullptr;            // misses per slot since the last derivation
++  Prov *_prov = nullptr;                       // provenance of closures value templates built
++  uint8_t *_rule_age = nullptr;                // RULE_PROTECT: firings of the slot's rule, halved per eviction attempt
++  std::vector<uint32_t> _pool;                 // templates; offset 0 is "no rule"
++  std::vector<uint32_t> _seed;                 // derivation: template nodes the head is made of
++  std::vector<uint32_t> _tn;                   // derivation: template nodes, (u, v) pairs
++  std::vector<SFrame> _sst;                    // derivation: symbolic frames
++  int _hole_shape = -1;                        // derivation: -1 unknown, 1 stem(H_U), 2 fork(H_U, H_V)
++  int _stop = 0;                               // derivation: 0 done, 1 needs a hole, 2 cap, 3 jet, 4 head
++  uint32_t _stop_hole = 0;                     // derivation: the hole it needed
++#ifdef RULE_PROFILE
++public:
++  struct RuleInfo { uint32_t head, len, nn, nf, mode, stop; uint64_t fires; };
++  std::unordered_map<uint32_t, RuleInfo> _prof;   // pool offset -> rule
++  std::vector<RuleInfo> _prof_retired;
++  void prof_retire() { for (auto &[o, r] : _prof) _prof_retired.push_back(r); _prof.clear(); }
++  void prof_add(uint32_t off, uint32_t head) {
++    const uint32_t *t = _pool.data() + off;
++    const bool sp = t[T_MODE] == 2;
++    _prof[off] = {head, sp ? 0 : t[T_LEN], sp ? 0 : t[T_NN], sp ? 0 : t[T_NF], t[T_MODE], uint32_t(_stop), 0};
++  }
++private:
++#endif
++
+   static size_t round_up_pow2(size_t n) {
+     size_t p = MIN_TABLE;
+     while (p < n) p <<= 1;
+@@ -297,7 +450,7 @@
+   }
+ 
+   /** A node, from the free list or the high-water mark. Not interned. */
+-  Tree alloc(uint32_t u, uint32_t v) {
++  RULE_HOT Tree alloc(uint32_t u, uint32_t v) {
+     Tree result;
+     if (_free) {
+       result = _free;
+@@ -310,7 +463,7 @@
+   }
+ 
+   /** Put a live node in the hash-consing table, which must have room for it. */
+-  void insert_interned(Tree at) {
++  RULE_HOT void insert_interned(Tree at) {
+     const Node n = _arena[at];
+     size_t i = hash(n.u, n.v) & _interned_mask;
+     while (_interned[i]) i = (i + 1) & _interned_mask;
+@@ -338,7 +491,7 @@
+   }
+ 
+   /** The cell of the run that is (u, v), or 0: the one above v, if v is a tail in the run. */
+-  Tree in_run(uint32_t u, uint32_t v) const {
++  RULE_HOT Tree in_run(uint32_t u, uint32_t v) const {
+     if (v >= _run_end) return 0; // every node made since the run, and with none, all of them
+     return v >= _run && _arena[v + 1].u == u ? v + 1 : 0;
+   }
+@@ -366,7 +519,7 @@
+    * through every size its cells' insertion would have skipped, probing fuller
+    * tables on the way (5% more instructions compiling a 5 MB source with a
+    * compiler that walks every character of it). */
+-  void reserve_interned(size_t more) {
++  RULE_HOT void reserve_interned(size_t more) {
+     if ((_interned_count + more) * 10 > (_interned_mask + 1) * 7)
+       rebuild_interned(capacity_for(_interned_count + more + (_run_end - _run)));
+   }
+@@ -379,7 +532,7 @@
+   }
+ 
+   /** The slot holding the node for this shape, or the empty one it would take. */
+-  size_t slot(uint32_t u, uint32_t v) const {
++  RULE_HOT size_t slot(uint32_t u, uint32_t v) const {
+     for (size_t i = hash(u, v) & _interned_mask;; i = (i + 1) & _interned_mask) {
+       const Tree at = _interned[i];
+       if (!at) return i;
+@@ -397,8 +550,17 @@
+    * reduction builds — whatever it builds on what it just built — and without
+    * a search to wait on, the table write overlaps with the steps after it.
+    */
+-  Tree intern(uint32_t u, uint32_t v) {
++  // PROTOTYPE: forced inline (RULE_INLINE_INTERN): with the rule check in apply(), GCC
++  // stopped inlining intern into apply's stem/fork rules (two calls a step) — the
++  // code-generation effect the comment on rebuild_interned warns of.
++  RULE_HOT Tree intern(uint32_t u, uint32_t v) {
++#ifdef COUNT_INTERNS
++    ++stats_counters.interns;
++#endif
+     if (u == _newest || v == _newest) {
++#ifdef COUNT_INTERNS
++      ++stats_counters.allocs;
++#endif
+       const Tree fresh = alloc(u, v);
+       insert_interned(fresh);
+       reserve_interned(0);
+@@ -407,6 +569,9 @@
+     const size_t i = slot(u, v);
+     if (_interned[i]) return _interned[i];
+     if (const Tree cell = in_run(u, v)) return cell;
++#ifdef COUNT_INTERNS
++    ++stats_counters.allocs;
++#endif
+     const Tree fresh = alloc(u, v);
+     _interned[i] = fresh;
+     ++_interned_count;
+@@ -414,7 +579,7 @@
+     return fresh;
+   }
+ 
+-  Tree memo_get(uint32_t a, uint32_t b) {
++  RULE_HOT Tree memo_get(uint32_t a, uint32_t b) {
+     const Memo &m = _memo[hash(a, b) & _memo_mask];
+     if (m.a == a && m.b == b) { ++stats_counters.memo_hits; return m.r; }
+     return 0; // no tree is index 0, so 0 is "miss"
+@@ -422,7 +587,7 @@
+ 
+   /** Record an entry, and double the memo once it has taken as many entries
+    * as it has slots, until it reaches its bound. */
+-  void memo_put(uint32_t a, uint32_t b, uint32_t r) {
++  RULE_HOT void memo_put(uint32_t a, uint32_t b, uint32_t r) {
+     ++stats_counters.memo_puts;
+     _memo[hash(a, b) & _memo_mask] = {a, b, r};
+     if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
+@@ -462,8 +627,8 @@
+    * that calls itself twice on one argument takes about twice the steps it
+    * does with every lookup made.
+    */
+-  Tree recall(Tree a, Tree b) {
+-    uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
++  RULE_HOT Tree recall(Tree a, Tree b) {
++    uint8_t &cold = cold_at(uint32_t(hash(a, 0) >> 48));
+     if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) return 0;
+     if (const Tree hit = memo_get(a, b)) {
+       cold = 0;
+@@ -520,6 +685,438 @@
+     return xs;
+   }
+ 
++  // ---- PROTOTYPE: derived rules ----
++
++  /** Forget every rule: their constants are Trees a collection may free. */
++  void clear_rules() {
++    if constexpr (RULES) {
++      if (!_rules) {
++        _rules = static_cast<RuleSlot *>(map_pages(sizeof(RuleSlot) << RULE_BITS));
++        _rule_count = static_cast<RuleCount *>(map_pages(sizeof(RuleCount) << RULE_BITS));
++        if (RULE_PROV) _prov = static_cast<Prov *>(map_pages(sizeof(Prov) << RULE_PROV_BITS));
++        if (RULE_PROTECT) _rule_age = static_cast<uint8_t *>(map_pages(size_t(1) << RULE_BITS));
++      }
++      std::fill_n(_rules, size_t(1) << RULE_BITS, RuleSlot{0, 0});
++      std::fill_n(_rule_count, size_t(1) << RULE_BITS, RuleCount(0));
++      if constexpr (RULE_COLOC) for (auto &c : _cold) c.rule = 0;
++      if (RULE_PROV) std::fill_n(_prov, size_t(1) << RULE_PROV_BITS, Prov{0, 0});
++      if (RULE_PROTECT) std::fill_n(_rule_age, size_t(1) << RULE_BITS, 0);
++      _pool.assign(1, 0);
++#ifdef RULE_PROFILE
++      prof_retire();
++#endif
++      ++stats_counters.rule_clears;
++    }
++  }
++
++  /** The pool is full: keep the templates the rule table still names (child rules
++   * and provenance are dropped, to be re-derived), or, if that leaves it more than
++   * half full, forget everything. */
++  [[gnu::noinline]] void compact_rules() {
++    std::vector<uint32_t> np(1, 0);
++    const auto copy1 = [&](uint32_t off) {
++      const uint32_t *t = _pool.data() + off;
++      const uint32_t no = uint32_t(np.size());
++      np.insert(np.end(), t, t + T_HDR + 2 * t[T_NN] + 4 * t[T_NF]);
++      np[no + T_CHILD] = np[no + T_CCOUNT] = 0;
++#ifdef RULE_PROFILE
++      if (_prof.count(off)) { _prof_retired.push_back(_prof[off]); _prof_retired.back().fires = 0; }
++#endif
++      return no;
++    };
++    for (size_t h = 0; h < (size_t(1) << RULE_BITS); ++h) {
++      RuleSlot &slot = _rules[h];
++      if (!slot.key || !slot.off) continue;
++      if (_pool[slot.off + T_MODE] == 2) {
++        uint32_t sub[3];
++        for (int i = 0; i < 3; ++i) sub[i] = copy1(_pool[slot.off + T_HDR + i]);
++        const uint32_t no = uint32_t(np.size());
++        np.insert(np.end(), _pool.begin() + slot.off, _pool.begin() + slot.off + T_HDR);
++        np.insert(np.end(), sub, sub + 3);
++        slot.off = no;
++      } else {
++        slot.off = copy1(slot.off);
++      }
++    }
++#ifdef RULE_PROFILE
++    prof_retire(); // (fire counts of kept rules restart from here)
++#endif
++    _pool.swap(np);
++    if (RULE_PROV) std::fill_n(_prov, size_t(1) << RULE_PROV_BITS, Prov{0, 0});
++    ++stats_counters.rule_compactions;
++    if (_pool.size() > RULE_POOL_MAX / 2) clear_rules();
++  }
++
++  /** The shape of a symbolic value: 0 leaf, 1 stem (u), 2 fork (u, v), 3 unknown (a hole). */
++  int sshape(uint32_t s, uint32_t &u, uint32_t &v) const {
++    if (!(s & SYM)) {
++      const Node n = _arena[s];
++      u = n.u, v = n.v;
++      return !n.u ? 0 : !n.v ? 1 : 2;
++    }
++    if (s >= NODE0) {
++      const uint32_t k = 2 * (s - NODE0);
++      u = _tn[k], v = _tn[k + 1];
++      return v ? 2 : 1;
++    }
++    if (s == HOLE && _hole_shape > 0) {
++      u = HOLE_U, v = _hole_shape == 2 ? HOLE_V : 0;
++      return _hole_shape;
++    }
++    return 3;
++  }
++
++  /** △u (v = 0) or △uv over symbolic values: interned now if neither depends on a hole. */
++  uint32_t smk(uint32_t u, uint32_t v) {
++    if (!((u | v) & SYM)) return intern(u, v);
++    for (size_t k = 0; k < _tn.size(); k += 2)
++      if (_tn[k] == u && _tn[k + 1] == v) return NODE0 + uint32_t(k / 2);
++    _tn.push_back(u);
++    _tn.push_back(v);
++    return NODE0 + uint32_t(_tn.size() / 2 - 1);
++  }
++
++  /** recall() over symbolic operands: a hole-free pair is looked up (and its MEMOIZE
++   * frame kept, so its result is recorded when the derivation reduces it); a
++   * hole-dependent one keeps its checkpoint as a frame if RULE_MEMO_FRAMES. */
++  bool srecall(uint32_t a, uint32_t b, uint32_t n, uint32_t &result) {
++    if (!((a | b) & SYM)) {
++      const Memo &m = _memo[hash(a, b) & _memo_mask];
++      if (m.a == a && m.b == b) {
++        ++stats_counters.rule_derive_hits;
++        result = m.r;
++        return true;
++      }
++      _sst.push_back({MEMOIZE, a, b, n});
++    } else if (RULE_MEMO_FRAMES) {
++      _sst.push_back({MEMOIZE, a, b, n});
++    }
++    return false;
++  }
++
++  /**
++   * Run apply()'s transitions symbolically from the S step of reduce(head, b0) —
++   * head a Tree, or a template node over _seed — b0 being HOLE (or the leaf, for a
++   * split's leaf case), to where a transition needs a hole's shape or applies a
++   * hole, or a cap. Appends the template to _pool and returns its offset, or 0 when
++   * it is shorter than RULE_MIN_LEN (or the head is not an S step for every binding).
++   */
++  uint32_t derive_one(uint32_t head, uint32_t b0, uint32_t nbind) {
++    _tn = _seed;
++    _sst.clear();
++    uint32_t n = 1; // the root's S step, which apply() has taken
++    uint32_t a, b = b0, result = 0;
++    int stop;
++    {
++      uint32_t hu, hy, uu, uv;
++      if (sshape(head, hu, hy) != 2 || sshape(hu, uu, uv) != 1) { _stop = 4; return 0; }
++      _sst.push_back({COMPUTE_AND_APPLY, uu, b0, 0});
++      a = hy;
++    }
++  sreduce: {
++      uint32_t au, av;
++      const int as = sshape(a, au, av);
++      if (as == 3) { stop = 1; _stop_hole = a; goto sresidual; }
++      if (n >= RULE_MAX_STEPS || _tn.size() / 2 + 2 > RULE_MAX_NODES || _sst.size() + 3 > RULE_MAX_FRAMES) {
++        stop = 2;
++        goto sresidual;
++      }
++      if (as == 0) { ++n; result = smk(b, 0); goto sdispatch; }
++      if (as == 1) { ++n; result = smk(au, b); goto sdispatch; }
++      const uint32_t y = av;
++      uint32_t uu, uv;
++      const int us = sshape(au, uu, uv);
++      if (us == 3) { stop = 1; _stop_hole = au; goto sresidual; }
++      if (us == 0) { ++n; result = y; goto sdispatch; }
++      if (us == 1) {
++        ++n;
++        if (srecall(a, b, n, result)) goto sdispatch;
++        _sst.push_back({COMPUTE_AND_APPLY, uu, b, 0});
++        a = y;
++        goto sreduce;
++      }
++      uint32_t bu, bv;
++      const int bs = sshape(b, bu, bv);
++      if (bs == 3) { stop = 1; _stop_hole = b; goto sresidual; }
++      if (bs == 2 && JETS && a == _skip_line) { stop = 3; goto sresidual; } // leave it to the jet
++      ++n;
++      if (bs == 0) { result = uu; goto sdispatch; }
++      if (srecall(a, b, n, result)) goto sdispatch;
++      if (bs == 1) { a = uv; b = bu; goto sreduce; }
++      _sst.push_back({APPLY_TO, bv, 0, 0});
++      a = y;
++      b = bu;
++      goto sreduce;
++    }
++  sdispatch:
++    while (!_sst.empty()) {
++      const SFrame f = _sst.back();
++      _sst.pop_back();
++      if (f.tag == MEMOIZE) {
++        if (RULE_DERIVE_PUT && !((f.a1 | f.a2 | result) & SYM) && n - f.meta >= MEMO_MIN_STEPS) memo_put(f.a1, f.a2, result);
++        continue;
++      }
++      if (f.tag == APPLY_TO) {
++        a = result;
++        b = f.a1;
++      } else {
++        _sst.push_back({APPLY_TO, result, 0, 0});
++        a = f.a1;
++        b = f.a2;
++      }
++      goto sreduce;
++    }
++    stop = 0;
++    a = result;
++    b = 0;
++  sresidual:
++    _stop = stop;
++    stats_counters.rule_derive_steps += n;
++    ++stats_counters.rule_stop[stop];
++    if (n < (nbind ? RULE_MIN_LEN_CHILD : RULE_MIN_LEN)) return 0;
++    // Keep only the template nodes the residual reaches; a node's children come before it.
++    const uint32_t nodes = uint32_t(_tn.size() / 2);
++    uint32_t keep[RULE_MAX_NODES + 1];
++    std::fill_n(keep, nodes, 0);
++    const uint32_t nseed = uint32_t(_seed.size() / 2);
++    std::fill_n(keep, nseed, 1); // the head's own nodes stay, in order: firing binds them by walking it
++    const auto reach = [&](uint32_t s) { if (s >= NODE0) keep[s - NODE0] = 1; };
++    reach(a), reach(b);
++    if (RULE_MEMO_FRAMES == 2) {
++      // Keep a hole-dependent checkpoint only if its key costs no node the residual
++      // does not build anyway: reach from everything else first, then filter.
++      for (const SFrame &f : _sst)
++        if (f.tag != MEMOIZE) reach(f.a1), reach(f.a2);
++      for (uint32_t k = nodes; k-- > 0;)
++        if (keep[k]) reach(_tn[2 * k]), reach(_tn[2 * k + 1]);
++      const auto free_key = [&](uint32_t s) { return s < NODE0 || keep[s - NODE0]; };
++      size_t j = 0;
++      for (const SFrame &f : _sst)
++        if (f.tag != MEMOIZE || !((f.a1 | f.a2) & SYM) || (free_key(f.a1) && free_key(f.a2))) _sst[j++] = f;
++      _sst.resize(j);
++    }
++    for (const SFrame &f : _sst) reach(f.a1), reach(f.a2);
++    bool split_holes = a == HOLE_U || a == HOLE_V;
++    for (uint32_t k = nodes; k-- > 0;)
++      if (keep[k]) {
++        reach(_tn[2 * k]), reach(_tn[2 * k + 1]);
++        split_holes |= _tn[2 * k] == HOLE_U || _tn[2 * k] == HOLE_V || _tn[2 * k + 1] == HOLE_U || _tn[2 * k + 1] == HOLE_V;
++      }
++    uint32_t kept = 0;
++    for (uint32_t k = 0; k < nodes; ++k) keep[k] = keep[k] ? NODE0 + kept++ : 0;
++    const auto ren = [&](uint32_t s) { return s >= NODE0 ? keep[s - NODE0] : s; };
++    // A value that is a template node is a closure its firings can record (RULE_PROV).
++    const uint32_t prov = RULE_PROV && stop == 0 && a >= NODE0 && !split_holes && nbind < MAX_BIND;
++    const uint32_t off = uint32_t(_pool.size());
++    _pool.insert(_pool.end(), {n, kept, uint32_t(_sst.size()), uint32_t(stop == 0), ren(a), ren(b), nbind, prov, 0, 0, nseed});
++    for (uint32_t k = 0; k < nodes; ++k)
++      if (keep[k]) _pool.push_back(ren(_tn[2 * k])), _pool.push_back(ren(_tn[2 * k + 1]));
++    for (const SFrame &f : _sst) _pool.insert(_pool.end(), {f.tag, ren(f.a1), ren(f.a2), f.meta});
++    stats_counters.rule_tmpl_nodes += kept;
++    stats_counters.rule_tmpl_frames += _sst.size();
++    stats_counters.rule_len_sum += n;
++    return off;
++  }
++
++  /** The rule for `head` over _seed with nbind bindings, split on H's shape if it
++   * stopped there (RULE_SPLIT): an offset, or 0. */
++  uint32_t derive_rule(uint32_t head, uint32_t nbind) {
++    _hole_shape = -1;
++    uint32_t off = derive_one(head, HOLE, nbind);
++    if (RULE_SPLIT && _stop == 1 && _stop_hole == HOLE) {
++      // Stopped on the argument's shape: one template per shape, each re-derived
++      // from the root with that much known.
++      uint32_t sub[3];
++      sub[0] = derive_one(head, leaf(), nbind);
++      _hole_shape = 1, sub[1] = derive_one(head, HOLE, nbind);
++      _hole_shape = 2, sub[2] = derive_one(head, HOLE, nbind);
++      _hole_shape = -1;
++      if (sub[0] && sub[1] && sub[2]) {
++        off = uint32_t(_pool.size());
++        _pool.insert(_pool.end(), {0, 0, 0, 2, 0, 0, nbind, 0, 0, 0, 0, sub[0], sub[1], sub[2]});
++      }
++    }
++    return off;
++  }
++
++  /** Derive the rule for head `a` into slot h: 0 if it is not worth having. */
++  [[gnu::noinline]] uint32_t derive(Tree a, uint32_t h) {
++    if constexpr (!RULE_COLOC) _rule_count[h] = 0;
++    if (RULE_NEVER) return 0;
++    if (RULE_PROTECT && _rule_age[h] && _rules[h].off) { // the slot's rule has been firing: age it, keep it
++      _rule_age[h] >>= 1;
++      ++stats_counters.rule_protected;
++      return 0;
++    }
++    const uint64_t c0 = __rdtsc();
++    if (_pool.size() > RULE_POOL_MAX) RULE_COMPACT ? compact_rules() : clear_rules();
++    _seed.clear();
++    const uint32_t off = derive_rule(a, 0);
++    _rules[h] = {a, off};
++    if (RULE_PROTECT) _rule_age[h] = 0;
++    if constexpr (RULE_COLOC) _cold[h].rule = 0x80; // the slot holds a rule (or a "none") now
++    if (off) ++stats_counters.rule_derived; else ++stats_counters.rule_negative;
++#ifdef RULE_PROFILE
++    if (off) prof_add(off, a);
++#endif
++    stats_counters.rule_derive_cycles += __rdtsc() - c0;
++    return off;
++  }
++
++  /** Derive the rule for applying any closure the value template at `parent`
++   * builds: its nodes with H renamed to the next binding, the result as the head.
++   * Recorded in the parent's T_CHILD (1 = none). */
++  [[gnu::noinline]] uint32_t derive_child(uint32_t parent) {
++    const uint64_t c0 = __rdtsc();
++    if (_pool.size() > RULE_POOL_MAX) { RULE_COMPACT ? compact_rules() : clear_rules(); return 0; } // parent is gone
++    const uint32_t nbind = _pool[parent + T_NBIND], nn = _pool[parent + T_NN];
++    const uint32_t *pn = _pool.data() + parent + T_HDR;
++    // The seed: the parent's nodes the closure (its result) reaches, renumbered in
++    // order, with the parent's H as the next binding — every seed is then reachable
++    // from the head, which is what lets a firing bind them all by walking it.
++    uint32_t keep[RULE_MAX_NODES + 1];
++    std::fill_n(keep, nn, 0);
++    const auto reach = [&](uint32_t x) { if (x >= NODE0) keep[x - NODE0] = 1; };
++    reach(_pool[parent + T_A]);
++    for (uint32_t k = nn; k-- > 0;)
++      if (keep[k]) reach(pn[2 * k]), reach(pn[2 * k + 1]);
++    uint32_t kept = 0;
++    for (uint32_t k = 0; k < nn; ++k) keep[k] = keep[k] ? NODE0 + kept++ : 0;
++    const auto ren = [&](uint32_t x) { return x == HOLE ? BIND0 + nbind : x >= NODE0 ? keep[x - NODE0] : x; };
++    _seed.clear();
++    for (uint32_t k = 0; k < nn; ++k)
++      if (keep[k]) _seed.push_back(ren(pn[2 * k])), _seed.push_back(ren(pn[2 * k + 1]));
++    const uint32_t off = derive_rule(ren(_pool[parent + T_A]), nbind + 1);
++    _pool[parent + T_CHILD] = off ? off : 1;
++    if (off) ++stats_counters.rule_child_derived; else ++stats_counters.rule_child_negative;
++#ifdef RULE_PROFILE
++    if (off) prof_add(off, 0);
++#endif
++    stats_counters.rule_derive_cycles += __rdtsc() - c0;
++    return off;
++  }
++
++  /** The child rule for a closure with provenance p, deriving it on the
++   * RULE_PROV_THRESH-th application: an offset, or 0. */
++  [[gnu::noinline]] uint32_t prov_rule(uint32_t parent) {
++    if (++_pool[parent + T_CCOUNT] < RULE_PROV_THRESH) return 0;
++    return derive_child(parent);
++  }
++
++  /**
++   * Fire the template at `off` for argument b (and bindings, for a child rule):
++   * build its nodes, push its frames, and return the residual — reduce(a', b') as
++   * a' | b' << 32, or a result r as r (b' = 0).
++   */
++  [[gnu::noinline]] uint64_t fire(uint32_t off, Tree head, Tree b) {
++#ifdef RULE_PROFILE
++    ++_prof[off].fires;
++#endif
++    const uint32_t *t = _pool.data() + off;
++    Tree inst[8 + RULE_MAX_NODES];
++    inst[0] = b;
++    if (t[T_MODE] == 2) {
++      const Node bn = _arena[b];
++      inst[1] = bn.u, inst[2] = bn.v;
++      off = t[T_HDR + (!bn.u ? 0 : !bn.v ? 1 : 2)];
++      t = _pool.data() + off;
++      ++stats_counters.rule_split_fires;
++    }
++    const uint32_t len = t[T_LEN], nn = t[T_NN], nf = t[T_NF], ns = t[T_NSEED];
++    const uint32_t *p = t + T_HDR;
++    const auto res = [&](uint32_t s) { return s & SYM ? inst[s & ~SYM] : s; };
++    if (ns) { // a child rule: bind the head's nodes and the bindings by walking the head
++      inst[8 + ns - 1] = head;
++      for (uint32_t k = ns; k-- > 0;) {
++        const Node x = _arena[inst[8 + k]];
++        if (p[2 * k] & SYM) inst[p[2 * k] & ~SYM] = x.u;
++        if (p[2 * k + 1] & SYM) inst[p[2 * k + 1] & ~SYM] = x.v;
++      }
++      p += 2 * ns;
++    }
++    for (uint32_t k = ns; k < nn; ++k, p += 2) inst[8 + k] = intern(res(p[0]), res(p[1]));
++    const uint32_t s0 = uint32_t(stats_counters.steps) - 1;
++    stats_counters.steps += len - 1;
++    stats_counters.rule_skipped += len - 1;
++    ++stats_counters.rule_fires;
++    stats_counters.rule_nodes += nn;
++    stats_counters.rule_frames += nf;
++    for (uint32_t k = 0; k < nf; ++k, p += 4) _stack.emplace_back(FrameTag(p[0]), res(p[1]), res(p[2]), s0 + p[3]);
++    const Tree r = res(t[T_A]);
++    if (RULE_PROV && t[T_PROV]) { // record the closure: its template, and what it was built from
++      _prov[hash(r, 0) & ((size_t(1) << RULE_PROV_BITS) - 1)] = {r, off};
++      ++stats_counters.rule_prov_records;
++    }
++    return uint64_t(r) | uint64_t(t[T_MODE] ? 0 : res(t[T_B])) << 32;
++  }
++
++public:
++  /** PROTOTYPE debugging: render the template at `off`, constants named by `name`. */
++  template <typename Name> std::string render_template(uint32_t off, Name name) {
++    const uint32_t *t = _pool.data() + off;
++    const std::function<std::string(uint32_t, int)> show = [&](uint32_t s, int d) -> std::string {
++      if (s == HOLE) return "H";
++      if (s == HOLE_U) return "Hu";
++      if (s == HOLE_V) return "Hv";
++      if (s >= BIND0 && s < NODE0) return "B" + std::to_string(s - BIND0);
++      if (s >= NODE0) {
++        const uint32_t *nd = t + T_HDR + 2 * (s - NODE0);
++        return nd[1] ? "(\u25b3 " + show(nd[0], d) + " " + show(nd[1], d) + ")" : "(\u25b3 " + show(nd[0], d) + ")";
++      }
++      if (s == 1) return "\u25b3";
++      const std::string n = name(s);
++      if (!n.empty()) return n;
++      if (d <= 0) return "#" + std::to_string(s);
++      const Node x = _arena[s];
++      return x.v ? "(\u25b3 " + show(x.u, d - 1) + " " + show(x.v, d - 1) + ")" : "(\u25b3 " + show(x.u, d - 1) + ")";
++    };
++    std::string out = "len=" + std::to_string(t[T_LEN]) + " nodes=" + std::to_string(t[T_NN]) +
++                      (t[T_NSEED] ? " (" + std::to_string(t[T_NSEED]) + " walked from the head)" : "") +
++                      " frames=" + std::to_string(t[T_NF]) + "\n    ";
++    if (t[T_MODE] == 1) out += "value " + show(t[T_A], 2);
++    else out += "reduce(" + show(t[T_A], 2) + ", " + show(t[T_B], 2) + ")";
++    const uint32_t *fr = t + T_HDR + 2 * t[T_NN];
++    for (uint32_t k = t[T_NF]; k-- > 0;) {
++      const uint32_t *f = fr + 4 * k;
++      static const char *tags[] = {"APPLY_TO", "COMPUTE_AND_APPLY", "MEMOIZE", "APPLY_FN"};
++      out += std::string("\n    then ") + tags[f[0]] + "(" + show(f[1], 2) + (f[0] == COMPUTE_AND_APPLY || f[0] == MEMOIZE ? ", " + show(f[2], 2) : "") + ")";
++    }
++    return out + "\n";
++  }
++
++  /** PROTOTYPE debugging: derive the rule for head `a` (an S-step head) and render it,
++   * split on H's shape too if `split`, and — if it is a closure-building value
++   * template — the child (order-1b) rule for every closure it builds. */
++  template <typename Name> std::string describe_rule(Tree a, Name name, bool split = false) {
++    if constexpr (RULES) {
++      const Node an = _arena[a];
++      if (!an.u || !an.v || !_arena[an.u].u || _arena[an.u].v) return "not an S-step head\n";
++      static const char *stops[] = {"value", "needs a hole", "cap", "jet", "head"};
++      _seed.clear();
++      _hole_shape = -1;
++      std::string out;
++      const uint32_t off = derive_one(a, HOLE, 0);
++      out += std::string("  stop=") + stops[_stop] + " " + (off ? render_template(off, name) : "(no rule)\n");
++      if (split) {
++        const char *labels[] = {"  H=\u25b3: ", "  H=\u25b3Hu: ", "  H=\u25b3HuHv: "};
++        for (int sh = 0; sh < 3; ++sh) {
++          _hole_shape = sh ? sh : -1;
++          const uint32_t o = derive_one(a, sh ? HOLE : leaf(), 0);
++          out += std::string(labels[sh]) + "stop=" + stops[_stop] + " " + (o ? render_template(o, name) : "(no rule)\n");
++        }
++        _hole_shape = -1;
++      }
++      if (off && _pool[off + T_PROV]) {
++        const uint32_t child = derive_child(off);
++        out += std::string("  child (any closure it builds, applied to H): stop=") + stops[_stop] + " " +
++               (child ? render_template(child, name) : "(no rule)\n");
++      }
++      return out;
++    }
++    return "";
++  }
++private:
++
+   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
+    * are permanent (padding and the shared leaf), so they count as live. */
+   bool marked(Tree at) const {
+@@ -601,7 +1198,7 @@
+     std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
+     _memo_mask = MIN_TABLE - 1;
+     _memo_puts = 0;
+-    std::fill(std::begin(_cold), std::end(_cold), 0);
++    std::fill(std::begin(_cold), std::end(_cold), std::remove_reference_t<decltype(_cold[0])>{});
+   }
+ 
+   /**
+@@ -640,6 +1237,7 @@
+     rebuild_interned(MIN_TABLE);
+     size_memo();
+     intern_jets();
++    clear_rules();
+   }
+ 
+   ~BasicEagerGraphNilMmap32() {
+@@ -671,6 +1269,7 @@
+     rebuild_interned(MIN_TABLE);
+     size_memo();
+     intern_jets();
++    clear_rules();
+   }
+ 
+   /**
+@@ -713,7 +1312,8 @@
+       *m = {0, 0, 0};
+     }
+     // Swept indices will be reused by other functions.
+-    std::fill(std::begin(_cold), std::end(_cold), 0);
++    std::fill(std::begin(_cold), std::end(_cold), std::remove_reference_t<decltype(_cold[0])>{});
++    clear_rules(); // PROTOTYPE: rule keys and constants are indices too
+     sweep();
+     while (_run_end > _run && !_arena[_run_end].u) --_run_end; // what survived of the run
+     if (_run_end == _run) _run = _run_end = 0;
+@@ -745,8 +1345,8 @@
+   }
+ 
+   Tree leaf() { return 1; }
+-  Tree stem(Tree u) { return intern(u, 0); }
+-  Tree fork(Tree u, Tree v) { return intern(u, v); }
++  RULE_HOT Tree stem(Tree u) { return intern(u, 0); }
++  RULE_HOT Tree fork(Tree u, Tree v) { return intern(u, v); }
+ 
+   /**
+    * fork(x1, fork(x2, … fork(xn, tail))), with last() giving xn, then x(n-1),
+@@ -856,6 +1456,71 @@
+         }
+         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
++          if constexpr (RULES) { // PROTOTYPE: after the memo, as skip_line
++            const uint64_t hh = hash(a, 0);
++            const uint32_t h = uint32_t(hh >> (64 - RULE_BITS));
++            uint32_t off = 0;
++            bool has = true; // whether the slot may hold a's rule
++            if constexpr (RULE_COLOC) has = _cold[h].rule & 0x80;
++            const RuleSlot slot = has ? _rules[h] : RuleSlot{0, 0};
++            if (slot.key == a) {
++              off = slot.off;
++              if (RULE_PROTECT && off && _rule_age[h] < 255) ++_rule_age[h];
++            } else {
++              if (RULE_PROV) {
++                const Prov &pv = _prov[hh & ((size_t(1) << RULE_PROV_BITS) - 1)];
++                if (pv.key == a) {
++                  const uint32_t child = _pool[pv.off + T_CHILD];
++                  off = child > 1 ? child : child ? 0 : prov_rule(pv.off);
++                  if (off) ++stats_counters.rule_child_fires;
++                }
++              }
++              if (!off) {
++                if constexpr (RULE_COLOC && RULE_MG) {
++                  // Count only the bucket's candidate head (by an 8-bit tag), Misra-Gries
++                  // style: another head's miss takes one back, and replaces the candidate
++                  // at 0 — so a busy bucket of cold heads does not trigger derivations.
++                  auto &c = _cold[h];
++                  const uint8_t tag = uint8_t(hh >> 40);
++                  if (c.tag == tag) {
++                    if ((++c.rule & 0x7f) >= RULE_THRESH) [[unlikely]] c.rule &= 0x80, off = derive(a, h);
++                  } else if (c.rule & 0x7f) {
++                    --c.rule;
++                  } else {
++                    c.tag = tag, ++c.rule;
++                  }
++                } else if constexpr (RULE_COLOC) {
++                  uint8_t &r = _cold[h].rule;
++                  if ((++r & 0x7f) >= RULE_THRESH) [[unlikely]] r &= 0x80, off = derive(a, h);
++                } else if (++_rule_count[h] >= RULE_THRESH) [[unlikely]] {
++                  off = derive(a, h);
++                }
++              }
++            }
++            if (off) {
++              const uint64_t st = fire(off, a, b);
++              a = uint32_t(st);
++              if ((b = uint32_t(st >> 32))) goto reduce;
++              result = a;
++              goto dispatch;
++            }
++          }
++          if constexpr (RULE_SHAPEJETS) { // PROTOTYPE: runtime-map's B and C-R3 shape jets, for heads without a rule
++            const Node xn = _arena[un.u];
++            if (xn.u == 1 && xn.v) { // a = △(△(△△f))y = B f y: apply(f, apply(y, b)), skipping the K step
++              ++stats_counters.shape_b;
++              _stack.emplace_back(APPLY_FN, xn.v, 0);
++              a = y;
++              goto reduce;
++            }
++            const Node yn = _arena[y];
++            if (yn.u == 1 && yn.v) { // a = △(△f)(△△g) = C f g: apply(apply(f, b), g), skipping the K step
++              ++stats_counters.shape_c;
++              _stack.emplace_back(APPLY_TO, yn.v, 0);
++              a = un.u;
++              goto reduce;
++            }
++          }
+           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
+           a = y;
+           goto reduce;
+@@ -908,6 +1573,9 @@
+           // takes to become `a`, which allocates nothing.
+           a = result;
+           b = f.arg1();
++        } else if (RULE_SHAPEJETS && f.tag() == APPLY_FN) { // PROTOTYPE
++          a = f.arg1();
++          b = result;
+         } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
+           _stack.emplace_back(APPLY_TO, result, 0);
+           a = f.arg1();
+@@ -927,3 +1595,4 @@
+ 
+ using EagerGraphNilMmap32 = BasicEagerGraphNilMmap32<false>;
+ using EagerGraphNilMmap32Jets = BasicEagerGraphNilMmap32<true>;
++using EagerGraphNilMmap32Rules = BasicEagerGraphNilMmap32<true, true>; // PROTOTYPE
+diff -ruN a/implementation/cpp/rules-prototype/batch.sh b/implementation/cpp/rules-prototype/batch.sh
+--- a/implementation/cpp/rules-prototype/batch.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/batch.sh	2026-10-08 04:52:50.792191630 +0000
+@@ -0,0 +1,20 @@
++#!/bin/bash
++# cachegrind (LL modelled as a 2 MiB L2) over workloads x variants; one summary line each.
++cd "$(dirname "$0")/.."
++out=cg/batch-$(date +%s).txt
++for w in "$@"; do
++  case $w in
++    mixs) cmd=work/mixs.cmd ;;
++    *) cmd=bench/$w.jcmd ;;
++  esac
++  for v in $VARIANTS; do
++    nice -n 10 valgrind --tool=cachegrind --cache-sim=yes --LL=2097152,16,64 --cachegrind-out-file=/dev/null ./bin/drv-$v $cmd > cg/tmp.log 2>&1
++    ir=$(grep "I *refs:" cg/tmp.log | awk '{print $4}')
++    d1=$(grep "D1  misses:" cg/tmp.log | awk '{print $4}')
++    ll=$(grep "LLd misses:" cg/tmp.log | awk '{print $4}')
++    st=$(grep -o "real_steps=[0-9]*\| steps=[0-9]*" cg/tmp.log | tail -1)
++    h=$(grep -o "hash [0-9a-f]*" cg/tmp.log | tail -1)
++    echo "$w $v Ir=$ir D1miss=$d1 L2miss=$ll $st $h" >> $out
++  done
++done
++echo done >> $out
+diff -ruN a/implementation/cpp/rules-prototype/bench.py b/implementation/cpp/rules-prototype/bench.py
+--- a/implementation/cpp/rules-prototype/bench.py	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/bench.py	2026-10-08 04:52:50.792138970 +0000
+@@ -0,0 +1,33 @@
++"""Interleaved best-of-N timing. usage:
++  bench.py N LABEL_REGEX name=binary:cmdfile ...
++Each round runs every config once (in order); ms is the sum of the ms= fields of
++stdout lines matching LABEL_REGEX; hashes ('hash XXXXXXXXXXXXXXXX') must agree."""
++import re, subprocess, sys, statistics, os, resource
++N = int(sys.argv[1]); lab = re.compile(sys.argv[2])
++cfgs = []
++for a in sys.argv[3:]:
++    name, rest = a.split('=', 1); binary, cmd = rest.split(':', 1); cfgs.append((name, binary, cmd))
++times = {c[0]: [] for c in cfgs}; cpu = {c[0]: [] for c in cfgs}; last = {}; hashes = {}; ok = {}
++for r in range(N):
++    for name, binary, cmd in cfgs:
++        r0 = resource.getrusage(resource.RUSAGE_CHILDREN)
++        p = subprocess.run(['nice', '-n', '10', binary, cmd], capture_output=True, text=True)
++        r1 = resource.getrusage(resource.RUSAGE_CHILDREN)
++        cpu[name].append(1000 * (r1.ru_utime - r0.ru_utime + r1.ru_stime - r0.ru_stime))
++        out = p.stdout
++        ms = 0.0; line = ''
++        for l in out.splitlines():
++            if lab.search(l):
++                m = re.search(r' ms=([\d.]+)', l)
++                if m: ms += float(m.group(1)); line = l
++        times[name].append(ms); last[name] = line
++        hashes[name] = tuple(re.findall(r'hash ([0-9a-f]{16})', out))
++        ok[name] = p.returncode == 0 and 'MISMATCH' not in out
++base = min(times[cfgs[0][0]]); cbase = min(cpu[cfgs[0][0]])
++h0 = hashes[cfgs[0][0]]
++for name, *_ in cfgs:
++    t = times[name]
++    ctr = re.sub(r'^\S+ \S+\s+', '', last[name])
++    ctr = re.sub(r' ms=[\d.]+', '', ctr)
++    print(f"{name:14} best={min(t):9.2f}ms med={statistics.median(t):9.2f}ms d={100*(min(t)/base-1):+6.1f}% cpu_best={min(cpu[name]):9.1f}ms cpu_d={100*(min(cpu[name])/cbase-1):+6.1f}% {'OK' if ok[name] else 'FAIL'} {'same-hash' if hashes[name]==h0 else 'HASH-DIFF '+str(hashes[name])} :: {ctr}")
++sys.stdout.flush()
+diff -ruN a/implementation/cpp/rules-prototype/build-drv.sh b/implementation/cpp/rules-prototype/build-drv.sh
+--- a/implementation/cpp/rules-prototype/build-drv.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/build-drv.sh	2026-10-08 04:52:50.794134379 +0000
+@@ -0,0 +1,5 @@
++#!/bin/bash
++# build.sh NAME [-DFLAG=..]...   -> bin/drv-NAME (rules header with the given config)
++cd "$(dirname "$0")"
++name=$1; shift
++c++ -O3 -std=c++17 -DRULESHDR "$@" drv.cpp -o bin/drv-$name
+diff -ruN a/implementation/cpp/rules-prototype/build-tests.sh b/implementation/cpp/rules-prototype/build-tests.sh
+--- a/implementation/cpp/rules-prototype/build-tests.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/build-tests.sh	2026-10-08 04:52:50.796000470 +0000
+@@ -0,0 +1,30 @@
++#!/bin/bash
++cd "$(dirname "$0")/.."
++b() { local name=$1; shift; c++ -O2 -std=c++17 "$@" test-rules.cpp -o test/t-$name; }
++b A -DRULE_THRESH=1 -DRULE_MEMO_FRAMES=1 -DRULE_COLOC=0 &
++b B -DRULE_THRESH=1 -DRULE_MAX_STEPS=4 -DRULE_MAX_NODES=4 -DRULE_MAX_FRAMES=6 &
++b C -DRULE_THRESH=1 -DRULE_MEMO_FRAMES=0 &
++b D -DRULE_THRESH=1 -DRULE_SPLIT=1 -DRULE_MEMO_FRAMES=0 &
++wait
++b E -DRULE_THRESH=1 -DRULE_SPLIT=1 -DRULE_MAX_STEPS=12 -DRULE_MAX_NODES=6 -DRULE_MAX_FRAMES=8 &
++b F -DRULE_THRESH=2 -DRULE_MEMO_FRAMES=0 -DRULE_BITS=4 -DRULE_COLOC=0 -DRULE_POOL_MAX=200 &
++b G -DRULE_THRESH=1 -DRULE_SPLIT=1 -DRULE_MEMO_FRAMES=1 -DRULE_MAX_STEPS=1000 -DRULE_MAX_NODES=200 -DRULE_MAX_FRAMES=200 &
++b H -DRULE_THRESH=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_MEMO_FRAMES=0 &
++wait
++b I -DRULE_THRESH=3 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_SPLIT=1 -DRULE_PROV_BITS=6 -DRULE_POOL_MAX=3000 &
++b J -DRULE_THRESH=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_MAX_STEPS=8 -DRULE_MAX_NODES=10 -DRULE_MAX_FRAMES=8 -DRULE_BITS=6 -DRULE_COLOC=0 -DRULE_POOL_MAX=500 &
++b K -DRULE_THRESH=2 -DRULE_PROV=1 -DRULE_PROV_THRESH=2 -DRULE_MEMO_FRAMES=1 -DRULE_COMPACT=0 -DRULE_POOL_MAX=2000 &
++b L -DRULE_THRESH=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_SPLIT=1 -DRULE_MIN_LEN=1 -DRULE_MIN_LEN_CHILD=1 &
++wait
++b M -DRULE_THRESH=1 -DRULE_SHAPEJETS=1 -DRULE_MEMO_FRAMES=0 &
++b N -DRULE_THRESH=2 -DRULE_SHAPEJETS=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_SPLIT=1 -DRULE_MIN_LEN_CHILD=1 -DRULE_POOL_MAX=1500 &
++b O -DRULE_THRESH=64 -DRULE_SHAPEJETS=1 -DRULE_PROV=1 -DRULE_MEMO_FRAMES=0 -DRULE_MIN_LEN_CHILD=4 &
++wait
++b P -DRULE_THRESH=1 -DRULE_COLOC=1 -DRULE_MEMO_FRAMES=0 &
++b Q -DRULE_THRESH=2 -DRULE_COLOC=1 -DRULE_SHAPEJETS=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_SPLIT=1 -DRULE_MIN_LEN_CHILD=1 -DRULE_POOL_MAX=1500 &
++b R -DRULE_THRESH=64 -DRULE_COLOC=1 -DRULE_MEMO_FRAMES=0 &
++wait
++b S -DRULE_THRESH=1 -DRULE_MG=1 &
++b T -DRULE_THRESH=2 -DRULE_MG=1 -DRULE_PROTECT=1 -DRULE_PROV=1 -DRULE_PROV_THRESH=1 -DRULE_SPLIT=1 -DRULE_SHAPEJETS=1 -DRULE_MIN_LEN_CHILD=1 -DRULE_POOL_MAX=2500 &
++b U -DRULE_THRESH=3 -DRULE_MG=1 -DRULE_PROTECT=1 -DRULE_MAX_STEPS=10 -DRULE_MAX_NODES=8 -DRULE_MAX_FRAMES=8 &
++wait
+diff -ruN a/implementation/cpp/rules-prototype/drv.cpp b/implementation/cpp/rules-prototype/drv.cpp
+--- a/implementation/cpp/rules-prototype/drv.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/drv.cpp	2026-10-08 04:52:50.792105752 +0000
+@@ -0,0 +1,587 @@
++// Standalone driver for (a copy of) eager-graph-nil-mmap-32.hpp.
++// Build: c++ -O3 -std=c++17 [-DINSTR] drv.cpp -o drv[-instr]
++// Script commands (one per line, '#' comments):
++//   budget MB | jets on|off | memo on|off | reset_memo
++//   load PATH                 parse a DAG file (3-word lines are applied)
++//   def NAME F X...           NAME = F X1 X2 ... (left-assoc apply)
++//   measure LABEL F X...      same, print counters for it
++//   trace F X...              print every reduce step (INSTR)
++//   profile on|off|dump N     histogram of reduce-step function shapes (INSTR)
++//   ternary PATH              benchmark: fold-apply ternary lines from identity
++//   show NAME
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <fstream>
++#include <iostream>
++#include <map>
++#include <sstream>
++#include <string>
++#include <unordered_map>
++#include <vector>
++#include <algorithm>
++#include <random>
++#include <unordered_set>
++
++#ifdef INSTR
++#include "eager-instr.hpp"
++#elif defined(FIXJET)
++#include "eager-jet.hpp"
++#elif defined(RULESHDR)
++#include "eager-rules.hpp"
++#else
++#include "eager-pristine.hpp"
++#endif
++
++#ifdef RULESHDR
++#ifndef REDUCER
++#define REDUCER EagerGraphNilMmap32Rules
++#endif
++using Reducer = REDUCER;
++#else
++using Reducer = EagerGraphNilMmap32Jets;
++#endif
++static Reducer E;
++using Tree = uint32_t;
++static std::unordered_map<std::string, Tree> env;
++static std::unordered_map<Tree, std::string> name_of;
++static bool pprof_live = false; // register symbols as their alias lines are read
++static void pprof_register(const std::string &nm, uint32_t t);
++
++static uint32_t NU(uint32_t t) { return E.triage([] { return 0u; }, [](uint32_t u) { return u; }, [](uint32_t u, uint32_t) { return u; }, t); }
++static uint32_t NV(uint32_t t) { return E.triage([] { return 0u; }, [](uint32_t) { return 0u; }, [](uint32_t, uint32_t v) { return v; }, t); }
++static std::string read_file(const std::string &p) {
++  std::ifstream f(p, std::ios::binary);
++  if (!f) { std::fprintf(stderr, "cannot open %s\n", p.c_str()); std::exit(1); }
++  std::ostringstream b; b << f.rdbuf(); return b.str();
++}
++static Tree get(const std::string &n) {
++  if (n == "\xe2\x96\xb3") return E.leaf();
++  auto it = env.find(n);
++  if (it == env.end()) { std::fprintf(stderr, "unbound %s\n", n.c_str()); std::exit(1); }
++  return it->second;
++}
++static bool good_name(const std::string &n) {
++  if (n.empty() || std::isdigit((unsigned char)n[0])) return false;
++  if (n.rfind(":test", 0) == 0 || n.rfind(":source", 0) == 0 || n[0] == '~') return false;
++  return true;
++}
++static std::unordered_map<std::string, std::pair<uint64_t, double>> line_cost; // id -> (steps, ms)
++static std::vector<std::pair<std::string, std::string>> aliases;
++static bool record_lines = false;
++static uint64_t line_start_steps = 0;
++static void parse_dag(const std::string &text) {
++  std::istringstream in(text);
++  for (std::string line; std::getline(in, line);) {
++    std::istringstream ws(line);
++    std::string w[3]; int n = 0;
++    while (n < 3 && (ws >> w[n])) ++n;
++    if (n == 3) {
++      uint64_t s0 = E.stats_counters.steps;
++      auto t0 = std::chrono::steady_clock::now();
++      Tree v = E.apply(get(w[1]), get(w[2]));
++      if (record_lines) line_cost[w[0]] = {E.stats_counters.steps - s0, std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count()};
++      env[w[0]] = v; E.roots().push_back(v);
++    } else if (n == 2) {
++      if (record_lines) {
++        static uint64_t last_steps = 0; static auto last_t = std::chrono::steady_clock::now();
++        if (aliases.empty()) { last_steps = 0; }
++        uint64_t now = E.stats_counters.steps; auto tn = std::chrono::steady_clock::now();
++        line_cost["@" + w[0]] = {now - (aliases.empty() ? line_start_steps : last_steps), std::chrono::duration<double, std::milli>(tn - last_t).count()};
++        last_steps = now; last_t = tn;
++        aliases.emplace_back(w[0], "@" + w[0]);
++      }
++      Tree v = get(w[1]); env[w[0]] = v;
++#ifdef INSTR
++      if (pprof_live && good_name(w[0]) && v > 1) pprof_register(w[0], v);
++#endif
++      if (good_name(w[0])) {
++        auto it = name_of.find(v);
++        if (it == name_of.end() || w[0].size() < it->second.size()) name_of[v] = w[0];
++      }
++    }
++  }
++}
++
++#ifdef INSTR
++static std::string desc(Tree t, int depth) {
++  if (t == 1) return "\xe2\x96\xb3";
++  auto it = name_of.find(t);
++  if (it != name_of.end()) return it->second;
++  if (depth == 0) return "*";
++  uint32_t u = E.node_u(t), v = E.node_v(t);
++  auto p = [&](Tree x) { std::string s = desc(x, depth - 1); return s.find(' ') != std::string::npos ? "(" + s + ")" : s; };
++  if (!v) return "\xe2\x96\xb3 " + p(u);
++  return "\xe2\x96\xb3 " + p(u) + " " + p(v);
++}
++static bool tracing = false;
++static uint64_t trace_n = 0;
++// profile: signature of `a` (depth-limited, named) -> count
++static std::unordered_map<Tree, uint32_t> sig_cache; // cleared on gc
++static uint64_t sig_gcs = 0;
++static std::unordered_map<std::string, uint32_t> sig_id;
++static std::vector<std::string> sig_str;
++static std::vector<uint64_t> sig_count;
++static int prof_depth = 3;
++struct UProf { uint64_t steps = 0, hits = 0; uint32_t last_a = 0, a_changes = 0; uint32_t last_b = 0, b_changes = 0; };
++static std::unordered_map<uint32_t, UProf> uprof; // key: an.u for fork a; sentinels for leaf/stem a
++static uint32_t ukey(uint32_t a) { uint32_t u = E.node_u(a); if (!u) return 0x7ffffffe; if (!E.node_v(a)) return 0x7fffffff; return u; }
++static void on_hit_u(void *, uint32_t a, uint32_t) { ++uprof[ukey(a)].hits; }
++static void on_reduce_u(void *, uint32_t a, uint32_t b) {
++  UProf &p = uprof[ukey(a)];
++  ++p.steps;
++  if (a != p.last_a) { ++p.a_changes; p.last_a = a; }
++  if (b != p.last_b) { ++p.b_changes; p.last_b = b; }
++}
++// ---- provenance profile: which (named symbol, k-th argument) application each step belongs to
++static std::vector<uint32_t> prov;            // node -> (sym id << 8) | args applied so far (0 = the symbol itself)
++static std::vector<std::pair<uint32_t, uint32_t>> prov_static; // named symbol values
++static std::vector<std::string> sym_names;
++struct Open { int64_t depth; uint64_t steps0; uint32_t key; };
++static std::vector<Open> open_calls;
++struct CallStat { uint64_t calls = 0, incl = 0, self = 0, hits = 0, one_step = 0; };
++static std::unordered_map<uint32_t, CallStat> cstat;
++static uint64_t prov_gcs = 0, prov_untracked = 0;
++static void prov_reset() {
++  std::fill(prov.begin(), prov.end(), 0);
++  for (auto &[t, v] : prov_static) prov[t] = v;
++}
++static inline void prov_set(uint32_t t, uint32_t v) {
++  if (t <= 1) return; // the leaf is nobody's partial application
++  if (t >= prov.size()) prov.resize(std::max<size_t>(t + 1, prov.size() * 2), 0);
++  prov[t] = v;
++}
++static void on_reduce_p(void *, uint32_t a, uint32_t) {
++  if (E.stats_counters.gcs != prov_gcs) { prov_gcs = E.stats_counters.gcs; prov_reset(); }
++  const uint32_t p = a < prov.size() ? prov[a] : 0;
++  if (p && (p & 255) < 255) open_calls.push_back({(int64_t)E.stack_depth(), E.stats_counters.steps, p + 1});
++  if (!open_calls.empty()) ++cstat[open_calls.back().key].self; else ++prov_untracked;
++}
++static void on_hit_p(void *, uint32_t a, uint32_t) {
++  if (!open_calls.empty()) { const uint32_t p = a < prov.size() ? prov[a] : 0; if (p && open_calls.back().key == p + 1 && open_calls.back().steps0 == E.stats_counters.steps) ++cstat[p + 1].hits; }
++}
++static std::unordered_map<uint32_t, int> arity_of; // node -> parametric arity (args absorbed without inspecting them)
++static std::vector<int> sym_arity;
++static std::unordered_map<std::string, int> arity_by_name;
++
++static void on_pop_p(void *, int64_t size, uint32_t result) {
++  while (!open_calls.empty() && open_calls.back().depth > size) {
++    const Open o = open_calls.back(); open_calls.pop_back();
++    CallStat &c = cstat[o.key];
++    const uint64_t n = E.stats_counters.steps - o.steps0 + 1;
++    ++c.calls; c.incl += n; if (n == 1) ++c.one_step;
++    if ((int)(o.key & 255) <= sym_arity[o.key >> 8]) prov_set(result, o.key); // still a partial application
++  }
++}
++static void pprof_register(const std::string &nm, uint32_t t) {
++  if (t < prov.size() && prov[t] && (prov[t] & 255) == 0) return; // already a symbol (an alias of the same value); a dynamic label is overridden
++  auto it = arity_by_name.find(nm);
++  uint32_t id = sym_names.size(); sym_names.push_back(nm); sym_arity.push_back(it == arity_by_name.end() ? 0 : it->second);
++  prov_static.push_back({t, id << 8}); prov_set(t, id << 8);
++}
++// arity probe: apply to unique marker trees; abort as soon as a rule depends on a marker
++static std::vector<uint32_t> markers;
++static uint64_t probe_steps = 0;
++struct Inspected {};
++static void on_reduce_probe(void *, uint32_t a, uint32_t b) {
++  if (++probe_steps > 200000) throw Inspected{};
++  for (uint32_t m : markers) {
++    if (a == m) throw Inspected{};
++    const uint32_t u = E.node_u(a);
++    if (u && E.node_v(a)) { // a fork
++      if (u == m) throw Inspected{};
++      if (E.node_u(u) && E.node_v(u) && b == m) throw Inspected{};
++    }
++  }
++}
++static void on_reduce(void *, uint32_t a, uint32_t b) {
++  if (tracing) {
++    std::printf("  #%llu  a=%s   b=%s   depth=%zu\n", (unsigned long long)++trace_n, desc(a, 4).c_str(), desc(b, 2).c_str(), E.stack_depth());
++    return;
++  }
++  if (E.stats_counters.gcs != sig_gcs) { sig_cache.clear(); sig_gcs = E.stats_counters.gcs; }
++  auto it = sig_cache.find(a);
++  uint32_t id;
++  if (it != sig_cache.end()) id = it->second;
++  else {
++    std::string s = desc(a, prof_depth);
++    auto jt = sig_id.find(s);
++    if (jt == sig_id.end()) { id = sig_str.size(); sig_id.emplace(s, id); sig_str.push_back(s); sig_count.push_back(0); }
++    else id = jt->second;
++    sig_cache.emplace(a, id);
++  }
++  ++sig_count[id];
++}
++#endif
++
++static void print_stats(const char *label, const Reducer::Stats &b, double ms) {
++  const auto &n = E.stats_counters;
++  std::printf("%-28s steps=%llu memo_hits=%llu memo_puts=%llu jets=%llu gcs=%llu ms=%.3f",
++              label, (unsigned long long)(n.steps - b.steps), (unsigned long long)(n.memo_hits - b.memo_hits),
++              (unsigned long long)(n.memo_puts - b.memo_puts), (unsigned long long)(n.jets - b.jets),
++              (unsigned long long)(n.gcs - b.gcs), ms);
++#ifdef FIXJET
++  std::printf(" fix_jets=%llu b_jets=%llu c_jets=%llu/%llu/%llu", (unsigned long long)(n.fix_jets - b.fix_jets), (unsigned long long)(n.b_jets - b.b_jets),
++              (unsigned long long)(n.c1_jets - b.c1_jets), (unsigned long long)(n.c2_jets - b.c2_jets), (unsigned long long)(n.c3_jets - b.c3_jets));
++#endif
++#ifdef RULESHDR
++  {
++    const auto d = [&](uint64_t x, uint64_t y) { return (unsigned long long)(x - y); };
++    std::printf(" real_steps=%llu derived=%llu neg=%llu fires=%llu split_fires=%llu skipped=%llu inst_nodes=%llu inst_frames=%llu derive_steps=%llu derive_hits=%llu clears=%llu tmpl_nodes=%llu tmpl_frames=%llu len_sum=%llu stop=%llu/%llu/%llu/%llu",
++                d(n.steps - n.rule_skipped, b.steps - b.rule_skipped), d(n.rule_derived, b.rule_derived), d(n.rule_negative, b.rule_negative), d(n.rule_fires, b.rule_fires), d(n.rule_split_fires, b.rule_split_fires),
++                d(n.rule_skipped, b.rule_skipped), d(n.rule_nodes, b.rule_nodes), d(n.rule_frames, b.rule_frames), d(n.rule_derive_steps, b.rule_derive_steps), d(n.rule_derive_hits, b.rule_derive_hits),
++                d(n.rule_clears, b.rule_clears), d(n.rule_tmpl_nodes, b.rule_tmpl_nodes), d(n.rule_tmpl_frames, b.rule_tmpl_frames), d(n.rule_len_sum, b.rule_len_sum),
++                d(n.rule_stop[0], b.rule_stop[0]), d(n.rule_stop[1], b.rule_stop[1]), d(n.rule_stop[2], b.rule_stop[2]), d(n.rule_stop[3], b.rule_stop[3]));
++    std::printf(" derive_ms=%.1f", (n.rule_derive_cycles - b.rule_derive_cycles) / 2.1e6);
++    std::printf(" child_derived=%llu child_neg=%llu child_fires=%llu prov_records=%llu", d(n.rule_child_derived, b.rule_child_derived), d(n.rule_child_negative, b.rule_child_negative), d(n.rule_child_fires, b.rule_child_fires), d(n.rule_prov_records, b.rule_prov_records));
++    std::printf(" compactions=%llu", d(n.rule_compactions, b.rule_compactions));
++    std::printf(" shape_b=%llu shape_c=%llu", d(n.shape_b, b.shape_b), d(n.shape_c, b.shape_c));
++    std::printf(" protected=%llu", d(n.rule_protected, b.rule_protected));
++    std::printf(" interns=%llu allocs=%llu", d(n.interns, b.interns), d(n.allocs, b.allocs));
++  }
++#endif
++#ifdef INSTR
++  std::printf(" rules[L S K S FL FS FF hit]=");
++  for (int i = 0; i < 8; ++i) std::printf("%s%llu", i ? "/" : "", (unsigned long long)(n.rule[i] - b.rule[i]));
++  std::printf(" gc_ms=%.1f", (n.gc_ns - b.gc_ns) / 1e6);
++  std::printf(" lookups=%llu cold_skips=%llu sshape=", (unsigned long long)(n.lookups - b.lookups), (unsigned long long)(n.cold_skips - b.cold_skips));
++  for (int i = 0; i < 8; ++i) std::printf("%s%llu", i ? "/" : "", (unsigned long long)(n.sshape[i] - b.sshape[i]));
++#endif
++  std::printf("\n");
++}
++
++// structural hash (merkle over the DAG), memoized per index; valid within one GC epoch
++static std::unordered_map<uint32_t, uint64_t> shash_memo;
++static uint64_t shash(uint32_t t) {
++  if (t == 1) return 0x1234567ULL;
++  auto it = shash_memo.find(t);
++  if (it != shash_memo.end()) return it->second;
++  std::vector<std::pair<uint32_t, bool>> st{{t, false}};
++  while (!st.empty()) {
++    auto [x, ex] = st.back(); st.pop_back();
++    if (x == 1 || shash_memo.count(x)) continue;
++    uint32_t u = NU(x), v = NV(x);
++    if (!ex) { st.push_back({x, true}); st.push_back({u, false}); if (v) st.push_back({v, false}); continue; }
++    uint64_t hu = u == 1 ? 0x1234567ULL : shash_memo[u];
++    uint64_t hv = v ? (v == 1 ? 0x1234567ULL : shash_memo[v]) : 0x9999ULL;
++    uint64_t h = (hu * 0x9e3779b97f4a7c15ULL) ^ (hv + 0x7f4a7c159e3779b9ULL + (hu << 6) + (hu >> 2));
++    h ^= h >> 29; h *= 0xbf58476d1ce4e5b9ULL; h ^= h >> 32;
++    shash_memo[x] = h;
++  }
++  return shash_memo[t];
++}
++static Tree apply_chain(const std::vector<std::string> &w, size_t from) {
++  Tree r = get(w[from]);
++  for (size_t i = from + 1; i < w.size(); ++i) r = E.apply(r, get(w[i]));
++  E.roots().push_back(r);
++  return r;
++}
++
++// ternary: 0 leaf, 1 stem, 2 fork (prefix)
++static Tree of_ternary(const std::string &s, size_t &i) {
++  char c = s[i++];
++  if (c == '0') return E.leaf();
++  if (c == '1') { Tree u = of_ternary(s, i); return E.stem(u); }
++  Tree u = of_ternary(s, i); Tree v = of_ternary(s, i); return E.fork(u, v);
++}
++
++#ifdef SAMPLER
++// Poor man's sampling profiler: SIGPROF every 0.5 ms of CPU time records the
++// interrupted instruction pointer; the samples are written to $SAMPLES at exit
++// (one hex address per line, relative to the executable's load address).
++#include <signal.h>
++#include <sys/time.h>
++#include <ucontext.h>
++#include <link.h>
++static std::vector<uintptr_t> g_samples;
++static uintptr_t g_base = 0;
++static void on_prof(int, siginfo_t *, void *ctx) {
++  const auto *uc = static_cast<ucontext_t *>(ctx);
++  if (g_samples.size() < g_samples.capacity()) g_samples.push_back(uintptr_t(uc->uc_mcontext.gregs[REG_RIP]));
++}
++static int find_base(struct dl_phdr_info *info, size_t, void *) { if (!g_base) g_base = info->dlpi_addr; return 1; }
++static void start_sampler() {
++  g_samples.reserve(size_t(1) << 24);
++  dl_iterate_phdr(find_base, nullptr);
++  struct sigaction sa{}; sa.sa_sigaction = on_prof; sa.sa_flags = SA_SIGINFO | SA_RESTART; sigaction(SIGPROF, &sa, nullptr);
++  struct itimerval it{{0, 500}, {0, 500}}; setitimer(ITIMER_PROF, &it, nullptr);
++}
++static void stop_sampler() {
++  struct itimerval it{}; setitimer(ITIMER_PROF, &it, nullptr);
++  const char *out = std::getenv("SAMPLES");
++  FILE *f = std::fopen(out ? out : "samples.txt", "w");
++  for (uintptr_t pc : g_samples) std::fprintf(f, "%lx\n", (unsigned long)(pc - g_base));
++  std::fclose(f);
++}
++#endif
++
++int main(int argc, char **argv) {
++#ifdef SAMPLER
++  start_sampler();
++  std::atexit(stop_sampler);
++#endif
++  std::string script = argc > 1 ? read_file(argv[1]) : std::string(std::istreambuf_iterator<char>(std::cin), {});
++  E.set_budget(size_t(512) * 1024 * 1024 / 8);
++  std::istringstream in(script);
++  for (std::string line; std::getline(in, line);) {
++    if (line.empty() || line[0] == '#') continue;
++    std::istringstream ws(line);
++    std::vector<std::string> w; for (std::string x; ws >> x;) w.push_back(x);
++    if (w.empty()) continue;
++    const std::string &cmd = w[0];
++    auto t0 = std::chrono::steady_clock::now();
++    auto before = E.stats_counters;
++    auto ms = [&] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); };
++    if (cmd == "budget") E.set_budget(std::stoull(w[1]) * 1024 * 1024 / 8);
++    else if (cmd == "jets") E.set_jets(w[1] == "on");
++#ifdef INSTR
++    else if (cmd == "memo") E.memo_enabled = (w[1] == "on");
++    else if (cmd == "reset_memo") E.reset_memo();
++    else if (cmd == "trace") {
++      E.on_reduce = on_reduce; tracing = true; trace_n = 0;
++      std::printf("trace %s\n", line.c_str() + 6);
++      apply_chain(w, 1);
++      tracing = false; E.on_reduce = nullptr;
++      print_stats("  (trace)", before, ms());
++    } else if (cmd == "arity") {
++      std::mt19937_64 rng(42);
++      markers.clear();
++      for (int k = 0; k < 6; ++k) { Tree l = E.leaf(); for (int i = 0; i < 48; ++i) l = E.fork(rng() & 1 ? E.stem(E.leaf()) : E.leaf(), l); markers.push_back(l); E.roots().push_back(l); }
++      std::map<int, int> hist;
++      for (auto &[t, nm] : name_of) {
++        if (t <= 1) continue;
++        Tree x = t; int ar = 0;
++        size_t r0 = E.roots().size();
++        E.on_reduce = on_reduce_probe; probe_steps = 0;
++        for (int k = 0; k < 6; ++k) {
++          try { x = E.apply(x, markers[k]); E.roots().push_back(x); }
++          catch (Inspected &) { break; }
++          if (std::find(markers.begin(), markers.end(), x) != markers.end()) break; // returned an argument: saturated
++          { // a partial application captures an argument; a result with no marker in it is a constant: saturated
++            bool has = false; std::vector<uint32_t> st{x}; std::unordered_set<uint32_t> seen;
++            while (!st.empty() && !has && seen.size() < 200000) {
++              uint32_t y = st.back(); st.pop_back();
++              if (y <= 1 || !seen.insert(y).second) continue;
++              if (std::find(markers.begin(), markers.end(), y) != markers.end()) { has = true; break; }
++              st.push_back(E.node_u(y)); if (E.node_v(y)) st.push_back(E.node_v(y));
++            }
++            if (!has) break;
++          }
++          ar = k + 1;
++        }
++        E.on_reduce = nullptr;
++        E.roots().resize(r0);
++        arity_of[t] = ar; ++hist[ar];
++      }
++      if (w.size() > 1) { std::ofstream o(w[1]); for (auto &[nm, t] : env) if (good_name(nm) && arity_of.count(t)) o << nm << " " << arity_of[t] << "\n"; }
++      std::printf("arity: probed %zu symbols; histogram:", arity_of.size());
++      for (auto &[a, n] : hist) std::printf(" %d:%d", a, n);
++      std::printf("\n");
++      for (const char *nm : {":k", ":i", ":s", ":b", ":c", ":ct", "fix", "triage", "wait", "compose", "const", "let", "id", "List.map", "List.length", "List.match", "Bool.match", "Pair.match"}) {
++        auto it = env.find(nm); if (it != env.end()) std::printf("  arity(%s) = %d\n", nm, arity_of.count(it->second) ? arity_of[it->second] : -1);
++      }
++    } else if (cmd == "arityload") {
++      std::ifstream f(w[1]); std::string nm; int ar; while (f >> nm >> ar) arity_by_name[nm] = ar;
++      std::printf("arityload: %zu names\n", arity_by_name.size());
++    } else if (cmd == "pprofile") {
++      if (w[1] == "on") {
++        prov.assign(size_t(1) << 26, 0); prov_static.clear(); sym_names.clear();
++        std::vector<std::pair<std::string, uint32_t>> named;
++        for (auto &[t, nm] : name_of) if (t > 1) named.push_back({nm, t});
++        std::sort(named.begin(), named.end());
++        sym_arity.clear();
++        for (auto &[nm, t] : named) { uint32_t id = sym_names.size(); sym_names.push_back(nm); sym_arity.push_back(arity_of.count(t) ? arity_of[t] : 0); prov_static.push_back({t, id << 8}); }
++        prov_reset(); prov_gcs = E.stats_counters.gcs;
++        pprof_live = w.size() > 2 && w[2] == "live";
++        E.on_reduce = on_reduce_p; E.on_hit = on_hit_p; E.on_pop = on_pop_p;
++      } else if (w[1] == "off") { E.on_reduce = nullptr; E.on_hit = nullptr; E.on_pop = nullptr; }
++      else if (w[1] == "dump") {
++        size_t N = std::stoul(w[2]);
++        const bool by_self = w.size() > 3 && w[3] == "self";
++        std::vector<std::pair<uint64_t, uint32_t>> rows; uint64_t totself = 0;
++        for (auto &[k, c] : cstat) { rows.push_back({by_self ? c.self : c.incl, k}); totself += c.self; }
++        std::sort(rows.rbegin(), rows.rend());
++        const uint64_t tot = totself + prov_untracked;
++        std::printf("pprofile (sorted by %s): %llu steps, %llu untracked (%.2f%%), %zu (symbol,arg) keys\n", by_self ? "self" : "inclusive",
++                    (unsigned long long)tot, (unsigned long long)prov_untracked, 100.0 * prov_untracked / tot, rows.size());
++        std::printf("%-40s %4s %3s %12s %12s %8s %14s %8s %10s %9s %8s\n", "symbol", "arg", "ar", "calls", "memo-hit", "1-step", "self steps", "self%", "self/call", "incl/call", "incl%");
++        for (size_t i = 0; i < std::min(N, rows.size()); ++i) {
++          const uint32_t k = rows[i].second; const CallStat &c = cstat[k];
++          std::printf("%-40s %4u %3d %12llu %12llu %8llu %14llu %7.2f%% %10.2f %9.1f %7.2f%%\n", sym_names[k >> 8].c_str(), k & 255, sym_arity[k >> 8], (unsigned long long)c.calls, (unsigned long long)c.hits,
++                      (unsigned long long)c.one_step, (unsigned long long)c.self, 100.0 * c.self / tot, c.calls ? double(c.self) / c.calls : 0.0, c.calls ? double(c.incl) / c.calls : 0.0, 100.0 * c.incl / tot);
++        }
++      }
++    } else if (cmd == "uprofile") {
++      if (w[1] == "on") { E.on_reduce = on_reduce_u; E.on_hit = on_hit_u; }
++      else if (w[1] == "off") { E.on_reduce = nullptr; E.on_hit = nullptr; }
++      else if (w[1] == "reset") uprof.clear();
++      else if (w[1] == "dump") {
++        size_t N = std::stoul(w[2]);
++        int dd = w.size() > 3 ? std::stoi(w[3]) : 4;
++        std::vector<std::pair<uint64_t, uint32_t>> rows;
++        uint64_t tot = 0, toth = 0;
++        for (auto &[k, p] : uprof) { rows.push_back({p.steps, k}); tot += p.steps; toth += p.hits; }
++        std::sort(rows.rbegin(), rows.rend());
++        std::printf("uprofile: %llu steps (%llu memo hits), %zu distinct u\n", (unsigned long long)tot, (unsigned long long)toth, rows.size());
++        uint64_t cum = 0;
++        for (size_t i = 0; i < std::min(N, rows.size()); ++i) {
++          auto &p = uprof[rows[i].second]; cum += p.steps;
++          uint32_t k = rows[i].second;
++          std::string kind, d;
++          if (k == 0x7ffffffe) { kind = "L"; d = "a=\xe2\x96\xb3"; }
++          else if (k == 0x7fffffff) { kind = "St"; d = "a=\xe2\x96\xb3u"; }
++          else { uint32_t uu = E.node_u(k), uv = E.node_v(k); kind = !uu ? "K" : (!uv ? "S" : "F"); d = "u#" + std::to_string(k) + " = " + desc(k, dd); }
++          std::printf("%12llu %6.2f%% %6.2f%% hits=%-10llu a_chg=%-10u b_chg=%-10u %-2s %s\n", (unsigned long long)p.steps, 100.0 * p.steps / tot, 100.0 * cum / tot,
++                      (unsigned long long)p.hits, p.a_changes, p.b_changes, kind.c_str(), d.c_str());
++        }
++      }
++    }
++    else if (cmd == "pathnames") {
++      int D = std::stoi(w[1]);
++      std::vector<std::pair<uint32_t, std::string>> named(name_of.begin(), name_of.end());
++      std::unordered_map<uint32_t, std::string> extra;
++      for (auto &[t, nm] : named) {
++        std::vector<std::pair<uint32_t, std::string>> st{{t, ""}};
++        while (!st.empty()) {
++          auto [x, path] = st.back(); st.pop_back();
++          if (x < 2) continue;
++          if (!path.empty() && !name_of.count(x)) {
++            std::string cand = nm + "/" + path;
++            auto it = extra.find(x);
++            if (it == extra.end() || cand.size() < it->second.size()) extra[x] = cand;
++          }
++          if ((int)path.size() >= D) continue;
++          uint32_t u = E.node_u(x), v = E.node_v(x);
++          if (u) st.push_back({u, path + "u"});
++          if (v) st.push_back({v, path + "v"});
++        }
++      }
++      for (auto &[x, nm] : extra) name_of.emplace(x, nm);
++      std::printf("pathnames: %zu extra names\n", extra.size());
++    } else if (cmd == "profile") {
++      if (w[1] == "on") { E.on_reduce = on_reduce; if (w.size() > 2) prof_depth = std::stoi(w[2]); }
++      else if (w[1] == "off") E.on_reduce = nullptr;
++      else if (w[1] == "reset") { sig_cache.clear(); sig_id.clear(); sig_str.clear(); sig_count.clear(); }
++      else if (w[1] == "dump") {
++        size_t N = std::stoul(w[2]);
++        std::vector<uint32_t> ids(sig_str.size());
++        for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i;
++        std::sort(ids.begin(), ids.end(), [](uint32_t x, uint32_t y) { return sig_count[x] > sig_count[y]; });
++        uint64_t tot = 0; for (auto c : sig_count) tot += c;
++        std::printf("profile: %llu steps, %zu signatures\n", (unsigned long long)tot, sig_str.size());
++        uint64_t cum = 0;
++        for (size_t i = 0; i < std::min(N, ids.size()); ++i) {
++          cum += sig_count[ids[i]];
++          std::printf("%12llu %6.2f%% %6.2f%%  %s\n", (unsigned long long)sig_count[ids[i]], 100.0 * sig_count[ids[i]] / tot, 100.0 * cum / tot, sig_str[ids[i]].c_str());
++        }
++      }
++    }
++#endif
++    else if (cmd == "linecost") {
++      record_lines = true; aliases.clear(); line_cost.clear(); line_start_steps = E.stats_counters.steps;
++      parse_dag(read_file(w[1])); print_stats(("load " + w[1]).c_str(), before, ms());
++      record_lines = false;
++      std::vector<std::pair<uint64_t, std::string>> rows;
++      for (auto &[name, id] : aliases) { auto it = line_cost.find(id); if (it != line_cost.end()) rows.push_back({it->second.first, name + " (" + std::to_string(it->second.second) + " ms)"}); }
++      std::sort(rows.rbegin(), rows.rend());
++      size_t N = std::stoul(w[2]);
++      for (size_t i = 0; i < std::min(N, rows.size()); ++i) std::printf("%14llu  %s\n", (unsigned long long)rows[i].first, rows[i].second.c_str());
++    }
++#ifdef FIXJET
++    else if (cmd == "fixjet") {
++      Tree fk = E.apply(get("fix"), get(":k")); E.roots().push_back(fk);
++      Tree knot = E.node_u(fk), y = E.node_v(fk), c = E.node_u(y), k2 = E.node_v(c);
++      E.set_fix(knot, k2);
++      E.set_c(get(":c"), get(":k"));
++      std::printf("fixjet: knot=%u k2=%u\n", knot, k2);
++    }
++#else
++    else if (cmd == "fixjet") {}
++#endif
++#ifdef RULE_PROFILE
++    else if (cmd == "ruleprof") {
++      E.prof_retire();
++      auto &v = E._prof_retired;
++      uint64_t tot = 0; for (auto &r : v) tot += r.fires;
++      std::printf("ruleprof: %zu rules, %llu fires\n", v.size(), (unsigned long long)tot);
++      // fires-per-rule distribution, weighted
++      std::map<int, std::pair<uint64_t, uint64_t>> byf; // log2 bucket -> (rules, fires)
++      for (auto &r : v) { int b = 0; while ((1ull << (b + 1)) <= r.fires) ++b; byf[b].first++; byf[b].second += r.fires; }
++      for (auto &[b, p] : byf) std::printf("  fires in [%llu,%llu): %llu rules, %llu fires (%.1f%%)\n", 1ull << b, 2ull << b, (unsigned long long)p.first, (unsigned long long)p.second, 100.0 * p.second / tot);
++      std::map<std::string, uint64_t> shape; // fire-weighted (mode, nn, nf) and len buckets
++      std::map<int, uint64_t> lenb, skip;
++      for (auto &r : v) {
++        char k[64]; std::snprintf(k, sizeof k, "mode=%u stop=%u nodes=%u frames=%u", r.mode, r.stop, std::min(r.nn, 4u), std::min(r.nf, 4u));
++        shape[k] += r.fires;
++        int b = 0; while ((1u << (b + 1)) <= r.len) ++b; lenb[b] += r.fires; skip[b] += r.fires * (r.len ? r.len - 1 : 0);
++      }
++      std::vector<std::pair<uint64_t, std::string>> sv; for (auto &[k, f] : shape) sv.push_back({f, k});
++      std::sort(sv.rbegin(), sv.rend());
++      for (size_t i = 0; i < std::min<size_t>(20, sv.size()); ++i) std::printf("  %5.1f%% of fires: %s (4 = 4 or more)\n", 100.0 * sv[i].first / tot, sv[i].second.c_str());
++      for (auto &[b, f] : lenb) std::printf("  len in [%u,%u): %.1f%% of fires, %llu steps skipped\n", 1u << b, 2u << b, 100.0 * f / tot, (unsigned long long)skip[b]);
++      std::sort(v.begin(), v.end(), [](auto &x, auto &y) { return x.fires > y.fires; });
++      for (size_t i = 0; i < std::min<size_t>(15, v.size()); ++i) std::printf("  top: fires=%llu len=%u nodes=%u frames=%u mode=%u stop=%u head=%u\n", (unsigned long long)v[i].fires, v[i].len, v[i].nn, v[i].nf, v[i].mode, v[i].stop, v[i].head);
++      v.clear();
++    }
++#endif
++#ifdef RULESHDR
++    else if (cmd == "rule") { // rule NAME F X...: describe the rule derived for head F X...
++      Tree h = apply_chain(w, 2);
++      std::printf("rule %s:\n%s", w[1].c_str(), E.describe_rule(h, [](uint32_t t) { auto it = name_of.find(t); return it == name_of.end() ? std::string() : it->second; }, true).c_str());
++    }
++#endif
++    else if (cmd == "hashenv") {
++      shash_memo.clear();
++      std::vector<std::string> keys; for (auto &[k, v] : env) if (good_name(k) || k.rfind(":test", 0) == 0) keys.push_back(k);
++      std::sort(keys.begin(), keys.end());
++      uint64_t h = 0; for (auto &k : keys) h = h * 31 + shash(env[k]);
++      std::printf("hashenv: %zu symbols, hash %016llx\n", keys.size(), (unsigned long long)h);
++    }
++    else if (cmd == "load") { parse_dag(read_file(w[1])); print_stats(("load " + w[1]).c_str(), before, ms()); }
++    else if (cmd == "defstr") {
++      std::string text = read_file(w[2]);
++      std::vector<uint32_t> cps;
++      for (size_t i = 0; i < text.size();) {
++        unsigned char c = text[i]; uint32_t cp; int len;
++        if (c < 0x80) { cp = c; len = 1; } else if ((c & 0xE0) == 0xC0) { cp = c & 0x1F; len = 2; } else if ((c & 0xF0) == 0xE0) { cp = c & 0x0F; len = 3; } else { cp = c & 0x07; len = 4; }
++        for (int k = 1; k < len; ++k) cp = (cp << 6) | (text[i + k] & 0x3F);
++        i += len; cps.push_back(cp);
++      }
++      std::unordered_map<uint32_t, Tree> nat;
++      auto of_nat = [&](uint32_t n) { std::vector<bool> bits; while (n) { bits.push_back(n & 1); n >>= 1; } Tree f = E.leaf(); for (size_t i = bits.size(); i > 0; --i) f = E.fork(bits[i-1] ? E.stem(E.leaf()) : E.leaf(), f); return f; };
++      for (uint32_t cp : cps) if (!nat.count(cp)) { nat[cp] = of_nat(cp); E.roots().push_back(nat[cp]); }
++      Tree l = E.leaf();
++      for (size_t i = cps.size(); i > 0; --i) l = E.fork(nat[cps[i-1]], l);
++      E.roots().push_back(l); env[w[1]] = l;
++    }
++    else if (cmd == "def") { env[w[1]] = apply_chain(w, 2); }
++    else if (cmd == "measure") { Tree r = apply_chain(w, 2); double t = ms(); env["_"] = r; print_stats(w[1].c_str(), before, t); shash_memo.clear(); std::printf("  result hash %016llx\n", (unsigned long long)shash(r)); }
++    else if (cmd == "show") {
++#ifdef INSTR
++      std::printf("%s = %s\n", w[1].c_str(), desc(get(w[1]), std::stoi(w.size() > 2 ? w[2] : "6")).c_str());
++#endif
++    } else if (cmd == "ternary") {
++      std::string text = read_file(w[1]);
++      std::istringstream ts(text);
++      size_t i = 0; std::string id = "21100";
++      Tree r = of_ternary(id, i);
++      E.roots().push_back(r);
++      std::vector<Tree> args;
++      for (std::string l; std::getline(ts, l);) if (!l.empty()) { size_t j = 0; args.push_back(of_ternary(l, j)); E.roots().push_back(args.back()); }
++      t0 = std::chrono::steady_clock::now(); before = E.stats_counters;
++      for (Tree a : args) r = E.apply(r, a);
++      print_stats(("ternary " + w[1]).c_str(), before, ms());
++      E.roots().push_back(r); env["_"] = r;
++      shash_memo.clear();
++      std::printf("  result hash %016llx\n", (unsigned long long)shash(r));
++      if (w.size() > 2) { // compare with an expected ternary output
++        std::string out; std::vector<Tree> st{r};
++        while (!st.empty()) { Tree x = st.back(); st.pop_back(); uint32_t u = NU(x), v = NV(x); if (!u) out += '0'; else if (!v) { out += '1'; st.push_back(u); } else { out += '2'; st.push_back(v); st.push_back(u); } }
++        std::string exp = read_file(w[2]); while (!exp.empty() && (exp.back() == '\n' || exp.back() == ' ')) exp.pop_back();
++        std::printf("  expected %s\n", out == exp ? "OK" : "MISMATCH");
++      }
++    } else { std::fprintf(stderr, "unknown command %s\n", cmd.c_str()); return 1; }
++    std::fflush(stdout);
++  }
++}
+diff -ruN a/implementation/cpp/rules-prototype/extract.py b/implementation/cpp/rules-prototype/extract.py
+--- a/implementation/cpp/rules-prototype/extract.py	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/extract.py	2026-10-08 04:52:50.792154900 +0000
+@@ -0,0 +1,18 @@
++"""extract.py BUNDLE OUT SYMBOL...: the lines of BUNDLE (a DAG in evaluation order)
++that SYMBOLs depend on, in their original order, plus the symbols' alias lines."""
++import sys
++lines = open(sys.argv[1]).read().split('\n')
++defn = {}  # name/id -> line index
++for i, l in enumerate(lines):
++    w = l.split()
++    if len(w) in (2, 3): defn[w[0]] = i
++need = set(); stack = list(sys.argv[3:])
++while stack:
++    x = stack.pop()
++    if x == '△' or x not in defn: continue
++    i = defn[x]
++    if i in need: continue
++    need.add(i)
++    stack.extend(lines[i].split()[1:])
++open(sys.argv[2], 'w').write('\n'.join(lines[i] for i in sorted(need)) + '\n')
++print(len(need), 'lines')
+diff -ruN a/implementation/cpp/rules-prototype/samples.py b/implementation/cpp/rules-prototype/samples.py
+--- a/implementation/cpp/rules-prototype/samples.py	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/samples.py	2026-10-08 04:52:50.792170173 +0000
+@@ -0,0 +1,30 @@
++"""samples.py BINARY SAMPLES [N]: attribute SIGPROF samples to (innermost inlined) functions and source lines."""
++import sys, subprocess, collections
++binary, path = sys.argv[1], sys.argv[2]; N = int(sys.argv[3]) if len(sys.argv) > 3 else 25
++pcs = [l.strip() for l in open(path) if l.strip()]
++cnt = collections.Counter(pcs)
++uniq = list(cnt)
++out = subprocess.run(['addr2line', '-f', '-C', '-i', '-e', binary], input='\n'.join('0x' + u for u in uniq) + '\n',
++                     capture_output=True, text=True).stdout.splitlines()
++# with -i, each address yields 2 lines per inlined frame; delimit by re-running per address is slow, so use -a markers
++out = subprocess.run(['addr2line', '-a', '-f', '-C', '-i', '-e', binary], input='\n'.join('0x' + u for u in uniq) + '\n',
++                     capture_output=True, text=True).stdout.splitlines()
++frames = {}; cur = None
++i = 0
++while i < len(out):
++    l = out[i]
++    if l.startswith('0x'):
++        cur = l[2:].lstrip('0') or '0'; frames[cur] = []; i += 1; continue
++    fn = l; loc = out[i + 1] if i + 1 < len(out) else '?'
++    frames[cur].append((fn, loc.split(' (')[0])); i += 2
++inner = collections.Counter(); outer = collections.Counter(); line = collections.Counter()
++tot = sum(cnt.values())
++for u, c in cnt.items():
++    fr = frames.get(u.lstrip('0') or '0') or [('?', '?')]
++    def short(f): return f.split('(')[0].replace('BasicEagerGraphNilMmap32<true, true>::', '').replace('BasicEagerGraphNilMmap32<true, false>::','').replace('BasicEagerGraphNilMmap32<true>::','')
++    inner[short(fr[0][0])] += c; outer[short(fr[-1][0])] += c
++    line[fr[0][1].split('/')[-1] + ' ' + short(fr[0][0])] += c
++print(f'{tot} samples')
++print('-- by outermost function'); [print(f'{100*c/tot:6.1f}% {k}') for k, c in outer.most_common(N)]
++print('-- by innermost (inlined) function'); [print(f'{100*c/tot:6.1f}% {k}') for k, c in inner.most_common(N)]
++print('-- by line'); [print(f'{100*c/tot:6.1f}% {k}') for k, c in line.most_common(N)]
+diff -ruN a/implementation/cpp/rules-prototype/sweep.sh b/implementation/cpp/rules-prototype/sweep.sh
+--- a/implementation/cpp/rules-prototype/sweep.sh	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/sweep.sh	2026-10-08 04:52:50.792209118 +0000
+@@ -0,0 +1,13 @@
++#!/bin/bash
++# Larger randomized sweep: every config, several seeds, with and without collections.
++cd "$(dirname "$0")/.."
++LIB=../runtime-map/lib-ex.dag
++out=test/sweep-$(date +%s).txt
++for t in ${CONFIGS:-A B C D E F G H I J K L M N O P Q R S T U}; do
++  for seed in ${SEEDS:-101 102 103}; do
++    for budget in 0 1500; do
++      echo "$t budget=$budget $(timeout 900 nice -n 10 ./test/t-$t $seed 40000 $budget $LIB)" >> $out
++    done
++  done
++done
++echo done >> $out
+diff -ruN a/implementation/cpp/rules-prototype/test-rules.cpp b/implementation/cpp/rules-prototype/test-rules.cpp
+--- a/implementation/cpp/rules-prototype/test-rules.cpp	1970-01-01 00:00:00.000000000 +0000
++++ b/implementation/cpp/rules-prototype/test-rules.cpp	2026-10-08 04:52:50.792070172 +0000
+@@ -0,0 +1,195 @@
++// Randomized differential test of the derived-rule cache (eager-rules.hpp).
++//
++// Cases are (head, argument) pairs whose result an independent, fuel-bounded
++// reference evaluator (the five rules, recursively, over its own hash-consed
++// store) computes; only cases it finishes are run. Each case is reduced by the
++// machine with rules (RULES=true, config from -D flags) and by the same header
++// with RULES=false, and both results are compared with the reference.
++// Heads are applied to several arguments in a row, so with RULE_THRESH=1 rules
++// are derived on the first application and fired on the rest.
++//
++// usage: test-rules SEED CASES BUDGET_NODES LIBDAG
++#include "eager-rules.hpp"
++#include <cstdio>
++#include <fstream>
++#include <random>
++#include <sstream>
++#include <unordered_map>
++
++using Plain = BasicEagerGraphNilMmap32<true, false>;
++using Rules = BasicEagerGraphNilMmap32<true, true>;
++
++struct Ref {
++  std::vector<std::pair<uint32_t, uint32_t>> n{{0, 0}, {0, 0}}; // 1 = leaf; (u, 0) stem; (u, v) fork
++  std::unordered_map<uint64_t, uint32_t> h;
++  long fuel = 0;
++  uint32_t mk(uint32_t u, uint32_t v) {
++    const uint64_t k = uint64_t(u) << 32 | v;
++    auto it = h.find(k);
++    if (it != h.end()) return it->second;
++    n.push_back({u, v});
++    return h[k] = uint32_t(n.size() - 1);
++  }
++  uint32_t app(uint32_t a, uint32_t b) {
++    if (--fuel < 0) throw 0;
++    const auto [au, av] = n[a];
++    if (!au) return mk(b, 0);
++    if (!av) return mk(au, b);
++    const auto [uu, uv] = n[au];
++    if (!uu) return av;
++    if (!uv) { const uint32_t r1 = app(av, b); const uint32_t r0 = app(uu, b); return app(r0, r1); }
++    const auto [bu, bv] = n[b];
++    if (!bu) return uu;
++    if (!bv) return app(uv, bu);
++    return app(app(av, bu), bv);
++  }
++  size_t size(uint32_t t, size_t cap) {
++    std::vector<uint32_t> st{t};
++    size_t c = 0;
++    while (!st.empty() && c < cap) {
++      const uint32_t x = st.back(); st.pop_back(); ++c;
++      if (n[x].first) st.push_back(n[x].first);
++      if (n[x].second) st.push_back(n[x].second);
++    }
++    return c;
++  }
++};
++
++static Ref R;
++static std::mt19937_64 rng;
++static uint32_t rnd(uint32_t n) { return uint32_t(rng() % n); }
++
++static uint32_t random_tree(int size) {
++  if (size <= 1) return 1;
++  if (size == 2 || rnd(10) < 3) return R.mk(random_tree(size - 1), 0);
++  const int k = 1 + int(rnd(size - 2));
++  return R.mk(random_tree(k), random_tree(size - 1 - k));
++}
++static uint32_t nat(uint32_t v) { // little-endian bit list, as Nat: △ bit rest, bit = △ or △△
++  uint32_t l = 1;
++  std::vector<int> bits;
++  while (v) bits.push_back(v & 1), v >>= 1;
++  for (size_t i = bits.size(); i-- > 0;) l = R.mk(bits[i] ? R.mk(1, 0) : 1, l);
++  return l;
++}
++static uint32_t list(const std::vector<uint32_t> &xs) {
++  uint32_t l = 1;
++  for (size_t i = xs.size(); i-- > 0;) l = R.mk(xs[i], l);
++  return l;
++}
++
++static std::unordered_map<std::string, uint32_t> env;
++static std::vector<uint32_t> lib; // named library values
++
++static void load_lib(const char *path) {
++  std::ifstream f(path);
++  std::string line;
++  env["\xe2\x96\xb3"] = 1;
++  while (std::getline(f, line)) {
++    std::istringstream ws(line);
++    std::string w[3];
++    int k = 0;
++    while (k < 3 && (ws >> w[k])) ++k;
++    if (k == 3) { R.fuel = 1L << 40; env[w[0]] = R.app(env.at(w[1]), env.at(w[2])); }
++    else if (k == 2) { env[w[0]] = env.at(w[1]); if (!std::isdigit((unsigned char)w[0][0])) lib.push_back(env[w[0]]); }
++  }
++}
++
++static uint32_t random_data() {
++  switch (rnd(6)) {
++  case 0: return nat(uint32_t(rnd(1000)));
++  case 1: { std::vector<uint32_t> xs(rnd(6)); for (auto &x : xs) x = nat(uint32_t(rnd(20))); return list(xs); }
++  case 2: return random_tree(1 + int(rnd(9)));
++  case 3: return lib[rnd(uint32_t(lib.size()))];
++  case 4: { std::vector<uint32_t> xs(rnd(5)); for (auto &x : xs) x = random_tree(1 + int(rnd(5))); return list(xs); }
++  default: return R.mk(R.mk(1, 0), R.mk(random_tree(1 + int(rnd(4))), 0)); // △(△△)(△t): K-ish / small closure
++  }
++}
++
++// A head: a library value or a random tree, applied to 0-3 random arguments.
++static bool random_head(uint32_t &h) {
++  h = rnd(4) ? lib[rnd(uint32_t(lib.size()))] : random_tree(3 + int(rnd(20)));
++  const int k = int(rnd(4));
++  try {
++    for (int i = 0; i < k; ++i) {
++      R.fuel = 20000;
++      h = R.app(h, rnd(3) ? random_data() : (rnd(2) ? lib[rnd(uint32_t(lib.size()))] : random_tree(1 + int(rnd(12)))));
++      if (R.size(h, 100000) >= 100000) return false;
++    }
++  } catch (int) { return false; }
++  return true;
++}
++
++template <typename M> struct Conv {
++  M &m;
++  std::unordered_map<uint32_t, typename M::Tree> to;   // ref -> machine
++  typename M::Tree in(uint32_t r) {
++    if (r == 1) return m.leaf();
++    auto it = to.find(r);
++    if (it != to.end()) return it->second;
++    const auto [u, v] = R.n[r];
++    const typename M::Tree t = v ? m.fork(in(u), in(v)) : m.stem(in(u));
++    return to[r] = t;
++  }
++  uint32_t out(typename M::Tree t) {
++    std::unordered_map<typename M::Tree, uint32_t> memo;
++    std::vector<std::pair<typename M::Tree, bool>> st{{t, false}};
++    while (!st.empty()) {
++      auto [x, done] = st.back(); st.pop_back();
++      if (memo.count(x)) continue;
++      uint32_t u = 0, v = 0;
++      m.triage([&] {}, [&](typename M::Tree a) { u = a; }, [&](typename M::Tree a, typename M::Tree b) { u = a, v = b; }, x);
++      if (!u) { memo[x] = 1; continue; }
++      if (!done) { st.push_back({x, true}); st.push_back({u, false}); if (v) st.push_back({v, false}); continue; }
++      memo[x] = v ? R.mk(memo[u], memo[v]) : R.mk(memo[u], 0);
++    }
++    return memo[t];
++  }
++};
++
++int main(int argc, char **argv) {
++  const uint64_t seed = std::stoull(argv[1]);
++  const int cases = std::stoi(argv[2]);
++  const size_t budget = std::stoull(argv[3]);
++  rng.seed(seed);
++  load_lib(argv[4]);
++  static Plain P;
++  static Rules Q;
++  P.set_budget(budget), Q.set_budget(budget);
++  Conv<Plain> cp{P};
++  Conv<Rules> cq{Q};
++  int done = 0, skipped = 0, bad = 0;
++  while (done < cases) {
++    uint32_t h;
++    if (!random_head(h)) { ++skipped; continue; }
++    const int nargs = 2 + int(rnd(8));
++    for (int i = 0; i < nargs && done < cases; ++i) {
++      const uint32_t x = random_data();
++      uint32_t expect;
++      try { R.fuel = 20000; expect = R.app(h, x); } catch (int) { ++skipped; continue; }
++      // Roots: just this case's operands, for as long as it runs, so that a small
++      // budget collects often (and with it, drops every rule) mid-reduction.
++      cp.to.clear(), cq.to.clear();
++      const auto hp = cp.in(h), xp = cp.in(x);
++      P.roots().push_back(hp), P.roots().push_back(xp);
++      const auto hq = cq.in(h), xq = cq.in(x);
++      Q.roots().push_back(hq), Q.roots().push_back(xq);
++      const auto rp = P.apply(hp, xp);
++      const auto rq = Q.apply(hq, xq);
++      const uint32_t gp = cp.out(rp), gq = cq.out(rq);
++      P.roots().resize(P.roots().size() - 2), Q.roots().resize(Q.roots().size() - 2);
++      if (gp != expect || gq != expect) {
++        if (++bad <= 10) std::printf("MISMATCH case %d: plain %s, rules %s\n", done, gp == expect ? "ok" : "WRONG", gq == expect ? "ok" : "WRONG");
++      }
++      ++done;
++    }
++  }
++  const auto &s = Q.stats_counters;
++  std::printf("seed=%llu cases=%d skipped=%d bad=%d | plain steps=%llu gcs=%llu | rules steps=%llu real=%llu derived=%llu neg=%llu fires=%llu split=%llu stops=%llu/%llu/%llu/%llu gcs=%llu clears=%llu child=%llu/%llu childfires=%llu prov=%llu compact=%llu\n",
++              (unsigned long long)seed, done, skipped, bad, (unsigned long long)P.stats_counters.steps, (unsigned long long)P.stats_counters.gcs,
++              (unsigned long long)s.steps, (unsigned long long)(s.steps - s.rule_skipped), (unsigned long long)s.rule_derived,
++              (unsigned long long)s.rule_negative, (unsigned long long)s.rule_fires, (unsigned long long)s.rule_split_fires,
++              (unsigned long long)s.rule_stop[0], (unsigned long long)s.rule_stop[1], (unsigned long long)s.rule_stop[2], (unsigned long long)s.rule_stop[3],
++              (unsigned long long)s.gcs, (unsigned long long)s.rule_clears, (unsigned long long)s.rule_child_derived, (unsigned long long)s.rule_child_negative, (unsigned long long)s.rule_child_fires, (unsigned long long)s.rule_prov_records, (unsigned long long)s.rule_compactions);
++  return bad ? 1 : 0;
++}

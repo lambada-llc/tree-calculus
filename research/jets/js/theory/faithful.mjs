@@ -1,0 +1,11 @@
+import * as T from './tc.mjs';
+import * as S from './sym.mjs';
+const env = T.loadBundle('/home/user/forest/src/.dag-bundle-arboretum-reduced');
+const fix = env.get('fix');
+const P = S.derive(S.reduce(S.lit(fix), S.svar(0))).s.r;
+const a = S.derive(S.reduce(P, S.svar(1)));
+S.opts.collapse = false;
+const b = S.derive(S.reduce(P, S.svar(1)));
+const c = S.derive(S.reduce(S.lit(fix), S.svar(0)));
+console.log('fix rule residual identical under Lean-faithful sstep:', JSON.stringify(a.s) === JSON.stringify(b.s), a.transitions, b.transitions);
+console.log('fixBuild residual (faithful):', S.showState(c.s, (i) => 'f'), JSON.stringify(c.s.r) === JSON.stringify(P));

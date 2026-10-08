@@ -27,6 +27,9 @@ order can produce a different value either).
 | [`TreeCalculus/Runtime.lean`](TreeCalculus/Runtime.lean) | `RStep J`: `step` with a memo (any policy) and jets `J`; `runtime_sound` |
 | [`TreeCalculus/Symbolic.lean`](TreeCalculus/Symbolic.lean) | `sstep`: `step` on values with variables; `sstep_next` |
 | [`TreeCalculus/Check.lean`](TreeCalculus/Check.lean) | `checkRun`, `checkDropThrough`: kernel-decided, sound for every argument; `DropJet.reaches` |
+| [`TreeCalculus/RuleJets.lean`](TreeCalculus/RuleJets.lean) | Bigger-step rules over patterns with holes: `Rule` (a pair of symbolic states), `checkRule ρ ℓ` (the symbolic run from the left side reaches the right side in exactly `ℓ` steps, kernel-decided), `checkRule_sound`, `checkRule_inst`, `RuleJet` and `rules_runtime_sound` (`runtime_sound` for a runtime that fires checked rules, `RStep` unchanged), `RuleTree` (shape-split rules), memo entries as ground rules, `rules_length_bound` |
+| [`TreeCalculus/Progress.lean`](TreeCalculus/Progress.lean) | Termination: with jets that take at least one step (`Plus`) and a policy that idles finitely, the runtime returns `r` iff the machine does (`runtime_returns_iff`, `memoPolicy_returns_iff`); `checkRule_plus`; `RStep` alone is not well-founded; peek.hpp's `S K y b ⟶ b` is term-sound but returns where the machine diverges |
+| [`Rules.lean`](Rules.lean), [`Rules/`](Rules/) | Rules derived from library trees by `Rules/gen-rules.mjs` and checked by `decide +kernel`: `fix f x ⟶ f (fix f) x` and 52 more, 7 shape-split trees (`Rules/Core.lean`); `fix_plus` |
 
 `Eval.sn` is proven without any axioms (`#print axioms Eval.sn` reports none —
 not even `propext` or choice). So are `run_iff_apply` and `runtime_sound`; the

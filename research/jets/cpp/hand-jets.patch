@@ -1,0 +1,121 @@
+--- eager-pristine.hpp	2026-10-06 22:49:07.429433128 +0000
++++ eager-jet.hpp	2026-10-06 23:42:26.359100465 +0000
+@@ -158,7 +158,7 @@
+   //
+   // Every argument is a Tree the reduction still needs, which is what makes
+   // this stack the collector's root set as well as the VM's.
+-  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE };
++  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, APPLY_FN /* PROTOTYPE: on r, apply(fn, r) */ };
+ 
+   // A frame is two 8-byte words, written whole and read back whole, because
+   // it is usually popped within a few instructions of being pushed: a load
+@@ -196,7 +196,17 @@
+   struct Stats {
+     uint64_t steps = 0, memo_hits = 0, memo_puts = 0, gcs = 0, gc_marked = 0;
+     uint64_t jets = 0, skipped = 0; // jets taken, and list elements they skipped
++    uint64_t fix_jets = 0, b_jets = 0, c1_jets = 0, c2_jets = 0, c3_jets = 0; // PROTOTYPE
+   };
++  // PROTOTYPE: the fix knot and the fixed right part of fix f's C, set by the caller.
++  // fix f = △ knot (△ (△ (△ (△ △ f)) K2)); apply(fix f, x) = apply(apply(f, fix f), x).
++  Tree _knot = 0, _k2 = 0, _g = 0;
++  void set_fix(Tree knot, Tree k2) { _knot = knot; _k2 = k2; _g = _arena[_arena[_arena[knot].u].v].v; }
++  // PROTOTYPE C jets: the prelude's :c and :k (K = △△). :c f = △(△(△△(△(△f)))):k ; (:c f) g = △(△f)(△△g)
++  Tree _cC = 0, _cK = 0;
++  void set_c(Tree c, Tree k) { _cC = c; _cK = k; }
++  uint32_t node_u(uint32_t t) const { return _arena[t].u; }
++  uint32_t node_v(uint32_t t) const { return _arena[t].v; }
+   Stats stats_counters;
+ 
+ private:
+@@ -855,7 +865,79 @@
+           goto dispatch;
+         }
+         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
++#if CJET
++          if (a == _cC) [[unlikely]] { // R1: apply(:c, f) = △(△(△△(△(△f)))):k, 16 steps -> 5 interns
++            ++stats_counters.c1_jets;
++            const Tree x = stem(stem(b));
++            result = fork(stem(fork(1, x)), _cK);
++            goto dispatch;
++          }
++          if (y == _cK) { // R2: apply(△(△(△△X)):k, g) with X = △(△f): = △(△f)(△△g), 4 steps -> 2 interns
++            const Node xn = _arena[un.u];
++            if (xn.u == 1 && xn.v) {
++              const Node Xn = _arena[xn.v];
++              if (Xn.u && !Xn.v && _arena[Xn.u].u && !_arena[Xn.u].v) {
++                ++stats_counters.c2_jets;
++                result = fork(Xn.u, fork(1, b));
++                goto dispatch;
++              }
++            }
++          }
++#endif
+           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
++#if FIXJET
++          if (an.u == _knot) [[unlikely]] { // PROTOTYPE fix jet
++            const Node yn = _arena[y];
++            if (yn.u && !yn.v) {
++              const Node cn = _arena[yn.u];
++              if (cn.v == _k2) {
++                const Node dn = _arena[cn.u];
++                if (dn.u && !dn.v) {
++                  const Node en = _arena[dn.u];
++                  if (en.u == 1 && en.v) {
++#if FIXJET == 1
++                    ++stats_counters.fix_jets;
++                    _stack.emplace_back(APPLY_TO, b, 0);
++                    b = a;
++                    a = en.v;
++                    goto reduce;
++#elif FIXJET == 3
++                    // residual reduce(g, C) [then APPLY_TO x]: the state 4 steps on, whose
++                    // (g, C) lookup the memo answers once per f
++                    ++stats_counters.fix_jets;
++                    _stack.emplace_back(APPLY_TO, b, 0);
++                    a = _g;
++                    b = yn.u;
++                    goto reduce;
++#endif
++                  }
++                }
++              }
++            }
++          }
++#endif
++#if CJET
++          { // R3: apply(△(△f)(△△g), x) = apply(apply(f, x), g), skipping the K step
++            const Node yn = _arena[y];
++            if (yn.u == 1 && yn.v) {
++              ++stats_counters.c3_jets;
++              _stack.emplace_back(APPLY_TO, yn.v, 0);
++              a = un.u;
++              goto reduce;
++            }
++          }
++#endif
++#if BJET
++          { // PROTOTYPE B jet: a = △(△(△△x2))y, i.e. B x2 y: apply(a, b) = apply(x2, apply(y, b)), skipping the K step
++            const Node xn = _arena[un.u];
++            if (xn.u == 1 && xn.v) {
++              ++stats_counters.b_jets;
++              _stack.emplace_back(APPLY_FN, xn.v, 0);
++              a = y;
++              goto reduce;
++            }
++          }
++#endif
+           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
+           a = y;
+           goto reduce;
+@@ -908,6 +990,11 @@
+           // takes to become `a`, which allocates nothing.
+           a = result;
+           b = f.arg1();
++#if BJET
++        } else if (f.tag() == APPLY_FN) { // PROTOTYPE
++          a = f.arg1();
++          b = result;
++#endif
+         } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
+           _stack.emplace_back(APPLY_TO, result, 0);
+           a = f.arg1();

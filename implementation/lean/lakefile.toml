@@ -1,5 +1,5 @@
 name = "tree-calculus"
-defaultTargets = ["TreeCalculus", "Cpp"]
+defaultTargets = ["TreeCalculus", "Cpp", "Rules"]
 
 [[lean_lib]]
 name = "TreeCalculus"
@@ -8,6 +8,10 @@ globs = ["TreeCalculus.*"]
 
 [[lean_lib]]
 name = "Cpp"
+
+# Rules derived from library trees by Rules/gen-rules.mjs, each checked by `decide +kernel`.
+[[lean_lib]]
+name = "Rules"
 
 # The benchmark's executable (benchmark/run-one.sh); not a default target, so
 # `lake build` still means the formalization.
