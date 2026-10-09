@@ -142,10 +142,11 @@ a little more re-reduction as well as more sweeps.
 #### `RUNNER_RSS_LIMIT_MB` *(default: none; eager only)*
 
 The most the eager runner may hold, in MiB: its arena up to the
-collection budget, the hash-consing table and memo that budget sizes,
-and its continuation stack. A request that would take it past this
-answers `err out of memory: the stack would pass RUNNER_RSS_LIMIT_MB=…`
-(or `the live set …`), and the runner goes on to the next one.
+collection budget, the hash-consing table, nursery bitmap and memo that
+budget sizes, and its continuation stack. A request that would take it
+past this answers `err out of memory: the stack would pass
+RUNNER_RSS_LIMIT_MB=…` (or `the live set …`), and the runner goes on to
+the next one.
 
 Those are the two ways a reduction runs away: a live set that keeps
 growing keeps raising the budget, and a recursion that never returns
