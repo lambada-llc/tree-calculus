@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <sstream>
 #include <string>
 #include <stdexcept>
@@ -60,7 +61,7 @@
 // So sharing has to be put back by hand, and it takes both halves to work:
 //
 //   — Hash-consing. stem()/fork() return the existing node for a shape that has
-//     been built before (`_interned`), so the arena holds the DAG rather than
+//     been built before (`_groups`), so the arena holds the DAG rather than
 //     the tree, and structurally equal terms are the same index.
 //   — Memoizing the reduction. Because equal terms are now equal indices, a
 //     redex that recurs can be recognized: `_memo` maps the operands of a step
@@ -122,9 +123,9 @@ private:
   static constexpr size_t MAX_MEMO = size_t(1) << 24;
   static constexpr size_t MIN_MEMO_CAP = size_t(1) << 21;
 
-  // The most slots the hash-consing table can reach: under reserve_interned's
-  // 0.7 load factor, 2^31 nodes take 2^32.
-  static constexpr size_t MAX_INTERNED = ARENA_NODES * 2;
+  // The most groups the hash-consing table can reach: at its load factor
+  // (fits), 2^31 nodes take 2^28 groups, 16 GiB.
+  static constexpr size_t MAX_GROUPS = size_t(1) << 28;
 
   // A step that resolved in fewer rule applications than this is cheaper to
   // redo than to let its entry evict a slower one from the memo (see the
@@ -229,8 +230,7 @@ private:
   std::vector<Tree> _grey; // mark stack, reused across collections
 
   // Hash-consing: open addressing over node indices, keyed by the (u, v) of the
-  // node a slot names, so a slot costs 4 bytes and the keys are the arena. 0 is
-  // the empty slot, which no node can be.
+  // node a slot names, so the keys are the arena.
   //
   // Exact, and everything else here counts on it: two structurally equal trees
   // are one node, hence one index, always — across collections (the table is
@@ -240,17 +240,86 @@ private:
   // by comparing their indices is sound only because of it. So no node is ever
   // made by alloc() alone: it is made by a search that came up empty, or where
   // no search could have found one (list(), and intern() over the node made
-  // last). A search is this table's, and for the cells of a run (below), where
-  // the cell would be.
+  // last). A search is the nursery's (below), then — unless a child of the
+  // node is in the nursery — this table's, and for the cells of a run (further
+  // below), where the cell would be. Every node is in exactly one of the three.
+  //
+  // A slot is a node index and a control byte: EMPTY, or a tag, 7 bits of the
+  // node's hash that the group index does not use. Slots come in groups of
+  // GROUP to a cache line: 16 control bytes, the last 4 of them no slot's, then
+  // the 12 indices. A search reads the group its hash picks, compares every
+  // tag with its own at once (Word), and loads the node of a slot only where
+  // they match: the node it is after, and 1 in 128 others. So a shape not
+  // built yet costs that line and no arena load, one that was the line and its
+  // node, an insertion the line alone. One line, because each line is a miss:
+  // with a bare index for a slot, every occupied slot on the way to an empty
+  // one was a load of its node, a cache miss of its own behind the one into
+  // the table; with the control bytes in an array of their own, every hit and
+  // every insertion was two lines. A search ends at the first group with an
+  // empty slot: slots are only ever emptied all at once (rebuild_interned), so
+  // a node that went in further along found this group full.
   //
   // Both tables are mapped once, at the most they can reach, and re-laid in
   // place: rebuild_interned() reads the arena rather than the old table, so
   // nothing needs the old copy. Memory already touched costs a memset to
   // re-lay; a fresh mapping costs a fault per page all over again — on a VM, a
   // host round trip per page — and holds both copies at once while it grows.
-  Tree *const _interned = static_cast<Tree *>(map_pages(MAX_INTERNED * sizeof(Tree)));
+  static constexpr size_t GROUP = 12;
+  static constexpr uint8_t EMPTY = 0x80; // a tag is 7 bits, so no tag is EMPTY
+  struct alignas(64) Group {
+    uint8_t ctrl[16]; // GROUP control bytes, then 4 that lanes() masks off
+    Tree at[GROUP];
+  };
+  static_assert(sizeof(Group) == 64, "a group is a cache line");
+  static constexpr size_t MIN_GROUPS = MIN_TABLE * sizeof(Tree) / sizeof(Group); // as many bytes as MIN_TABLE indices
+  Group *const _groups = static_cast<Group *>(map_pages(MAX_GROUPS * sizeof(Group)));
+  size_t _groups_mask = 0;
   size_t _interned_count = 0;
-  size_t _interned_mask = 0;
+
+  // The nursery: the nodes intern() made since it was last flushed into
+  // `_groups`, in a table of their own — plain 4-byte slots, 0 the empty one —
+  // small enough to stay in cache.
+  //
+  // Where a node can be is what makes it pay, and what keeps it exact. A node
+  // is made after its children, and nothing outside the nursery has a child in
+  // it: a flush takes all of it at once, so does every re-lay of `_groups`
+  // (rebuild_interned, which a collection ends with, before any index it freed
+  // is handed out again), list() flushes it before it makes a cell, and
+  // intern() puts a node in `_groups` itself only when neither child is in the
+  // nursery. So a node with a child in the nursery can only be in the nursery,
+  // and a search for one ends there. That is most of what intern() looks for,
+  // built on what was just built: over the build's test runner it goes to
+  // `_groups` for one node in five, where it went for every one. The nodes
+  // made over the one made last (58% of all interning), which need no search,
+  // no longer stall the steps after them on the slot they take either.
+  //
+  // A flush still costs a line of `_groups` a node, but none waits on another:
+  // it is a loop over the slots the nursery logged as it filled (`_nursed`),
+  // asking for lines AHEAD. It is still the most of anything here, a quarter
+  // of the time over that runner at 55-60 ns a node, and what bounds it is the
+  // page walk to a line anywhere in up to 512 MB of small pages: AHEAD at 16,
+  // 32 or 64 took the same time, and with huge pages under the table it took
+  // 33 ns (see map_pages for why not). The same log empties the nursery, a
+  // slot at a time: clearing all of it at every flush made a session of 5,000
+  // small `bind`s, each of which flushes it, take a quarter longer.
+  //
+  // It is flushed half full. It is MIN_TABLE slots to begin with, doubled at
+  // each flush up to NURSERY: hashed, a few hundred nodes touch every page of
+  // it, and at its full size a runner answering one small request faulted in
+  // 90 pages more, 5% of its time.
+  //
+  // `_young` is a bit per index, set for the nodes in the nursery. Every one of
+  // them is at least `_young_lo`, what alloc() would have handed out when the
+  // nursery was last emptied: the free list is in ascending order (sweep), and
+  // the high-water mark above it. That keeps the bits of the old nodes, most of
+  // the children asked about, out of the cache.
+  static constexpr size_t NURSERY = size_t(1) << 16;
+  Tree *const _nursery = static_cast<Tree *>(map_pages(NURSERY * sizeof(Tree)));
+  Tree *const _nursed = static_cast<Tree *>(map_pages(NURSERY / 2 * sizeof(Tree)));
+  size_t _nursery_mask = MIN_TABLE - 1;
+  size_t _nursery_count = 0;
+  uint64_t *const _young = static_cast<uint64_t *>(map_pages(ARENA_NODES / 8));
+  Tree _young_lo = 2;
 
   // A run: cells of the last long list() made, (_run, _run_end], left out of
   // the table because where one is says what it is. list() lays a list out
@@ -306,11 +375,11 @@ private:
    * index: bit 32 + j of the product depends on bits 0..j of u only, so in a
    * table of 2^k slots (u, v) and (u + 2^k, v) always share a slot. The
    * hash-consing table is sized to the live nodes, and indices outrun it only
-   * by what collections have freed (probes measure 2.3-2.8 slots a search);
-   * the memo is smaller than the arena by design, and there such pairs evict
-   * each other. Folding a 128-bit product instead keeps every bit, and took
-   * 0.15% fewer steps on the build's three heaviest tests — in 35.9 s against
-   * this hash's 35.4 s.
+   * by what collections have freed (a search reads 1.08 groups over the
+   * build's test runner); the memo is smaller than the arena by design, and
+   * there such pairs evict each other. Folding a 128-bit product instead keeps
+   * every bit, and took 0.15% fewer steps on the build's three heaviest tests —
+   * in 35.9 s against this hash's 35.4 s.
    */
   static uint64_t hash(uint32_t u, uint32_t v) {
     const uint64_t x = ((uint64_t(u) << 32) | v) * 0x9e3779b97f4a7c15ULL;
@@ -330,29 +399,126 @@ private:
     return _newest = result;
   }
 
+  // A word of a group's control bytes, compared with one tag all at once, the
+  // has-zero-byte way: `match` is the bytes that may hold `tag`, `empty` those
+  // that are EMPTY, as a mask with the top bit of each such byte set. Exact for
+  // empty. A match can also be a byte holding tag ^ 1 just above one holding
+  // tag (the borrow), never an empty one: a candidate the key comparison turns
+  // down.
+  //
+  // Two words a group, on every target. SSE2, which any x86-64 has, compares
+  // all 16 bytes in one: 3% fewer instructions and 7% fewer mispredicted
+  // branches, but only 1.4-2.4% less time, since what a search waits on is the
+  // line it reads rather than the comparing. Too little for a Word per target.
+  struct Word {
+    static constexpr unsigned WIDTH = 8, SHIFT = 3;
+    static constexpr uint64_t LSB = 0x0101010101010101ull, MSB = 0x8080808080808080ull;
+    uint64_t bytes;
+    explicit Word(const uint8_t *at) {
+      std::memcpy(&bytes, at, 8);
+#if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+      bytes = __builtin_bswap64(bytes);
+#endif
+    }
+    uint64_t match(uint8_t tag) const {
+      const uint64_t x = bytes ^ (LSB * tag);
+      return (x - LSB) & ~x & MSB;
+    }
+    uint64_t empty() const { return bytes & MSB; }
+  };
+
+  /** The bits of the mask of the control word at `w` that are slots of a group. */
+  static constexpr uint64_t lanes(size_t w) {
+    return GROUP - w >= Word::WIDTH ? ~uint64_t(0) : (uint64_t(1) << ((GROUP - w) << Word::SHIFT)) - 1;
+  }
+  static size_t lane(uint64_t mask) { return size_t(__builtin_ctzll(mask)) >> Word::SHIFT; }
+  static uint8_t tag_of(uint64_t h) { return uint8_t(h >> 57); }
+
+  /** An empty slot, which a node is about to take. */
+  struct Slot {
+    Group *group;
+    size_t i;
+  };
+
+  /** Fill an empty slot. */
+  static void put(Slot slot, uint8_t tag, Tree at) {
+    slot.group->ctrl[slot.i] = tag;
+    slot.group->at[slot.i] = at;
+  }
+
+  /** The first empty slot of `group`, or GROUP if it has none. */
+  static size_t vacancy(const Group &group) {
+    for (size_t w = 0; w < GROUP; w += Word::WIDTH)
+      if (const uint64_t e = Word(group.ctrl + w).empty() & lanes(w)) return w + lane(e);
+    return GROUP;
+  }
+
+  /** Where a search of the table ended: the node for the shape, if the table
+   * has it; else 0, and the slot it would take, the first empty one of the
+   * first group that has one. */
+  struct Found {
+    Tree at;
+    Slot empty;
+  };
+
+  Found search(uint64_t h, uint32_t u, uint32_t v) const {
+    const uint8_t tag = tag_of(h);
+    for (size_t g = h & _groups_mask;; g = (g + 1) & _groups_mask) {
+      Group &group = _groups[g];
+      for (size_t w = 0; w < GROUP; w += Word::WIDTH)
+        for (uint64_t m = Word(group.ctrl + w).match(tag) & lanes(w); m; m &= m - 1) {
+          const Tree at = group.at[w + lane(m)];
+          const Node n = _arena[at];
+          if (n.u == u && n.v == v) return {at, {}};
+        }
+      if (const size_t i = vacancy(group); i < GROUP) return {0, {&group, i}};
+    }
+  }
+
   /** Put a live node in the hash-consing table, which must have room for it. */
   void insert_interned(Tree at) {
     const Node n = _arena[at];
-    size_t i = hash(n.u, n.v) & _interned_mask;
-    while (_interned[i]) i = (i + 1) & _interned_mask;
-    _interned[i] = at;
+    const uint64_t h = hash(n.u, n.v);
+    size_t g = h & _groups_mask, i;
+    while ((i = vacancy(_groups[g])) == GROUP) g = (g + 1) & _groups_mask;
+    put({&_groups[g], i}, tag_of(h), at);
     ++_interned_count;
   }
 
-  /** Re-lay the hash-consing table at `capacity`, from the arena's live nodes
-   * outside the run. Out of line, as is everything else apply() reaches only
-   * now and then — end_run, grow_memo, collect: inlined, they made apply()
-   * twice the size, and which of its helpers the compiler inlined then hung on
-   * any edit to it, for as much as 13% more instructions a step. */
-  [[gnu::noinline]] void rebuild_interned(size_t capacity) {
-    std::fill_n(_interned, capacity, 0);
-    _interned_mask = capacity - 1;
+  // How many nodes ahead a loop of insertions asks for the line of the group a
+  // node goes in (rebuild_interned, flush_nursery). None of them waits on
+  // another, so their misses can overlap, once the line is asked for well
+  // before the insertion that needs it rather than left to the out-of-order
+  // core: re-laying took 30% less time over the build's test runner.
+  static constexpr size_t AHEAD = 16;
+
+  /** Ask for the line of the group `at` goes in, unless it is a swept node. */
+  void prefetch_group(Tree at) const {
+    const Node n = _arena[at];
+    if (n.u) __builtin_prefetch(&_groups[hash(n.u, n.v) & _groups_mask], 1);
+  }
+
+  /** Re-lay the hash-consing table at `groups` from the arena's live nodes
+   * outside the run, the nursery's among them, which `groups` must hold: an
+   * insertion into a full table looks for an empty slot for ever. Out of line,
+   * as is everything else apply() reaches only now and then — end_run,
+   * grow_memo, collect: inlined, they made apply() twice the size, and which of
+   * its helpers the compiler inlined then hung on any edit to it, for as much
+   * as 13% more instructions a step. */
+  [[gnu::noinline]] void rebuild_interned(size_t groups) {
+    // Whole lines, slots and all: a memset that writes every byte of a line
+    // never has to read it first.
+    std::memset(_groups, EMPTY, groups * sizeof(Group));
+    _groups_mask = groups - 1;
     _interned_count = 0;
+    empty_nursery();
     // A swept node is {0, next-free}: the leaf is the only live node whose left
     // field is 0, and it is at index 1, below where interning starts.
     const auto insert_live = [&](Tree from, Tree to) {
-      for (Tree at = std::max(from, Tree(2)); at < to; ++at)
+      for (Tree at = std::max(from, Tree(2)); at < to; ++at) {
+        if (at + AHEAD < to) prefetch_group(at + AHEAD);
         if (_arena[at].u) insert_interned(at);
+      }
     };
     insert_live(2, _run + 1);
     insert_live(_run_end + 1, _head);
@@ -369,44 +535,98 @@ private:
    * cell right where it looks, and never probes the table at all. */
   Tree find(uint32_t u, uint32_t v) const {
     if (const Tree cell = in_run(u, v)) return cell;
-    return _interned[slot(u, v)];
+    const uint64_t h = hash(u, v);
+    if (const Tree at = _nursery[nursery_slot(h, u, v)]) return at;
+    return search(h, u, v).at;
   }
 
   /** Put the run's cells in the table, so that it no longer takes a run to find them. */
   [[gnu::noinline]] void end_run() {
-    const size_t capacity = capacity_for(_interned_count + (_run_end - _run));
-    if (capacity != _interned_mask + 1) rebuild_interned(capacity); // which leaves the run out
+    const size_t groups = capacity_for(_interned_count + _nursery_count + (_run_end - _run));
+    if (groups != _groups_mask + 1) rebuild_interned(groups); // which leaves the run out
     for (Tree at = _run + 1; at <= _run_end; ++at) insert_interned(at);
     _run = _run_end = 0;
   }
 
-  /** Grow the table, if need be, so that `more` further nodes fit under a 0.7
-   * load factor, which keeps probe runs short. Grown, it has room for the run's
-   * cells as well, as if they were in it: a reduction that outgrows the table
-   * is typically one working through the run, and would otherwise take it
-   * through every size its cells' insertion would have skipped, probing fuller
-   * tables on the way (5% more instructions compiling a 5 MB source with a
-   * compiler that walks every character of it). */
+  /**
+   * Whether `groups` hold `nodes`: the load factor, 14/15 of the slots, 11.2
+   * nodes a line. That is 5.7 bytes a node, what a table of bare 4-byte slots
+   * takes at 0.7, so the table grows at the node counts that one did, and a
+   * budget costs no more than it did with it (footprint). A group can be that
+   * full where a slot could not, since a search goes on past a group only when
+   * all 12 of its slots are taken: over the build's test runner it reads 1.08
+   * groups, on single heavy reductions 1.1-1.3. At 7/8 it read 1.04 and
+   * 1.05-1.2, and took 2% less time over that runner and up to 5% less on a
+   * heavy reduction; but at 6.1 bytes a node the table doubled early, and just
+   * under each power of two was twice the size: the build's compile runner
+   * peaked at 275 MB rather than 211 MB.
+   */
+  static bool fits(size_t nodes, size_t groups) { return nodes * 15 <= groups * GROUP * 14; }
+
+  /** Grow the table, if need be, so that the nursery and `more` further nodes
+   * fit. Grown, it has room for the run's cells as well, as if they were in it:
+   * a reduction that outgrows the table is typically one working through the
+   * run, and would otherwise take it through every size its cells' insertion
+   * would have skipped, probing fuller tables on the way (5% more instructions
+   * compiling a 5 MB source with a compiler that walks every character of it). */
   void reserve_interned(size_t more) {
-    if ((_interned_count + more) * 10 > (_interned_mask + 1) * 7)
-      rebuild_interned(capacity_for(_interned_count + more + (_run_end - _run)));
+    const size_t nodes = _interned_count + _nursery_count + more;
+    if (!fits(nodes, _groups_mask + 1)) rebuild_interned(capacity_for(nodes + (_run_end - _run)));
   }
 
-  /** The table's size, doubled as often as it takes to hold `nodes`. */
+  /** The table's size in groups, doubled as often as it takes to hold `nodes`. */
   size_t capacity_for(size_t nodes) const {
-    size_t capacity = _interned_mask + 1;
-    while (nodes * 10 > capacity * 7) capacity *= 2;
-    return capacity;
+    size_t groups = _groups_mask + 1;
+    while (!fits(nodes, groups)) groups *= 2;
+    return groups;
   }
 
-  /** The slot holding the node for this shape, or the empty one it would take. */
-  size_t slot(uint32_t u, uint32_t v) const {
-    for (size_t i = hash(u, v) & _interned_mask;; i = (i + 1) & _interned_mask) {
-      const Tree at = _interned[i];
+  /** The slot of the nursery holding the node for this shape, whose hash is
+   * `h`, or the empty one it would take. */
+  size_t nursery_slot(uint64_t h, uint32_t u, uint32_t v) const {
+    for (size_t i = h & _nursery_mask;; i = (i + 1) & _nursery_mask) {
+      const Tree at = _nursery[i];
       if (!at) return i;
       const Node n = _arena[at];
       if (n.u == u && n.v == v) return i;
     }
+  }
+
+  /** Whether `at` is in the nursery. */
+  bool young(Tree at) const { return at >= _young_lo && (_young[at >> 6] >> (at & 63) & 1); }
+
+  /** Put a node no search could find in the nursery's slot `i`, which is empty. */
+  Tree nurse(size_t i, Tree at) {
+    _nursery[i] = at;
+    _young[at >> 6] |= uint64_t(1) << (at & 63);
+    _nursed[_nursery_count] = Tree(i);
+    if (++_nursery_count > _nursery_mask / 2) flush_nursery();
+    return at;
+  }
+
+  /** Forget what is in the nursery, wherever it went. What goes in next is
+   * what alloc() hands out next, from here on up. */
+  void empty_nursery() {
+    _young_lo = _free ? _free : _head;
+    for (size_t j = 0; j < _nursery_count; ++j) {
+      Tree &slot = _nursery[_nursed[j]];
+      _young[slot >> 6] = 0; // every bit set is a node in the nursery
+      slot = 0;
+    }
+    _nursery_count = 0;
+  }
+
+  /** Move the nursery into `_groups` — by a re-lay, if the table has to grow
+   * for it, which takes the nursery in with the rest — and double it, if it
+   * has not reached NURSERY. */
+  [[gnu::noinline]] void flush_nursery() {
+    reserve_interned(0);
+    for (size_t j = 0; j < _nursery_count; ++j) {
+      if (j + AHEAD < _nursery_count) prefetch_group(_nursery[_nursed[j + AHEAD]]);
+      insert_interned(_nursery[_nursed[j]]);
+    }
+    empty_nursery();
+    _nursery_mask = std::min(2 * _nursery_mask + 1, NURSERY - 1);
   }
 
   /**
@@ -415,21 +635,26 @@ private:
    * No search when a child is the node made last: a node is made after its
    * children, so nothing can have that one as a child yet (list()'s argument,
    * a cell at a time). That is a quarter to a half of all the nodes a
-   * reduction builds — whatever it builds on what it just built — and without
-   * a search to wait on, the table write overlaps with the steps after it.
+   * reduction builds — whatever it builds on what it just built. Nor, past the
+   * nursery, when a child is in the nursery, which is most of the rest. A new
+   * node goes in the nursery, unless the search for it went on into `_groups`:
+   * then it takes the slot that search ended on, already in cache.
    */
   Tree intern(uint32_t u, uint32_t v) {
+    const uint64_t h = hash(u, v);
     if (u == _newest || v == _newest) {
-      const Tree fresh = alloc(u, v);
-      insert_interned(fresh);
-      reserve_interned(0);
-      return fresh;
+      size_t i = h & _nursery_mask;
+      while (_nursery[i]) i = (i + 1) & _nursery_mask;
+      return nurse(i, alloc(u, v));
     }
-    const size_t i = slot(u, v);
-    if (_interned[i]) return _interned[i];
+    const size_t i = nursery_slot(h, u, v);
+    if (const Tree at = _nursery[i]) return at;
+    if (young(u) || young(v)) return nurse(i, alloc(u, v));
+    const auto [at, empty] = search(h, u, v);
+    if (at) return at;
     if (const Tree cell = in_run(u, v)) return cell;
     const Tree fresh = alloc(u, v);
-    _interned[i] = fresh;
+    put(empty, tag_of(h), fresh);
     ++_interned_count;
     reserve_interned(0);
     return fresh;
@@ -628,10 +853,12 @@ private:
     return std::min(round_up_pow2(budget / 8), budget < ARENA_NODES ? MAX_MEMO : MIN_MEMO_CAP);
   }
 
-  /** What a budget of `nodes` holds at most, in bytes: the arena up to it, and
-   * the hash-consing table and memo at the sizes it takes them to. */
+  /** What a budget of `nodes` holds at most, in bytes: the arena up to it, the
+   * hash-consing table and memo at the sizes it takes them to, and a nursery
+   * bit for each of the nodes. (The nursery itself is at most 384 KB, like
+   * `_cold` not something a reduction grows.) */
   size_t footprint(size_t nodes) const {
-    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Tree) + memo_cap(nodes) * sizeof(Memo);
+    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Group) + memo_cap(nodes) * sizeof(Memo) + nodes / 8;
   }
 
   /** `what` would grow past what set_limit() allows, or with no limit, the arena. */
@@ -672,14 +899,17 @@ public:
   // everything look garbage, so opting in has to be the caller's decision.
   BasicEagerGraphNilMmap32() : _budget(ARENA_NODES) {
     map_arena();
-    rebuild_interned(MIN_TABLE);
+    rebuild_interned(MIN_GROUPS);
     size_memo();
     intern_jets();
   }
 
   ~BasicEagerGraphNilMmap32() {
     munmap(_arena, ARENA_BYTES);
-    munmap(_interned, MAX_INTERNED * sizeof(Tree));
+    munmap(_groups, MAX_GROUPS * sizeof(Group));
+    munmap(_nursery, NURSERY * sizeof(Tree));
+    munmap(_nursed, NURSERY / 2 * sizeof(Tree));
+    munmap(_young, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
   }
 
@@ -703,7 +933,7 @@ public:
     _roots.clear();
     _grey.clear();
     _grey.shrink_to_fit();
-    rebuild_interned(MIN_TABLE);
+    rebuild_interned(MIN_GROUPS);
     size_memo();
     intern_jets();
   }
@@ -757,8 +987,11 @@ public:
     // Re-laid at the size it already had rather than at the size of what
     // survived: the arena keeps its high-water mark, so the free list will fill
     // back up to about here before the next collection, and shrinking now only
-    // buys a run of rehashes on the way back.
-    rebuild_interned(_interned_mask + 1);
+    // buys a run of rehashes on the way back. Grown, though, if what survived
+    // does not fit: the nursery's nodes go in here too, and nothing made room
+    // for them as they went in. (_live counts the run's cells as well, which
+    // stay out.)
+    rebuild_interned(capacity_for(_live));
   }
 
   /** The arena's high-water mark in nodes, which is what it costs in memory. */
@@ -796,7 +1029,7 @@ public:
 
   std::string stats() {
     return std::to_string(allocated()) + " nodes in arena, " +
-           std::to_string(_interned_count) + " shared, " +
+           std::to_string(_interned_count + _nursery_count) + " shared, " +
            std::to_string(_memo_mask + 1) + " memo slots";
   }
 
@@ -831,6 +1064,9 @@ public:
         tail = at;
         continue;
       }
+      // The cells go in the table or the run, where no node may have a child in
+      // the nursery, and their heads may be in it.
+      if (_nursery_count) flush_nursery();
       if (n < RUN_MIN || _free) { // cells that cannot
         reserve_interned(n);
         insert_interned(tail = alloc(head, tail));

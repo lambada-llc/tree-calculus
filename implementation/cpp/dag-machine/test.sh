@@ -10,7 +10,7 @@ node "$DIR/../../lean/Cpp/trees/embed.mjs" --check
 # Compile
 "$DIR/compile.sh"
 
-for t in jets lazy; do
+for t in intern jets lazy; do
   "${CXX:-c++}" "$DIR/test-$t.cpp" -O3 -std=c++17 -o "$DIR/test-$t.exe"
   "$DIR/test-$t.exe"
 done
