@@ -133,12 +133,52 @@ def step_shrink_eager(t):
     walk(t, ())
     if best is None:                # nothing shrinks: root-first's pick
         return step(t)
-    def fire_at(t, path):
-        if not path:
-            return _fire(t)
-        i = path[0]
-        return t[:i] + (fire_at(t[i], path[1:]),) + t[i+1:]
-    return fire_at(t, best[1])
+    return _fire_at(t, best[1])
+
+def _fire_at(t, path):
+    if not path:
+        return _fire(t)
+    i = path[0]
+    return t[:i] + (_fire_at(t[i], path[1:]),) + t[i+1:]
+
+# --- shrink-pending order (--shrink-pending) ---
+# shrink-eager with a different measure: not the term's size but the work
+# still pending in it -- every node counted once per unreduced application it
+# sits under. In △ e1 .. ek those are the k-2 applications of e3 .. ek, the
+# one of ej covering the head and e1 .. ej; a node under several counts once
+# for each, so a normal form is exactly a term of measure 0. The fire that
+# lowers it most goes first; when none does, root-first's pick, as above.
+
+def _pending(t, memo):
+    '''(nodes, measure) of t, memoized by identity for one step (the memo
+    holds t, so its id is not reused while the memo lives).'''
+    r = memo.get(id(t))
+    if r is None:
+        n = m = 0
+        for j, e in enumerate(t, 1):
+            en, em = _pending(e, memo)
+            n += en; m += em
+            if j >= 3:              # the application of ej: head and e1 .. ej
+                m += 1 + n
+        r = memo[id(t)] = (1 + n, m, t)
+    return r[:2]
+
+def step_shrink_pending(t):
+    memo, best = {}, None           # (change, path) of the best lowering fire
+    def walk(t, path, above):       # above: pending applications over t
+        nonlocal best
+        if _fireable(t):
+            n, m = _pending(t, memo)
+            n2, m2 = _pending(_fire(t), memo)
+            d = above * (n2 - n) + m2 - m
+            if d < 0 and (best is None or d < best[0]):
+                best = (d, path)
+        for j, e in enumerate(t, 1):
+            walk(e, path + (j - 1,), above + max(0, len(t) - max(j, 3) + 1))
+    walk(t, (), 0)
+    if best is None:                # nothing lowers it: root-first's pick
+        return step(t)
+    return _fire_at(t, best[1])
 
 def count_steps(t):
     n = 0
@@ -191,14 +231,16 @@ if __name__ == '__main__':
     p.add_argument('--eager', action='store_true', help='applicative instead of root-first order')
     p.add_argument('--peek', action='store_true', help='rule-2 shortcuts that avoid duplicating the argument')
     p.add_argument('--shrink-eager', action='store_true', help='shrinking fires first; smallest intermediate terms')
+    p.add_argument('--shrink-pending', action='store_true', help='fires lowering the pending work first')
     p.add_argument('--fuse', type=int, nargs='?', const=8, default=0,
                    help='compress transient spikes into composite steps, up to this many fires (implies --peek)')
     a = p.parse_args()
     peek = a.peek or a.fuse > 0
     fuse = a.fuse
-    # a fresh name: rebinding `step` would turn step_shrink_eager's root-first
+    # a fresh name: rebinding `step` would turn the shrink orders' root-first
     # fallback into a call to itself
-    step_fn = step_applicative if a.eager else step_shrink_eager if a.shrink_eager else step
+    step_fn = (step_applicative if a.eager else step_shrink_eager if a.shrink_eager
+               else step_shrink_pending if a.shrink_pending else step)
     t = ()
     for i, line in enumerate(sys.stdin.read().split()):
         u = parse_ternary(line)

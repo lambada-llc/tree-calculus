@@ -10,7 +10,7 @@ import sys
 import unittest
 
 from tree_calculus import reduce, parse_term, format_term
-from stepper import step, step_shrink_eager, count_steps, trace_sampled
+from stepper import step, step_shrink_eager, step_shrink_pending, count_steps, trace_sampled
 import stepper
 
 sys.setrecursionlimit(1_000_000)
@@ -100,6 +100,19 @@ class TreeCalculusTests(unittest.TestCase):
         nf, peak = run(step_shrink_eager)
         self.assertEqual(nf, reduce(t))
         self.assertLessEqual(peak, run(step)[1])
+
+    def test_pending_measure(self):
+        # each node once per unreduced application over it; a value has none
+        for term, m in [('△ △ (△ △)', 0), ('△ △ △ △', 4), ('△ △ △ △ △', 4 + 5),
+                        ('△ (△ △ △ △) △', 4), ('△ △ △ (△ △ △ △)', 7 + 4)]:
+            self.assertEqual(stepper._pending(parse_term(term), {})[1], m, term)
+
+    def test_shrink_pending_same_normal_form(self):
+        t = size + (parse_term('△ △ △'),)
+        u = t
+        while (s := step_shrink_pending(u)) is not None:
+            u = s
+        self.assertEqual(u, reduce(t))
 
     def test_peek_same_normal_form_fewer_steps(self):
         t = size + (parse_term('△ △ △'),)
