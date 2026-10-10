@@ -989,9 +989,9 @@ public:
     // back up to about here before the next collection, and shrinking now only
     // buys a run of rehashes on the way back. Grown, though, if what survived
     // does not fit: the nursery's nodes go in here too, and nothing made room
-    // for them as they went in. (_live counts the run's cells as well, which
-    // stay out.)
-    rebuild_interned(capacity_for(_live));
+    // for them as they went in. Sized by what goes in: _live less the run's
+    // cells, which stay out (and after the trim above are all live).
+    rebuild_interned(capacity_for(_live - (_run_end - _run)));
   }
 
   /** The arena's high-water mark in nodes, which is what it costs in memory. */
