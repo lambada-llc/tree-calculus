@@ -81,9 +81,9 @@
 // the index it was across a collection — which is what lets every Tree a caller
 // is holding survive one without being registered anywhere.
 //
-// EagerGraphNilMmap32Jets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
-// without it.
+// EagerGraphNilMmap32Jets also answers lambada's skip_line and arboretum's
+// Nat.divmod__fastest natively, jets (implementation/lean/Cpp/README.md);
+// EagerGraphNilMmap32 is the same code without them.
 
 // Anonymous memory, reserved rather than committed: a page is only committed
 // the first time it is touched, so a region can be mapped at the most it will
@@ -356,7 +356,11 @@ private:
   // jets.hpp's trees, interned on a fresh arena and marked by every collection,
   // so that each stays the index of its tree: interning is exact, so comparing
   // an index with them compares trees. 0, which no tree is, while jets are off.
-  Tree _skip_line = 0, _newline = 0;
+  Tree _skip_line = 0, _newline = 0, _divmod = 0;
+  // _divmod is S (K (△U)) (S (K (△V)) K), so `divmod a` is △U (△V (△△a)) by
+  // S and K alone: what tells its partials apart from other trees is U and V.
+  Tree _divmod_u = 0, _divmod_v = 0;
+  std::vector<uint64_t> _n, _d, _q, _r; // divmod's a, b, a / b and a % b in limbs, reused
   bool _jets = JETS;
 
   static size_t round_up_pow2(size_t n) {
@@ -741,18 +745,30 @@ private:
 
   void intern_jets() {
     if constexpr (JETS) {
-      _skip_line = _newline = 0;
-      if (_jets) _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      _skip_line = _newline = _divmod = _divmod_u = _divmod_v = 0;
+      if (!_jets) return;
+      _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      _divmod = intern_dag(jets::divmod);
+      // S (K (△x)) _ ↦ x
+      const auto under = [&](Tree s) { return _arena[_arena[_arena[_arena[s].u].u].v].u; };
+      _divmod_u = under(_divmod), _divmod_v = under(_arena[_divmod].v);
     }
+  }
+
+  /** r, which apply(a, b) is, recorded as RStep's put for the MEMOIZE frame
+   * recall() pushed, if it did: a jet takes no steps, so that frame would not. */
+  Tree answered(Tree a, Tree b, Tree r) {
+    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
+        _stack.back().arg1() == a && _stack.back().arg2() == b)
+      memo_put(a, b, r);
+    return r;
   }
 
   /**
    * apply(skip_line, xs) by DropJet's transitions (TreeCalculus/Check.lean):
    * skip each element that is not the newline, and answer what follows the
-   * first that is, or the leaf ending the list, recorded as RStep's put for the
-   * MEMOIZE frame recall() pushed, if it did: the jet takes no steps, so that
-   * frame would not. A stem ending the list has no transition: 0, and xs the
-   * stem, for the rules.
+   * first that is, or the leaf ending the list. A stem ending the list has no
+   * transition: 0, and xs the stem, for the rules.
    */
   Tree skip_line(Tree &xs) {
     const Tree b = xs;
@@ -761,10 +777,75 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
-        _stack.back().arg1() == _skip_line && _stack.back().arg2() == b)
-      memo_put(_skip_line, b, xs);
-    return xs;
+    return answered(_skip_line, b, xs);
+  }
+
+  /** Whether x is a natural without trailing △s — a list of the bits △ and △△,
+   * least significant first (conventions/README.md) — and if so, its 64-bit
+   * limbs in w, least significant first, the top one not 0. */
+  bool limbs(Tree x, std::vector<uint64_t> &w) {
+    w.clear();
+    bool top = true; // the last bit, which is △△ unless there are none
+    for (size_t i = 0;; ++i) {
+      const Node n = _arena[x], h = _arena[n.u];
+      if (!n.u) return top;
+      if (!n.v || (n.u != leaf() && (h.u != leaf() || h.v))) return false; // a stem, or no bit
+      if (i % 64 == 0) w.push_back(0);
+      top = n.u != leaf();
+      w.back() |= uint64_t(top) << i % 64;
+      x = n.v;
+    }
+  }
+
+  /** The natural whose bits w's limbs are, without trailing △s. */
+  Tree natural(const std::vector<uint64_t> &w) {
+    const auto bit = [&](size_t i) { return w[i / 64] >> i % 64 & 1; };
+    size_t n = 64 * w.size();
+    while (n && !bit(n - 1)) --n;
+    const Tree one = stem(leaf());
+    return list(n, [&, i = n]() mutable { return bit(--i) ? one : leaf(); }, leaf());
+  }
+
+  /**
+   * apply(△U (△V (△△a)), b) — Nat.divmod__fastest a b — as the rules answer
+   * it when a and b are naturals without trailing △s, b not 0: the pair
+   * △ (a / b) (a % b), likewise without. Long division, a bit of a at a time
+   * from the top. Anything else, 0, for the rules.
+   */
+  [[gnu::noinline]] Tree divmod(Tree p, Tree y, Tree b) {
+    const Node yn = _arena[y], k = _arena[yn.v]; // y is △V (△△a), k is △△a
+    if (yn.u != _divmod_v || k.u != leaf() || !k.v || !limbs(k.v, _n) || !limbs(b, _d) ||
+        _d.empty())
+      return 0;
+    ++stats_counters.jets;
+    _q.assign(_n.size(), 0);
+    _r.assign(_d.size() + 1, 0); // r < b before a shift, so < 2b after it
+    const auto below = [&] { // r < b
+      if (_r.back()) return false;
+      for (size_t j = _d.size(); j-- > 0;)
+        if (_r[j] != _d[j]) return _r[j] < _d[j];
+      return false;
+    };
+    for (size_t i = 64 * _n.size(); i-- > 0;) {
+      uint64_t carry = _n[i / 64] >> i % 64 & 1; // r = 2r + the bit
+      for (uint64_t &l : _r) {
+        const uint64_t out = l >> 63;
+        l = l << 1 | carry;
+        carry = out;
+      }
+      if (below()) continue;
+      uint64_t borrow = 0; // r -= b
+      for (size_t j = 0; j < _r.size(); ++j) {
+        const uint64_t s = j < _d.size() ? _d[j] : 0, l = _r[j] - s - borrow;
+        borrow = _r[j] < s || (_r[j] == s && borrow);
+        _r[j] = l;
+      }
+      _q[i / 64] |= uint64_t(1) << i % 64;
+    }
+    // r before q on every compiler, rather than in argument order, which is the
+    // compiler's: the indices they get decide memo slots, hence step counts.
+    const Tree r = natural(_r);
+    return answered(p, b, fork(natural(_q), r));
   }
 
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
@@ -965,7 +1046,7 @@ public:
       mark(f.arg1());
       mark(f.arg2());
     }
-    if constexpr (JETS) mark(_skip_line), mark(_newline);
+    if constexpr (JETS) mark(_skip_line), mark(_newline), mark(_divmod);
     // Between mark and sweep is the one moment liveness is written on the
     // nodes themselves, which is what lets the memo be filtered rather than
     // dropped: nothing moves, so an entry whose operands and result all
@@ -1149,6 +1230,7 @@ public:
         }
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          if (JETS && an.u == _divmod_u && (result = divmod(a, y, b))) goto dispatch;
           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
