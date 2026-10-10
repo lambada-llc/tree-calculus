@@ -408,8 +408,9 @@ private:
   //
   // Two words a group, on every target. SSE2, which any x86-64 has, compares
   // all 16 bytes in one: 3% fewer instructions and 7% fewer mispredicted
-  // branches, but only 1.4-2.4% less time, since what a search waits on is the
-  // line it reads rather than the comparing. Too little for a Word per target.
+  // branches, but only about 2% less time best of N (2-6% by median, within
+  // this VM's spread), since what a search waits on is the line it reads rather
+  // than the comparing. Too little, so far, for a Word per target.
   struct Word {
     static constexpr unsigned WIDTH = 8, SHIFT = 3;
     static constexpr uint64_t LSB = 0x0101010101010101ull, MSB = 0x8080808080808080ull;
