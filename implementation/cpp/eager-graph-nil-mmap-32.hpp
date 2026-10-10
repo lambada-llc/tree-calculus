@@ -10,6 +10,7 @@
 #include <vector>
 #include <sys/mman.h>
 
+#include "eager-graph-nil-mmap-32-jets.hpp"
 #include "jets.hpp"
 
 // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
@@ -81,9 +82,10 @@
 // the index it was across a collection — which is what lets every Tree a caller
 // is holding survive one without being registered anywhere.
 //
-// EagerGraphNilMmap32Jets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
-// without it.
+// EagerGraphNilMmap32Jets also answers lambada's skip_line and arboretum's
+// Quoted._whnf natively, jets (implementation/lean/Cpp/README.md, and
+// eager-graph-nil-mmap-32-jets.hpp); EagerGraphNilMmap32 is the same code
+// without them.
 
 // Anonymous memory, reserved rather than committed: a page is only committed
 // the first time it is touched, so a region can be mapped at the most it will
@@ -357,6 +359,8 @@ private:
   // so that each stays the index of its tree: interning is exact, so comparing
   // an index with them compares trees. 0, which no tree is, while jets are off.
   Tree _skip_line = 0, _newline = 0;
+  jets::SpineWhnf _spine_whnf; // keyed on its partial, which it holds
+  friend class jets::SpineWhnf;
   bool _jets = JETS;
 
   static size_t round_up_pow2(size_t n) {
@@ -742,17 +746,39 @@ private:
   void intern_jets() {
     if constexpr (JETS) {
       _skip_line = _newline = 0;
-      if (_jets) _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      _spine_whnf = {};
+      if (_jets) {
+        _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+        _spine_whnf.key(*this, intern_dag(jets::spineWhnf));
+      }
     }
+  }
+
+  /** A jet's answer r to apply(a, b), recorded as RStep's put for the MEMOIZE
+   * frame recall() pushed, if it did: the jet takes no steps, so that frame
+   * would not. */
+  Tree remember(Tree a, Tree b, Tree r) {
+    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
+        _stack.back().arg1() == a && _stack.back().arg2() == b)
+      memo_put(a, b, r);
+    return r;
+  }
+
+  /** apply(a, b) by Quoted._whnf's jet, remembered, if `a` is `_whnf fuel`
+   * and b a spine it takes; else 0. Out of line, as collect(): inlined,
+   * compiling compiler.lamb, where it never fires, took 2.3% more
+   * instructions. */
+  [[gnu::noinline]] Tree spine_whnf(Tree a, Tree b) {
+    const Tree r = _spine_whnf.answer(*this, a, b);
+    if (r) ++stats_counters.jets, remember(a, b, r);
+    return r;
   }
 
   /**
    * apply(skip_line, xs) by DropJet's transitions (TreeCalculus/Check.lean):
    * skip each element that is not the newline, and answer what follows the
-   * first that is, or the leaf ending the list, recorded as RStep's put for the
-   * MEMOIZE frame recall() pushed, if it did: the jet takes no steps, so that
-   * frame would not. A stem ending the list has no transition: 0, and xs the
-   * stem, for the rules.
+   * first that is, or the leaf ending the list, remembered. A stem ending the
+   * list has no transition: 0, and xs the stem, for the rules.
    */
   Tree skip_line(Tree &xs) {
     const Tree b = xs;
@@ -761,10 +787,7 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
-        _stack.back().arg1() == _skip_line && _stack.back().arg2() == b)
-      memo_put(_skip_line, b, xs);
-    return xs;
+    return remember(_skip_line, b, xs);
   }
 
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
@@ -965,7 +988,7 @@ public:
       mark(f.arg1());
       mark(f.arg2());
     }
-    if constexpr (JETS) mark(_skip_line), mark(_newline);
+    if constexpr (JETS) mark(_skip_line), mark(_newline), mark(_spine_whnf.partial());
     // Between mark and sweep is the one moment liveness is written on the
     // nodes themselves, which is what lets the memo be filtered rather than
     // dropped: nothing moves, so an entry whose operands and result all
@@ -1149,6 +1172,8 @@ public:
         }
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          // After the memo, as skip_line below. x() is 0, which no u' is, while jets are off.
+          if (JETS && un.u == _spine_whnf.x() && (result = spine_whnf(a, b))) goto dispatch;
           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
