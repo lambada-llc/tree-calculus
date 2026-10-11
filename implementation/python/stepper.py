@@ -205,32 +205,35 @@ def step_shrink_pending(t):
 # CHEAP = 3 is the best of 1 .. 10 overall; 2 to 5 all stay at or below.
 
 CHEAP = 3
-_dist = {}  # term -> root-first steps to its normal form, or -n: at least n
+_dist = {}  # hash(term) -> root-first steps to its normal form, or -n: at least n
 
 def _cheap(c):
     '''Does root-first take c to normal form within CHEAP steps per node?
     Every term a trial passes through keeps its distance, so the trials of
-    a run share their work.'''
-    cap = CHEAP * nodes(c)
-    d = _dist.get(c)
+    a run share their work. Keyed by hash, so the terms themselves are not
+    kept: a collision could only change which redex fires, never the
+    normal form.'''
+    cap, h = CHEAP * nodes(c), hash(c)
+    d = _dist.get(h)
     if d is None or -cap <= d < 0:
         seen, u = [], c
         while len(seen) <= cap:
-            d = _dist.get(u)
+            k = hash(u)
+            d = _dist.get(k)
             if d is not None and d >= 0:
                 break
-            seen.append(u)
+            seen.append(k)
             u = step(u)
             if u is None:
                 d = 0
                 break
         else:
-            for i, v in enumerate(seen):
-                _dist[v] = min(_dist.get(v, 0), i - len(seen))
+            for i, k in enumerate(seen):
+                _dist[k] = min(_dist.get(k, 0), i - len(seen))
             return False
-        for i, v in enumerate(reversed(seen), 1):
-            _dist[v] = d + i
-        d = _dist[c]
+        for i, k in enumerate(reversed(seen), 1):
+            _dist[k] = d + i
+        d = _dist[h]
     return 0 <= d <= cap
 
 def step_cheap_args(t):
