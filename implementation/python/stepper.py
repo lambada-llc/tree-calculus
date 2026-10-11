@@ -61,25 +61,37 @@ def _fireable(t):
     return len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3)
 
 def _fire_chain(t):
-    out = _fire(t)
-    start, n = nodes(t), 1
-    while n < fuse and nodes(out) > start and _fireable(out):
-        out = _fire(out); n += 1
+    out, n = _fire(t), 1
+    if n < fuse:
+        start = nodes(t)
+        while n < fuse and nodes(out) > start and _fireable(out):
+            out = _fire(out); n += 1
     return out
 
-def step(t):
+def _root_path(t):
+    '''Path to the redex `step` fires, or None for a normal form.'''
     if len(t) >= 3:
         a, c = t[0], t[2]
         if len(a) >= 3:                 # function not a value yet: reduce it
-            return (step(a),) + t[1:]
+            return (0,) + _root_path(a)
         if len(a) == 2 and len(c) >= 3: # rule-3 argument not a value yet
-            return t[:2] + (step(c),) + t[3:]
-        return _fire_chain(t)
+            return (2,) + _root_path(c)
+        return ()
     for i, e in enumerate(t):           # a value: reduce the leftmost child that can
-        s = step(e)
-        if s is not None:
-            return t[:i] + (s,) + t[i+1:]
+        p = _root_path(e)
+        if p is not None:
+            return (i,) + p
     return None
+
+def _fire_at(t, path, fire=_fire):
+    if not path:
+        return fire(t)
+    i = path[0]
+    return t[:i] + (_fire_at(t[i], path[1:], fire),) + t[i+1:]
+
+def step(t):
+    p = _root_path(t)
+    return None if p is None else _fire_at(t, p, _fire_chain)
 
 # --- applicative order (leftmost-innermost, an eager evaluator's discipline) ---
 # Arguments are values before a rule fires, so values are duplicated rather
@@ -119,27 +131,25 @@ def _drop(t):
         return 3 + nodes(x) + nodes(b)
     return 3 + nodes(x) + nodes(y)  # 3c drops x and y
 
-def step_shrink_eager(t):
+def _shrink_path(t):
+    '''Path to the shrink redex that drops most (the first such), or None.'''
     best = None                     # (drop, path) of the best shrink redex
     def walk(t, path):
         nonlocal best
-        if (len(t) >= 3 and len(t[0]) < 3 and (len(t[0]) < 2 or len(t[2]) < 3)
-                and (len(t[0]) != 1 or t[2] == ())):
+        if _fireable(t) and (len(t[0]) != 1 or t[2] == ()):
             d = _drop(t)
             if best is None or d > best[0]:
                 best = (d, path)
         for i, e in enumerate(t):
             walk(e, path + (i,))
     walk(t, ())
-    if best is None:                # nothing shrinks: root-first's pick
-        return step(t)
-    return _fire_at(t, best[1])
+    return best and best[1]
 
-def _fire_at(t, path):
-    if not path:
-        return _fire(t)
-    i = path[0]
-    return t[:i] + (_fire_at(t[i], path[1:]),) + t[i+1:]
+def step_shrink_eager(t):
+    p = _shrink_path(t)
+    if p is None:                   # nothing shrinks: root-first's pick
+        return step(t)
+    return _fire_at(t, p)
 
 # --- shrink-pending order (--shrink-pending) ---
 # shrink-eager with a different measure: not the term's size but the work
@@ -179,6 +189,66 @@ def step_shrink_pending(t):
     if best is None:                # nothing lowers it: root-first's pick
         return step(t)
     return _fire_at(t, best[1])
+
+# --- cheap-args order (--cheap-args) ---
+# shrink-eager, except that before rule 2 passes its argument c on, c is
+# taken to normal form first when that is cheap: when root-first gets it
+# there on its own within CHEAP steps per node. Laziness otherwise carries big
+# pending arguments around -- often ones that evaluate to a single node --
+# and that is most of the term's size along the way; evaluated in time, the
+# term stays smaller for longer. An argument without a cheap normal form is
+# passed on lazily as before: in the __wn family that includes the ones with
+# no normal form at all, so the bounded trial is what keeps this from
+# diverging there (it is not proven normalizing). Arguments inside c are
+# decided the same way. Measured on every `size size` variant: peak and
+# mean never above shrink-eager's, the mean down by a third on average.
+# CHEAP = 3 is the best of 1 .. 10 overall; 2 to 5 all stay at or below.
+
+CHEAP = 3
+_dist = {}  # term -> root-first steps to its normal form, or -n: at least n
+
+def _cheap(c):
+    '''Does root-first take c to normal form within CHEAP steps per node?
+    Every term a trial passes through keeps its distance, so the trials of
+    a run share their work.'''
+    cap = CHEAP * nodes(c)
+    d = _dist.get(c)
+    if d is None or -cap <= d < 0:
+        seen, u = [], c
+        while len(seen) <= cap:
+            d = _dist.get(u)
+            if d is not None and d >= 0:
+                break
+            seen.append(u)
+            u = step(u)
+            if u is None:
+                d = 0
+                break
+        else:
+            for i, v in enumerate(seen):
+                _dist[v] = min(_dist.get(v, 0), i - len(seen))
+            return False
+        for i, v in enumerate(reversed(seen), 1):
+            _dist[v] = d + i
+        d = _dist[c]
+    return 0 <= d <= cap
+
+def step_cheap_args(t):
+    p = _shrink_path(t)
+    if p is None:
+        p = _root_path(t)
+        if p is None:
+            return None
+        r = _subterm(t, p)
+        while len(r[0]) == 1 and (q := _root_path(r[2])) is not None and _cheap(r[2]):
+            p += (2,) + q           # rule 2 on a cheap argument: evaluate it first
+            r = _subterm(t, p)
+    return _fire_at(t, p)
+
+def _subterm(t, path):
+    for i in path:
+        t = t[i]
+    return t
 
 def count_steps(t):
     n = 0
@@ -232,6 +302,8 @@ if __name__ == '__main__':
     p.add_argument('--peek', action='store_true', help='rule-2 shortcuts that avoid duplicating the argument')
     p.add_argument('--shrink-eager', action='store_true', help='shrinking fires first; smallest intermediate terms')
     p.add_argument('--shrink-pending', action='store_true', help='fires lowering the pending work first')
+    p.add_argument('--cheap-args', action='store_true',
+                   help='shrink-eager, normalizing arguments before rule 2 passes them on when that is cheap')
     p.add_argument('--fuse', type=int, nargs='?', const=8, default=0,
                    help='compress transient spikes into composite steps, up to this many fires (implies --peek)')
     a = p.parse_args()
@@ -240,7 +312,7 @@ if __name__ == '__main__':
     # a fresh name: rebinding `step` would turn the shrink orders' root-first
     # fallback into a call to itself
     step_fn = (step_applicative if a.eager else step_shrink_eager if a.shrink_eager
-               else step_shrink_pending if a.shrink_pending else step)
+               else step_shrink_pending if a.shrink_pending else step_cheap_args if a.cheap_args else step)
     t = ()
     for i, line in enumerate(sys.stdin.read().split()):
         u = parse_ternary(line)
