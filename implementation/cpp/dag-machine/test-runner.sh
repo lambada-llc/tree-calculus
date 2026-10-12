@@ -254,6 +254,22 @@ ok
 data 5
 hello" "$transcript"
 
+# A collection grows the hash-consing table if what it finds live does not fit.
+# The module's 30,000 bindings and the request's 30,000 cells are chains, each
+# cell built on the one made just before it, which go in with no search and so
+# with nothing to grow the table for them as they do. $long takes the arena to
+# the budget (1 MB) partway through the second, and the collection there finds
+# them all live, and re-lays the table with them (rather than looking for ever
+# for a free slot in a table that has none).
+{ printf 'k △ △\ne △ k\np △ e\nc0 △\n'; seq 30000 | awk '{print "c" $1 " p c" $1 - 1}'
+  cat "$CACHE/id.dag"; } > "$CACHE/chains.dag"
+chain=$'~q △ id\n~d0 △\n'$(seq 30000 | awk '{print "~d" $1 " ~q ~d" $1 - 1}')$'\n~r id ~x\n~r\n'
+transcript=$({ printf 'load %s\n' "$CACHE/chains.dag"
+               printf 'bind ~x %d\n' ${#long}; printf '%s' "$long"
+               printf 'reduce string %d\n' "${#chain}"; printf '%s' "$chain"
+             } | RUNNER_RSS_THRESHOLD_MB=1 "$DIR/runner-eager.exe")
+check "a collection grows the table for what it finds live" "$long" "${transcript##*$'\n'}"
+
 # skip_line's jet, which test-jets.cpp tests itself: RUNNER_STATS counts each request's
 # jets and the elements they skipped, and RUNNER_JETS=0 turns them off. skip_line applied
 # to "ab\ncd" and then, in the same session, to "abc\nef": "ef" either way.
