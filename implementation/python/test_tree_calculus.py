@@ -10,7 +10,8 @@ import sys
 import unittest
 
 from tree_calculus import reduce, parse_term, format_term
-from stepper import step, step_shrink_eager, count_steps, trace_sampled
+from stepper import (step, step_shrink_eager, step_shrink_pending, step_cheap_args, step_lookahead,
+                     count_steps, trace_sampled)
 import stepper
 
 sys.setrecursionlimit(1_000_000)
@@ -100,6 +101,51 @@ class TreeCalculusTests(unittest.TestCase):
         nf, peak = run(step_shrink_eager)
         self.assertEqual(nf, reduce(t))
         self.assertLessEqual(peak, run(step)[1])
+
+    def test_pending_measure(self):
+        # each node once per unreduced application over it; a value has none
+        for term, m in [('△ △ (△ △)', 0), ('△ △ △ △', 4), ('△ △ △ △ △', 4 + 5),
+                        ('△ (△ △ △ △) △', 4), ('△ △ △ (△ △ △ △)', 7 + 4)]:
+            self.assertEqual(stepper._pending(parse_term(term), {})[1], m, term)
+
+    def test_shrink_pending_same_normal_form(self):
+        t = size + (parse_term('△ △ △'),)
+        u = t
+        while (s := step_shrink_pending(u)) is not None:
+            u = s
+        self.assertEqual(u, reduce(t))
+
+    def test_cheap_args_same_normal_form(self):
+        t = size + (parse_term('△ △ △'),)
+        for budget in [stepper.CHEAP, 100]:
+            stepper.CHEAP, old = budget, stepper.CHEAP
+            try:
+                u = t
+                while (s := step_cheap_args(u)) is not None:
+                    u = s
+                self.assertEqual(u, reduce(t))
+            finally:
+                stepper.CHEAP = old
+
+    def test_lookahead_same_normal_form(self):
+        t = size + (parse_term('△ △ △'),)
+        u = t
+        while (s := step_lookahead(u)) is not None:
+            u = s
+        self.assertEqual(u, reduce(t))
+
+    def test_cheap_args_passes_a_divergent_argument_lazily(self):
+        # S (K △) (K △) Ω: Ω has no normal form, so its trial fails and rule 2
+        # passes it on unevaluated, for both K to drop -- leaving △ △.
+        K = ((),)
+        I = ((K,), K)
+        omega = ((I,), I)
+        u = (((((), ()),), ((), ())) + (omega + (omega,),))
+        n = 0
+        while (s := step_cheap_args(u)) is not None:
+            u = s; n += 1
+            self.assertLess(n, 100)
+        self.assertEqual(u, ((),))
 
     def test_peek_same_normal_form_fewer_steps(self):
         t = size + (parse_term('△ △ △'),)
