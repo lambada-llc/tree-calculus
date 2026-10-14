@@ -95,7 +95,15 @@
 #include <unordered_map>
 #include <vector>
 
-#ifdef RUNNER_EAGER
+#if defined(RUNNER_EAGER_V2)
+#ifdef RUNNER_EAGER_HEADER
+#include RUNNER_EAGER_HEADER
+#else
+#include "../eager-graph-nil-mmap-32-v2.hpp"
+#endif
+using Reducer = EagerGraphNilMmap32V2Jets;
+#define RUNNER_EAGER
+#elif defined(RUNNER_EAGER)
 #include "../eager-graph-nil-mmap-32.hpp"
 using Reducer = EagerGraphNilMmap32Jets;
 #else
