@@ -203,50 +203,103 @@ def step_shrink_pending(t):
 # decided the same way. Measured on every `size size` variant: peak and
 # mean never above shrink-eager's, the mean down by a third on average.
 # CHEAP = 3 is the best of 1 .. 10 overall; 2 to 5 all stay at or below.
+# A large budget (--cheap-args 100) suits a program whose loop arguments
+# always have a normal form: it brings the loop back to its smallest state,
+# both arguments evaluated, once per iteration (Snat.size__78's area drops to
+# a tenth of CHEAP = 3's); on a loop with a second phase it costs instead.
+# GROW keeps a large budget affordable: an argument without a normal form
+# usually grows, and its trial ends there instead of running out the budget.
+# At CHEAP = 3 it decides nothing differently on any size-of-size variant.
 
 CHEAP = 3
-_dist = {}  # hash(term) -> root-first steps to its normal form, or -n: at least n
+GROW = 16   # a trial that grows its argument past GROW times its size fails
+_dist = {}  # hash(term) -> (root-first steps to its normal form, largest size on
+            # the way), or (-n, None): at least n steps
+_grows = set()  # hashes of arguments whose trial grew past GROW times their size
 
-def _cheap(c):
-    '''Does root-first take c to normal form within CHEAP steps per node?
-    Every term a trial passes through keeps its distance, so the trials of
-    a run share their work. Keyed by hash, so the terms themselves are not
-    kept: a collision could only change which redex fires, never the
-    normal form.'''
-    cap, h = CHEAP * nodes(c), hash(c)
-    d = _dist.get(h)
-    if d is None or -cap <= d < 0:
-        seen, u = [], c
-        while len(seen) <= cap:
+def _cheap(c, budget):
+    '''Does root-first take c to normal form within `budget` steps per node,
+    never growing it past GROW times its size? Every term a trial passes
+    through keeps its distance, so the trials of a run share their work.
+    Keyed by hash, so the terms themselves are not kept: a collision could
+    only change which redex fires, never the normal form.'''
+    n = nodes(c)
+    cap, lim, h = budget * n, GROW * n, hash(c)
+    if h in _grows:
+        return False
+    r = _dist.get(h)
+    if r is None or (r[1] is None and -r[0] <= cap):
+        seen, u, size = [], c, n
+        while True:
             k = hash(u)
-            d = _dist.get(k)
-            if d is not None and d >= 0:
+            r = _dist.get(k)
+            if r is not None and r[1] is not None:
+                break               # joins a known way to the normal form
+            s = step(u)
+            if s is None:
+                r = _dist[k] = (0, size)
                 break
-            seen.append(k)
-            u = step(u)
-            if u is None:
-                d = 0
-                break
-        else:
-            for i, k in enumerate(seen):
-                _dist[k] = min(_dist.get(k, 0), i - len(seen))
-            return False
-        for i, k in enumerate(reversed(seen), 1):
-            _dist[k] = d + i
-        d = _dist[h]
-    return 0 <= d <= cap
+            seen.append((k, size))
+            u, size = s, nodes(s)
+            if len(seen) > cap or size > lim:
+                if size > lim:
+                    _grows.add(h)
+                for i, (k, _) in enumerate(seen):
+                    old = _dist.get(k)
+                    _dist[k] = (min(old[0] if old else 0, i - len(seen)), None)
+                return False
+        d, peak = r
+        for k, size in reversed(seen):
+            d, peak = d + 1, max(peak, size)
+            _dist[k] = (d, peak)
+        r = _dist[h]
+    return r[1] is not None and r[0] <= cap and r[1] <= lim
+
+def _arg_paths(t, budget):
+    '''Root-first's redex, then -- while that is a rule 2 whose argument is
+    cheap within `budget` -- the argument's own, and so on inwards.'''
+    p = _root_path(t)
+    while p is not None:
+        yield p
+        r = _subterm(t, p)
+        if len(r[0]) != 1 or (q := _root_path(r[2])) is None or not _cheap(r[2], budget):
+            return
+        p += (2,) + q
 
 def step_cheap_args(t):
     p = _shrink_path(t)
     if p is None:
-        p = _root_path(t)
-        if p is None:
-            return None
-        r = _subterm(t, p)
-        while len(r[0]) == 1 and (q := _root_path(r[2])) is not None and _cheap(r[2]):
-            p += (2,) + q           # rule 2 on a cheap argument: evaluate it first
-            r = _subterm(t, p)
-    return _fire_at(t, p)
+        for p in _arg_paths(t, CHEAP):
+            pass                    # the innermost: arguments first
+    return None if p is None else _fire_at(t, p)
+
+# --- lookahead order (--lookahead H) ---
+# cheap-args deciding by trial instead of by budget: when nothing shrinks,
+# the options are root-first's redex and the ones inside the arguments its
+# rule 2s would pass on (when those normalize within LOOK_BUDGET steps per
+# node); each is scored by the area under the next H steps of cheap-args,
+# and the smallest wins (the outermost on a tie). On a loop with a second
+# phase it beats every fixed budget (Snat.size__118: a fifth less area than
+# cheap-args at H = 256), but it is slow: each step costs H steps per option.
+
+LOOK_BUDGET = 20
+lookahead = 256
+
+def step_lookahead(t):
+    p = _shrink_path(t)
+    if p is not None:
+        return _fire_at(t, p)
+    best = None
+    for p in _arg_paths(t, LOOK_BUDGET):
+        u = _fire_at(t, p)
+        area = nodes(u)
+        for _ in range(lookahead):
+            if (u := step_cheap_args(u)) is None:
+                break
+            area += nodes(u)
+        if best is None or area < best[0]:
+            best = (area, p)
+    return None if best is None else _fire_at(t, best[1])
 
 def _subterm(t, path):
     for i in path:
@@ -305,17 +358,24 @@ if __name__ == '__main__':
     p.add_argument('--peek', action='store_true', help='rule-2 shortcuts that avoid duplicating the argument')
     p.add_argument('--shrink-eager', action='store_true', help='shrinking fires first; smallest intermediate terms')
     p.add_argument('--shrink-pending', action='store_true', help='fires lowering the pending work first')
-    p.add_argument('--cheap-args', action='store_true',
-                   help='shrink-eager, normalizing arguments before rule 2 passes them on when that is cheap')
+    p.add_argument('--cheap-args', type=int, nargs='?', const=CHEAP, metavar='N',
+                   help='shrink-eager, normalizing arguments before rule 2 passes them on when that takes '
+                        'root-first at most N steps per node (default %d)' % CHEAP)
+    p.add_argument('--lookahead', type=int, nargs='?', const=lookahead, metavar='H',
+                   help='cheap-args choosing each argument to evaluate by the area of the next H steps '
+                        '(default %d); slow' % lookahead)
     p.add_argument('--fuse', type=int, nargs='?', const=8, default=0,
                    help='compress transient spikes into composite steps, up to this many fires (implies --peek)')
     a = p.parse_args()
     peek = a.peek or a.fuse > 0
     fuse = a.fuse
+    CHEAP = a.cheap_args or CHEAP
+    lookahead = a.lookahead or lookahead
     # a fresh name: rebinding `step` would turn the shrink orders' root-first
     # fallback into a call to itself
     step_fn = (step_applicative if a.eager else step_shrink_eager if a.shrink_eager
-               else step_shrink_pending if a.shrink_pending else step_cheap_args if a.cheap_args else step)
+               else step_shrink_pending if a.shrink_pending else step_cheap_args if a.cheap_args is not None
+               else step_lookahead if a.lookahead is not None else step)
     t = ()
     for i, line in enumerate(sys.stdin.read().split()):
         u = parse_ternary(line)

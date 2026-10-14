@@ -10,7 +10,8 @@ import sys
 import unittest
 
 from tree_calculus import reduce, parse_term, format_term
-from stepper import step, step_shrink_eager, step_shrink_pending, step_cheap_args, count_steps, trace_sampled
+from stepper import (step, step_shrink_eager, step_shrink_pending, step_cheap_args, step_lookahead,
+                     count_steps, trace_sampled)
 import stepper
 
 sys.setrecursionlimit(1_000_000)
@@ -116,8 +117,20 @@ class TreeCalculusTests(unittest.TestCase):
 
     def test_cheap_args_same_normal_form(self):
         t = size + (parse_term('△ △ △'),)
+        for budget in [stepper.CHEAP, 100]:
+            stepper.CHEAP, old = budget, stepper.CHEAP
+            try:
+                u = t
+                while (s := step_cheap_args(u)) is not None:
+                    u = s
+                self.assertEqual(u, reduce(t))
+            finally:
+                stepper.CHEAP = old
+
+    def test_lookahead_same_normal_form(self):
+        t = size + (parse_term('△ △ △'),)
         u = t
-        while (s := step_cheap_args(u)) is not None:
+        while (s := step_lookahead(u)) is not None:
             u = s
         self.assertEqual(u, reduce(t))
 
