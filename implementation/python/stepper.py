@@ -206,7 +206,7 @@ def step_shrink_pending(t):
 # A large budget (--cheap-args 100) suits a program whose loop arguments
 # always have a normal form: it brings the loop back to its smallest state,
 # both arguments evaluated, once per iteration (Snat.size__78's area drops to
-# a tenth of CHEAP = 3's); on a loop with a second phase it costs instead.
+# a ninth of CHEAP = 3's); on a loop with a second phase it costs instead.
 # GROW keeps a large budget affordable: an argument without a normal form
 # usually grows, and its trial ends there instead of running out the budget.
 # At CHEAP = 3 it decides nothing differently on any size-of-size variant.
