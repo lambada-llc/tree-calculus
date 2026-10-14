@@ -9,8 +9,14 @@
 #include <unordered_map>
 #include <vector>
 #include <sys/mman.h>
+#ifdef __SSE2__
+#include <emmintrin.h>
+#endif
 
 #include "jets.hpp"
+
+#define EAGER_LIKELY(x) __builtin_expect(!!(x), 1)
+#define EAGER_UNLIKELY(x) __builtin_expect(!!(x), 0)
 
 // Eager *graph* reduction over the nil-packed 32-bit mmap representation: the
 // evaluator an eager module build needs, which none of the eager evaluators
@@ -180,21 +186,6 @@ private:
     uint32_t meta() const { return hi >> 32; }     // MEMOIZE: low bits of the step counter at push
   };
 
-  // The stack's allocator, which is where set_limit() holds it: the stack only
-  // grows by asking it, so a step that does not grow the stack pays nothing.
-  struct StackAllocator {
-    using value_type = Frame;
-    template <typename> struct rebind { using other = StackAllocator; };
-    const BasicEagerGraphNilMmap32V2 *e;
-    Frame *allocate(size_t frames) {
-      if (frames > e->_max_frames) e->out_of_memory("the stack");
-      return std::allocator<Frame>().allocate(frames);
-    }
-    void deallocate(Frame *at, size_t frames) { std::allocator<Frame>().deallocate(at, frames); }
-    bool operator==(const StackAllocator &other) const { return e == other.e; }
-    bool operator!=(const StackAllocator &other) const { return e != other.e; }
-  };
-
   /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
   struct Memo {
     uint32_t a;
@@ -208,6 +199,7 @@ private:
   Tree _newest = ~0u;  // the node alloc() made last, if no collection since
   size_t _live = 0;    // what the last collection found, for sizing the next one
   size_t _budget;      // collect once _head reaches this
+  bool _due = false;   // !_free && _head >= _budget, kept by update_due()
 
   // What set_limit() allows (0 MB: no limit): the most a collection may raise
   // the budget to, and the most frames the stack may take.
@@ -225,10 +217,23 @@ public:
   Stats stats_counters;
 
 private:
-  // The continuations being unwound, reused across calls. Nested apply() calls
-  // take the region above the size they found, so an outer reduction's frames
-  // stay where they are — and stay roots — while an inner one runs.
-  std::vector<Frame, StackAllocator> _stack{StackAllocator{this}};
+  // The continuations being unwound, reused across calls: a region mapped
+  // once, like the arena, so a push is a store and a bump — no capacity check
+  // and no copy — and set_limit() holds it with a limit pointer rather than
+  // an allocator. Nested apply() calls take the region above the top they
+  // found, so an outer reduction's frames stay where they are — and stay
+  // roots — while an inner one runs. apply() keeps its top in a local and
+  // writes it to _top before anything that reads the stack (collect).
+  static constexpr size_t MAX_FRAMES = size_t(1) << 28; // 4 GiB of frames
+  Frame *const _frames = static_cast<Frame *>(map_pages(MAX_FRAMES * sizeof(Frame)));
+  Frame *_top = _frames;
+  Frame *_frame_limit = _frames + MAX_FRAMES;
+
+  /** Push a frame, or fail the reduction with "out of memory". */
+  [[gnu::always_inline]] void push(Frame *&top, Frame *limit, Frame f) const {
+    if (EAGER_UNLIKELY(top == limit)) out_of_memory("the stack");
+    *top++ = f;
+  }
   std::vector<Tree> _roots;
   std::vector<Tree> _grey; // mark stack, reused across collections
 
@@ -268,7 +273,9 @@ private:
   // re-lay; a fresh mapping costs a fault per page all over again — on a VM, a
   // host round trip per page — and holds both copies at once while it grows.
   static constexpr size_t GROUP = 12;
-  static constexpr uint8_t EMPTY = 0x80; // a tag is 7 bits, so no tag is EMPTY
+  // EMPTY is 0, the byte a fresh page holds, so the part of the table no re-lay
+  // has reached yet needs no memset (rebuild_interned); a tag is 1..127.
+  static constexpr uint8_t EMPTY = 0x00;
   struct alignas(64) Group {
     uint8_t ctrl[16]; // GROUP control bytes, then 4 that lanes() masks off
     Tree at[GROUP];
@@ -277,6 +284,7 @@ private:
   static constexpr size_t MIN_GROUPS = MIN_TABLE * sizeof(Tree) / sizeof(Group); // as many bytes as MIN_TABLE indices
   Group *const _groups = static_cast<Group *>(map_pages(MAX_GROUPS * sizeof(Group)));
   size_t _groups_mask = 0;
+  size_t _groups_touched = 0; // groups a re-lay has ever written; above it the mapping is still zero
   size_t _interned_count = 0;
 
   // The nursery: the nodes intern() made since it was last flushed into
@@ -354,7 +362,10 @@ private:
   // a row have missed, up to MEMO_COLD, and past it how many it has skipped
   // since one was last made (see recall). Small on purpose: it is read on every
   // lookup, so it has to stay in cache where the memo cannot.
-  uint8_t _cold[1 << 16];
+  // Wrapped, so that a store to a count is not a character store, which
+  // would alias every member and have each reloaded after it.
+  struct Cold { uint8_t n; };
+  Cold _cold[1 << 16];
 
   // jets.hpp's trees, interned on a fresh arena and marked by every collection,
   // so that each stays the index of its tree: interning is exact, so comparing
@@ -389,6 +400,11 @@ private:
     return x ^ (x >> 32);
   }
 
+  /** Whether the next step has to collect: no free node, and the high-water
+   * mark at the budget. Recomputed wherever one of the three changes, so that
+   * a step tests one byte rather than loads all three. */
+  void update_due() { _due = !_free && _head >= _budget; }
+
   /** A node, from the free list or the high-water mark. Not interned. */
   Tree alloc(uint32_t u, uint32_t v) {
     Tree result;
@@ -399,6 +415,7 @@ private:
       result = _head++;
     }
     _arena[result] = {u, v};
+    update_due();
     return _newest = result;
   }
 
@@ -428,7 +445,7 @@ private:
       const uint64_t x = bytes ^ (LSB * tag);
       return (x - LSB) & ~x & MSB;
     }
-    uint64_t empty() const { return bytes & MSB; }
+    uint64_t empty() const { return (bytes - LSB) & ~bytes & MSB; } // exact for the lowest
   };
 
   /** The bits of the mask of the control word at `w` that are slots of a group. */
@@ -436,7 +453,7 @@ private:
     return GROUP - w >= Word::WIDTH ? ~uint64_t(0) : (uint64_t(1) << ((GROUP - w) << Word::SHIFT)) - 1;
   }
   static size_t lane(uint64_t mask) { return size_t(__builtin_ctzll(mask)) >> Word::SHIFT; }
-  static uint8_t tag_of(uint64_t h) { return uint8_t(h >> 57); }
+  static uint8_t tag_of(uint64_t h) { const uint8_t t = uint8_t(h >> 57); return t + !t; } // never EMPTY
 
   /** An empty slot, which a node is about to take. */
   struct Slot {
@@ -450,12 +467,25 @@ private:
     slot.group->at[slot.i] = at;
   }
 
+#ifdef __SSE2__
+  /** The slots of `group` whose control byte is `b`, as a bit per slot. */
+  static unsigned bytes_equal(const Group &group, uint8_t b) {
+    const __m128i ctrl = _mm_load_si128(reinterpret_cast<const __m128i *>(group.ctrl));
+    return unsigned(_mm_movemask_epi8(_mm_cmpeq_epi8(ctrl, _mm_set1_epi8(char(b))))) & ((1u << GROUP) - 1);
+  }
+  /** The first empty slot of `group`, or GROUP if it has none. */
+  static size_t vacancy(const Group &group) {
+    const unsigned e = bytes_equal(group, EMPTY);
+    return e ? size_t(__builtin_ctz(e)) : GROUP;
+  }
+#else
   /** The first empty slot of `group`, or GROUP if it has none. */
   static size_t vacancy(const Group &group) {
     for (size_t w = 0; w < GROUP; w += Word::WIDTH)
       if (const uint64_t e = Word(group.ctrl + w).empty() & lanes(w)) return w + lane(e);
     return GROUP;
   }
+#endif
 
   /** Where a search of the table ended: the node for the shape, if the table
    * has it; else 0, and the slot it would take, the first empty one of the
@@ -469,12 +499,20 @@ private:
     const uint8_t tag = tag_of(h);
     for (size_t g = h & _groups_mask;; g = (g + 1) & _groups_mask) {
       Group &group = _groups[g];
+#ifdef __SSE2__
+      for (unsigned m = bytes_equal(group, tag); m; m &= m - 1) {
+        const Tree at = group.at[__builtin_ctz(m)];
+        const Node n = _arena[at];
+        if (n.u == u && n.v == v) return {at, {}};
+      }
+#else
       for (size_t w = 0; w < GROUP; w += Word::WIDTH)
         for (uint64_t m = Word(group.ctrl + w).match(tag) & lanes(w); m; m &= m - 1) {
           const Tree at = group.at[w + lane(m)];
           const Node n = _arena[at];
           if (n.u == u && n.v == v) return {at, {}};
         }
+#endif
       if (const size_t i = vacancy(group); i < GROUP) return {0, {&group, i}};
     }
   }
@@ -511,8 +549,10 @@ private:
    * as 13% more instructions a step. */
   [[gnu::noinline]] void rebuild_interned(size_t groups) {
     // Whole lines, slots and all: a memset that writes every byte of a line
-    // never has to read it first.
-    std::memset(_groups, EMPTY, groups * sizeof(Group));
+    // never has to read it first. Only as far as a re-lay has ever written:
+    // above that the mapping is untouched, every byte of it 0 — EMPTY.
+    std::memset(_groups, EMPTY, std::min(groups, _groups_touched) * sizeof(Group));
+    _groups_touched = std::max(_groups_touched, groups);
     _groups_mask = groups - 1;
     _interned_count = 0;
     empty_nursery();
@@ -644,7 +684,7 @@ private:
    * node goes in the nursery, unless the search for it went on into `_groups`:
    * then it takes the slot that search ended on, already in cache.
    */
-  Tree intern(uint32_t u, uint32_t v) {
+  [[gnu::always_inline]] Tree intern(uint32_t u, uint32_t v) {
     const uint64_t h = hash(u, v);
     if (u == _newest || v == _newest) {
       size_t i = h & _nursery_mask;
@@ -654,6 +694,13 @@ private:
     const size_t i = nursery_slot(h, u, v);
     if (const Tree at = _nursery[i]) return at;
     if (young(u) || young(v)) return nurse(i, alloc(u, v));
+    return intern_old(h, u, v);
+  }
+
+  /** intern() past the nursery: the table, the run, or a fresh node in the
+   * slot the search ended on. Out of line, like the rest of what a step
+   * reaches only now and then. */
+  [[gnu::noinline]] Tree intern_old(uint64_t h, uint32_t u, uint32_t v) {
     const auto [at, empty] = search(h, u, v);
     if (at) return at;
     if (const Tree cell = in_run(u, v)) return cell;
@@ -712,15 +759,15 @@ private:
    * that calls itself twice on one argument takes about twice the steps it
    * does with every lookup made.
    */
-  Tree recall(Tree a, Tree b) {
-    uint8_t &cold = _cold[uint32_t(hash(a, 0) >> 48)];
-    if (cold >= MEMO_COLD && ++cold < MEMO_COLD + 16) return 0;
+  [[gnu::always_inline]] Tree recall(Tree a, Tree b, Frame *&top, Frame *limit, uint32_t steps) {
+    Cold &cold = _cold[uint32_t(hash(a, 0) >> 48)];
+    if (cold.n >= MEMO_COLD && ++cold.n < MEMO_COLD + 16) return 0;
     if (const Tree hit = memo_get(a, b)) {
-      cold = 0;
+      cold.n = 0;
       return hit;
     }
-    cold = std::min(cold + 1, int(MEMO_COLD)); // a sampled miss counts afresh
-    _stack.emplace_back(MEMOIZE, a, b, (uint32_t)stats_counters.steps);
+    cold.n = std::min(cold.n + 1, int(MEMO_COLD)); // a sampled miss counts afresh
+    push(top, limit, Frame(MEMOIZE, a, b, steps));
     return 0;
   }
 
@@ -757,15 +804,15 @@ private:
    * frame would not. A stem ending the list has no transition: 0, and xs the
    * stem, for the rules.
    */
-  Tree skip_line(Tree &xs) {
+  [[gnu::noinline]] Tree skip_line(Tree &xs, const Frame *top) {
     const Tree b = xs;
     ++stats_counters.jets;
     for (Node n; (n = _arena[xs]).u; xs = n.v, ++stats_counters.skipped) {
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (!_stack.empty() && _stack.back().tag() == MEMOIZE &&
-        _stack.back().arg1() == _skip_line && _stack.back().arg2() == b)
+    if (top != _frames && top[-1].tag() == MEMOIZE &&
+        top[-1].arg1() == _skip_line && top[-1].arg2() == b)
       memo_put(_skip_line, b, xs);
     return xs;
   }
@@ -828,6 +875,7 @@ private:
     _newest = ~0u;
     _live = 0;
     _run = _run_end = 0;
+    update_due();
   }
 
   /**
@@ -850,7 +898,7 @@ private:
     std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
     _memo_mask = MIN_TABLE - 1;
     _memo_puts = 0;
-    std::fill(std::begin(_cold), std::end(_cold), 0);
+    std::fill(std::begin(_cold), std::end(_cold), Cold{0});
   }
 
   static size_t memo_cap(size_t budget) {
@@ -881,8 +929,7 @@ private:
    * else it can still reach is a Frame or a caller's root, but those two are
    * held in registers and have to be named.
    */
-  void collect_if_over_budget(Tree a, Tree b) {
-    if (_free || _head < _budget) return; // room left, either reused or untouched
+  [[gnu::noinline, gnu::cold]] void collect_at(Tree a, Tree b) {
     _roots.push_back(a);
     _roots.push_back(b);
     collect();
@@ -896,6 +943,7 @@ private:
       _budget = std::min(_budget * 2, _max_budget);
       size_memo();
     }
+    update_due();
   }
 
 public:
@@ -915,7 +963,11 @@ public:
     munmap(_nursed, NURSERY / 2 * sizeof(Tree));
     munmap(_young, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
+    munmap(_frames, MAX_FRAMES * sizeof(Frame));
   }
+
+  /** Give the stack's pages back, once no reduction is left on it. */
+  void release_frames() { madvise(_frames, MAX_FRAMES * sizeof(Frame), MADV_DONTNEED); }
 
   BasicEagerGraphNilMmap32V2(const BasicEagerGraphNilMmap32V2 &) = delete;
   BasicEagerGraphNilMmap32V2 &operator=(const BasicEagerGraphNilMmap32V2 &) = delete;
@@ -932,11 +984,15 @@ public:
     Node *old = _arena;
     map_arena(); // first, so a failed mapping leaves the old arena intact
     munmap(old, ARENA_BYTES);
-    _stack.clear();
-    _stack.shrink_to_fit();
+    _top = _frames;
+    release_frames();
     _roots.clear();
     _grey.clear();
     _grey.shrink_to_fit();
+    if (_groups_touched > MIN_GROUPS) {
+      madvise(_groups + MIN_GROUPS, (_groups_touched - MIN_GROUPS) * sizeof(Group), MADV_DONTNEED);
+      _groups_touched = MIN_GROUPS;
+    }
     rebuild_interned(MIN_GROUPS);
     size_memo();
     intern_jets();
@@ -964,9 +1020,9 @@ public:
    */
   [[gnu::noinline]] void collect() {
     for (Tree root : _roots) mark(root);
-    for (const Frame &f : _stack) { // a reduction in progress is live
-      mark(f.arg1());
-      mark(f.arg2());
+    for (const Frame *f = _frames; f != _top; ++f) { // a reduction in progress is live
+      mark(f->arg1());
+      mark(f->arg2());
     }
     if constexpr (JETS) mark(_skip_line), mark(_newline);
     // Between mark and sweep is the one moment liveness is written on the
@@ -982,7 +1038,7 @@ public:
       *m = {0, 0, 0};
     }
     // Swept indices will be reused by other functions.
-    std::fill(std::begin(_cold), std::end(_cold), 0);
+    std::fill(std::begin(_cold), std::end(_cold), Cold{0});
     sweep();
     while (_run_end > _run && !_arena[_run_end].u) --_run_end; // what survived of the run
     if (_run_end == _run) _run = _run_end = 0;
@@ -996,6 +1052,7 @@ public:
     // for them as they went in. Sized by what goes in: _live less the run's
     // cells, which stay out (and after the trim above are all live).
     rebuild_interned(capacity_for(_live - (_run_end - _run)));
+    update_due();
   }
 
   /** The arena's high-water mark in nodes, which is what it costs in memory. */
@@ -1009,6 +1066,7 @@ public:
   void set_budget(size_t nodes) {
     _budget = std::min(nodes ? nodes : ARENA_NODES, _max_budget);
     size_memo();
+    update_due();
   }
 
   /**
@@ -1028,6 +1086,7 @@ public:
     _max_budget = ARENA_NODES;
     while (footprint(_max_budget) > bytes / 4 * 3) _max_budget /= 2;
     _max_frames = (bytes - footprint(_max_budget)) / sizeof(Frame) / 3 * 2;
+    _frame_limit = _frames + std::min(_max_frames, MAX_FRAMES);
     set_budget(_budget);
   }
 
@@ -1085,6 +1144,7 @@ public:
       for (Tree at = first + 1; at < end; ++at) _arena[at] = {last(), at - 1};
       if (_newest != newest) throw std::logic_error("list(): last() built a node");
       _head = end;
+      update_due();
       insert_interned(first);
       _run = first;
       _run_end = end - 1;
@@ -1121,17 +1181,29 @@ public:
    * into runner.cpp's parse_dag_into, it reloads the arena and the stack on
    * every step.
    */
-  [[gnu::noinline]] Tree apply(Tree a, Tree b) {
-    const size_t base = _stack.size();
+  [[gnu::noinline, gnu::no_stack_protector]] Tree apply(Tree a, Tree b) {
+    // The step's hot state lives in locals: the evaluator is a global, and
+    // stores into the arena, the tables and the frames may alias its members,
+    // so a member would be reloaded on every step. The top is written back
+    // before anything that reads the stack (collect_at) and on the way out.
+    Frame *const base = _top;
+    Frame *top = base;
+    Frame *const limit = _frame_limit;
+    uint64_t steps = stats_counters.steps;
+    Node *const arena = _arena; // never remapped while a reduction runs
     Tree result;
 
     try {
     reduce: // ---- evaluate apply(a, b) ----
       {
-        ++stats_counters.steps;
-        collect_if_over_budget(a, b);
+        ++steps;
+        if (EAGER_UNLIKELY(_due)) {
+          _top = top;
+          stats_counters.steps = steps;
+          collect_at(a, b);
+        }
 
-        const Node an = _arena[a];
+        const Node an = arena[a];
 
         if (!an.u) {                                     // apply(△, b) = △b
           result = stem(b);
@@ -1144,50 +1216,50 @@ public:
 
         // a = fork(u, y)
         const Tree y = an.v;
-        const Node un = _arena[an.u];
+        const Node un = arena[an.u];
 
         if (!un.u) {                                     // apply(△△y, b) = y
           result = y;
           goto dispatch;
         }
-        if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
-          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+        if (EAGER_LIKELY(!un.v)) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
+          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           // A K-absorber u' answers apply(u', b) without looking at b, so that
           // step is skipped. apply(y, b) is still reduced, as rule (2) says:
           // peek.hpp's S K peek drops it, and with it a reduction that might
           // not terminate, which a runner must not paper over.
-          const Node xn = _arena[un.u];
-          if (xn.v && !_arena[xn.u].u) { // u' = △△x₂: apply(x₂, apply(y, b))
-            _stack.emplace_back(CALL, xn.v, 0);
+          const Node xn = arena[un.u];
+          if (EAGER_LIKELY(xn.v && !arena[xn.u].u)) { // u' = △△x₂: apply(x₂, apply(y, b))
+            push(top, limit, Frame(CALL, xn.v, 0));
             a = y;
             goto reduce;
           }
-          _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
+          push(top, limit, Frame(COMPUTE_AND_APPLY, un.u, b));
           a = y;
           goto reduce;
         }
 
         // apply(△(△wx)y, b) — triage on b
-        const Node bn = _arena[b];
+        const Node bn = arena[b];
 
         if (!bn.u) {                                     //   b = △:  w
           result = un.u;
           goto dispatch;
         }
         if (!bn.v) {                                     //   b = △d: apply(x, d)
-          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           a = un.v;
           b = bn.u;
           goto reduce;
         }
         {                                                //   b = △de: apply(apply(y, d), e)
-          if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           // After the memo, so that the jet never makes slower what it answers.
-          if (JETS && a == _skip_line) {
-            if ((result = skip_line(b))) goto dispatch;
+          if (JETS && EAGER_UNLIKELY(a == _skip_line)) {
+            if ((result = skip_line(b, top))) goto dispatch;
             goto reduce;
           }
-          _stack.emplace_back(APPLY_TO, bn.v, 0);
+          push(top, limit, Frame(APPLY_TO, bn.v, 0));
           a = y;
           b = bn.u;
           goto reduce;
@@ -1197,18 +1269,10 @@ public:
     dispatch: // ---- feed the result to the pending continuation ----
       // The frames below `base` belong to an apply() further out; this one is
       // done when it has given back everything it pushed.
-      while (_stack.size() != base) {
-        const Frame f = _stack.back();
-        _stack.pop_back();
-        if (f.tag() == MEMOIZE) {
-          // A tail step (`b = △d`) shares its result with the step it became,
-          // so consecutive MEMOIZE frames all record the same normal form.
-          // Steps that resolved in a handful of rules are cheaper to redo than
-          // to let their entries evict a slower one from the memo.
-          if ((uint32_t)stats_counters.steps - f.meta() >= MEMO_MIN_STEPS)
-            memo_put(f.arg1(), f.arg2(), result);
-          continue;
-        }
+      while (top != base) {
+        // Tested in the order they are popped over a build: CALL 39%,
+        // APPLY_TO 23%, MEMOIZE 20%, COMPUTE_AND_APPLY 18%.
+        const Frame f = *--top;
         if (f.tag() == CALL) {
           a = f.arg1();
           b = result;
@@ -1219,21 +1283,33 @@ public:
           // takes to become `a`, which allocates nothing.
           a = result;
           b = f.arg1();
-        } else { // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
-          _stack.emplace_back(APPLY_TO, result, 0);
-          a = f.arg1();
-          b = f.arg2();
+          goto reduce;
         }
+        if (f.tag() == MEMOIZE) {
+          // A tail step (`b = △d`) shares its result with the step it became,
+          // so consecutive MEMOIZE frames all record the same normal form.
+          // Steps that resolved in a handful of rules are cheaper to redo than
+          // to let their entries evict a slower one from the memo.
+          if (uint32_t(steps) - f.meta() >= MEMO_MIN_STEPS)
+            memo_put(f.arg1(), f.arg2(), result);
+          continue;
+        }
+        push(top, limit, Frame(APPLY_TO, result, 0)); // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
+        a = f.arg1();
+        b = f.arg2();
         goto reduce;
       }
+      _top = base;
+      stats_counters.steps = steps;
       return result;
     } catch (...) {
       // An exhausted arena leaves half a reduction on the stack; drop it, so the
       // frames of a request that failed do not stay roots for every later one,
       // and once no reduction is left, the memory they took: a runaway's is most
       // of the limit.
-      _stack.resize(base);
-      if (!base) _stack.shrink_to_fit();
+      stats_counters.steps = steps;
+      _top = base;
+      if (base == _frames) release_frames();
       throw;
     }
   }
