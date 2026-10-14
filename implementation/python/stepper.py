@@ -212,7 +212,7 @@ def step_shrink_pending(t):
 # At CHEAP = 3 it decides nothing differently on any size-of-size variant.
 
 CHEAP = 3
-GROW = 16   # a trial that grows its argument past GROW times its size fails
+GROW = 64   # a trial that grows its argument past GROW times its size fails
 _dist = {}  # hash(term) -> (root-first steps to its normal form, largest size on
             # the way), or (-n, None): at least n steps
 _grows = set()  # hashes of arguments whose trial grew past GROW times their size
