@@ -82,7 +82,13 @@ def sstep : State SValue → Out
     | .fork u y => match u.view with
       | .var i => .split i
       | .leaf => .next (.dispatch y k)
-      | .stem u' => .next (.reduce y b (.computeAndApply u' b :: k))
+      | .stem u' => match u'.view with
+        | .var i => .split i
+        | .fork w x₂ => match w.view with
+          | .var i => .split i
+          | .leaf => .next (.reduce y b (.call x₂ :: k))
+          | .stem _ | .fork _ _ => .next (.reduce y b (.computeAndApply u' b :: k))
+        | .leaf | .stem _ => .next (.reduce y b (.computeAndApply u' b :: k))
       | .fork w x => match b.view with
         | .var i => .split i
         | .leaf => .next (.dispatch w k)
@@ -91,6 +97,7 @@ def sstep : State SValue → Out
   | .dispatch _ [] => .halt
   | .dispatch r (.applyTo e :: k) => .next (.reduce r e k)
   | .dispatch r (.computeAndApply f e :: k) => .next (.reduce f e (.applyTo r :: k))
+  | .dispatch r (.call f :: k) => .next (.reduce f r k)
 
 /-! ## Substitution -/
 
@@ -160,7 +167,19 @@ theorem sstep_next {s : State SValue} (h : sstep s = .next s') (σ : Nat → Val
     · rename_i u y ha; split at h
       · cases h
       · cases h; simp [step, State.map, view_fork ha, view_leaf ‹_›]
-      · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem ‹_›]
+      · rename_i u' hu; split at h
+        · cases h
+        · rename_i w x₂ hu'; split at h
+          · cases h
+          · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem hu, view_fork hu',
+              view_leaf ‹_›]
+          · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem hu, view_fork hu',
+              view_stem ‹_›]
+          · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem hu, view_fork hu',
+              view_fork ‹w.view = _›]
+        · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem hu, view_leaf ‹_›]
+        · cases h; simp [step, State.map, Frame.map, view_fork ha, view_stem hu,
+            view_stem ‹u'.view = _›]
       · rename_i w x hu; split at h
         · cases h
         · cases h; simp [step, State.map, view_fork ha, view_fork hu, view_leaf ‹_›]
@@ -169,6 +188,7 @@ theorem sstep_next {s : State SValue} (h : sstep s = .next s') (σ : Nat → Val
   | .dispatch _ [] => cases h
   | .dispatch _ (.applyTo _ :: _) => cases h; rfl
   | .dispatch _ (.computeAndApply _ _ :: _) => cases h; rfl
+  | .dispatch _ (.call _ :: _) => cases h; rfl
 
 /-- `inst`, then `subst`, is `subst` alone at the updated valuation — on whole states. -/
 theorem State.subst_inst (s : State SValue) :

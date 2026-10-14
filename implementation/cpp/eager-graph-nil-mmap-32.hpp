@@ -35,7 +35,8 @@
 //     with "deep enough" set by a thread stack size rather than by anything
 //     about the program. Here the continuations are Frames in a heap vector
 //     (the EagerTernaryNilMmapVM32 loop, which the rules below are otherwise a
-//     copy of), so depth costs what any other allocation costs.
+//     copy of, but for the K-absorber peek), so depth costs what any other
+//     allocation costs.
 //
 //   — Garbage. Eager reduction allocates its intermediates and walks away from
 //     them: normalizing one binding routinely allocates orders of magnitude
@@ -156,10 +157,12 @@ private:
   //     when it lands r, record that apply(a, b) is r. Pushed on entry to a
   //     step that is about to recurse, so it sits underneath whatever that step
   //     pushes and is reached exactly when the step is finished.
+  //   CALL(fn):
+  //     when it lands r, begin apply(fn, r).
   //
   // Every argument is a Tree the reduction still needs, which is what makes
   // this stack the collector's root set as well as the VM's.
-  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE };
+  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL };
 
   // A frame is two 8-byte words, written whole and read back whole, because
   // it is usually popped within a few instructions of being pushed: a load
@@ -1149,6 +1152,16 @@ public:
         }
         if (!un.v) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(a, b)) { result = hit; goto dispatch; }
+          // A K-absorber u' answers apply(u', b) without looking at b, so that
+          // step is skipped. apply(y, b) is still reduced, as rule (2) says:
+          // peek.hpp's S K peek drops it, and with it a reduction that might
+          // not terminate, which a runner must not paper over.
+          const Node xn = _arena[un.u];
+          if (xn.v && !_arena[xn.u].u) { // u' = △△x₂: apply(x₂, apply(y, b))
+            _stack.emplace_back(CALL, xn.v, 0);
+            a = y;
+            goto reduce;
+          }
           _stack.emplace_back(COMPUTE_AND_APPLY, un.u, b);
           a = y;
           goto reduce;
@@ -1195,6 +1208,11 @@ public:
           if ((uint32_t)stats_counters.steps - f.meta() >= MEMO_MIN_STEPS)
             memo_put(f.arg1(), f.arg2(), result);
           continue;
+        }
+        if (f.tag() == CALL) {
+          a = f.arg1();
+          b = result;
+          goto reduce;
         }
         if (f.tag() == APPLY_TO) {
           // `result` is unreachable from any root for exactly as long as it

@@ -18,6 +18,8 @@ inductive Frame (α : Type) where
   /-- `COMPUTE_AND_APPLY(fn, arg)`: when it lands `r`, push `APPLY_TO(r)` and begin
   `apply(fn, arg)` — the `apply(apply(fn, arg), r)` shape rule (2) reduces to. -/
   | computeAndApply (fn arg : α)
+  /-- `CALL(fn)`: when it lands `r`, begin `apply(fn, r)`. -/
+  | call (fn : α)
 
 /-- A label of the loop, with the frames on its stack, top first. -/
 inductive State (α : Type) where
@@ -29,6 +31,7 @@ inductive State (α : Type) where
 def Frame.map (f : α → β) : Frame α → Frame β
   | .applyTo e => .applyTo (f e)
   | .computeAndApply g e => .computeAndApply (f g) (f e)
+  | .call g => .call (f g)
 
 def State.map (f : α → β) : State α → State β
   | .reduce a b k => .reduce (f a) (f b) (k.map (·.map f))
@@ -41,6 +44,8 @@ def step : State Value → Option (State Value)
     | .leaf => .dispatch (.stem b) k                       -- apply(△, b) = △b
     | .stem u => .dispatch (.fork u b) k                   -- apply(△u, b) = △ub
     | .fork .leaf y => .dispatch y k                       -- apply(△△y, b) = y
+    | .fork (.stem (.fork .leaf x₂)) y => .reduce y b (.call x₂ :: k)
+                                   -- u' = △△x₂: apply(x₂, apply(y, b))
     | .fork (.stem u') y => .reduce y b (.computeAndApply u' b :: k)
                                    -- apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
     | .fork (.fork w x) y => match b with                  -- apply(△(△wx)y, b) — triage on b
@@ -50,6 +55,7 @@ def step : State Value → Option (State Value)
   | .dispatch _ [] => none
   | .dispatch r (.applyTo arg :: k) => some (.reduce r arg k)
   | .dispatch r (.computeAndApply fn arg :: k) => some (.reduce fn arg (.applyTo r :: k))
+  | .dispatch r (.call fn :: k) => some (.reduce fn r k)
 
 /-- Zero or more `r`-steps: `Steps`, for any relation. -/
 inductive Star (r : α → α → Prop) : α → α → Prop
@@ -79,10 +85,12 @@ def State.app (k : List (Frame α)) : State α → State α
 theorem step_app (h : step s = some s') (k) : step (s.app k) = some (s'.app k) := by
   match s with
   | .reduce a b _ =>
-    rcases a with _ | _ | ⟨_ | _ | _, _⟩ <;> (try rcases b with _ | _ | _) <;> cases h <;> rfl
+    rcases a with _ | _ | ⟨_ | u' | _, _⟩ <;> (try rcases u' with _ | _ | ⟨_ | _ | _, _⟩) <;>
+      (try rcases b with _ | _ | _) <;> cases h <;> rfl
   | .dispatch _ [] => cases h
   | .dispatch _ (.applyTo _ :: _) => cases h; rfl
   | .dispatch _ (.computeAndApply _ _ :: _) => cases h; rfl
+  | .dispatch _ (.call _ :: _) => cases h; rfl
 
 theorem Reaches.app (h : Reaches s t) (k) : Reaches (s.app k) (t.app k) := by
   induction h with
@@ -111,13 +119,19 @@ theorem reaches_of_apply (h : Apply A B R) : ∀ {a b : Value}, a.toTerm = A →
   | underLeaf => rintro (_ | _ | _) b ⟨⟩ rfl; exact ⟨.stem b, rfl, fun _ => .single rfl⟩
   | underStem => rintro (_ | u | _) b ⟨⟩ rfl; exact ⟨.fork u b, rfl, fun _ => .single rfl⟩
   | k => rintro (_ | _ | ⟨_ | _ | _, y⟩) b ⟨⟩ rfl; exact ⟨y, rfl, fun _ => .single rfl⟩
-  | s _ _ _ ih₁ ih₂ ih₃ =>
-    rintro (_ | _ | ⟨_ | _ | _, _⟩) b ⟨⟩ rfl
-    obtain ⟨_, rfl, h₁⟩ := ih₁ rfl rfl
+  | s hx _ _ ih₁ ih₂ ih₃ =>
+    rintro (_ | _ | ⟨_ | u' | _, _⟩) b ⟨⟩ rfl
     obtain ⟨_, rfl, h₂⟩ := ih₂ rfl rfl
-    obtain ⟨v, rfl, h₃⟩ := ih₃ rfl rfl
-    exact ⟨v, rfl, fun k => .head rfl <| (h₂ _).trans <| .head rfl <| (h₁ _).trans <|
-      .head rfl (h₃ k)⟩
+    rcases u' with _ | _ | ⟨_ | _ | _, x₂⟩
+    case fork.leaf =>
+      cases hx
+      obtain ⟨v, rfl, h₃⟩ := ih₃ (a := x₂) rfl rfl
+      exact ⟨v, rfl, fun k => .head rfl <| (h₂ _).trans <| .head rfl (h₃ k)⟩
+    all_goals
+      obtain ⟨_, rfl, h₁⟩ := ih₁ rfl rfl
+      obtain ⟨v, rfl, h₃⟩ := ih₃ rfl rfl
+      exact ⟨v, rfl, fun k => .head rfl <| (h₂ _).trans <| .head rfl <| (h₁ _).trans <|
+        .head rfl (h₃ k)⟩
   | fLeaf =>
     rintro (_ | _ | ⟨_ | _ | ⟨w, _⟩, _⟩) (_ | _ | _) ⟨⟩ ⟨⟩
     exact ⟨w, rfl, fun _ => .single rfl⟩
@@ -142,6 +156,7 @@ def Cont : List (Frame Value) → Value → Value → Prop
   | .applyTo e :: k, r, r' => ∃ v : Value, Apply r.toTerm e.toTerm v.toTerm ∧ Cont k v r'
   | .computeAndApply f e :: k, r, r' =>
     ∃ v w : Value, Apply f.toTerm e.toTerm v.toTerm ∧ Apply v.toTerm r.toTerm w.toTerm ∧ Cont k w r'
+  | .call f :: k, r, r' => ∃ v : Value, Apply f.toTerm r.toTerm v.toTerm ∧ Cont k v r'
 
 /-- What a state goes on to return, in `Apply`'s terms. -/
 def Sem : State Value → Value → Prop
@@ -153,7 +168,11 @@ theorem step_sem (h : step s = some s') (h' : Sem s' r') : Sem s r' := by
   | .reduce .leaf _ _, rfl => exact ⟨.stem _, .underLeaf, h'⟩
   | .reduce (.stem _) _ _, rfl => exact ⟨.fork _ _, .underStem, h'⟩
   | .reduce (.fork .leaf _) _ _, rfl => exact ⟨_, .k, h'⟩
-  | .reduce (.fork (.stem _) _) _ _, rfl =>
+  | .reduce (.fork (.stem (.fork .leaf _)) _) _ _, rfl =>
+    obtain ⟨_, e₁, _, e₂, c⟩ := h'; exact ⟨_, .s .k e₁ e₂, c⟩
+  | .reduce (.fork (.stem .leaf) _) _ _, rfl | .reduce (.fork (.stem (.stem _)) _) _ _, rfl
+  | .reduce (.fork (.stem (.fork (.stem _) _)) _) _ _, rfl
+  | .reduce (.fork (.stem (.fork (.fork _ _) _)) _) _ _, rfl =>
     obtain ⟨_, e₁, _, _, e₂, e₃, c⟩ := h'; exact ⟨_, .s e₂ e₁ e₃, c⟩
   | .reduce (.fork (.fork _ _) _) .leaf _, rfl => exact ⟨_, .fLeaf, h'⟩
   | .reduce (.fork (.fork _ _) _) (.stem _) _, rfl =>
@@ -163,6 +182,7 @@ theorem step_sem (h : step s = some s') (h' : Sem s' r') : Sem s r' := by
   | .dispatch _ (.applyTo _ :: _), rfl => exact h'
   | .dispatch _ (.computeAndApply _ _ :: _), rfl =>
     obtain ⟨_, e₁, _, e₂, c⟩ := h'; exact ⟨_, _, e₁, e₂, c⟩
+  | .dispatch _ (.call _ :: _), rfl => exact h'
 
 theorem Reaches.sem (h : Reaches s (.dispatch r [])) : Sem s r := by
   generalize ht : State.dispatch r [] = t at h
