@@ -14,7 +14,7 @@ so `DropJet.reaches skipLine_check` makes `DropJet skipLine [newline]` a `J` of 
 ## Trusted, not proven
 
 - `apply` is `step`: each case of `step` is the branch of `apply` with the same comment, each
-  `Frame` the frame of the same name. (`eager-graph-nil-mmap-32-v2.hpp`, the evaluator the
+  `Frame` the frame of the same name. (`eager-fastest.hpp`, the evaluator the
   runner now builds, pushes four result-only frames that `Machine.lean` does not model yet;
   its `Frame` comment states each as a transition.)
 - Its memo is `RStep`'s: a `recall` hit is `hit`; `recall` pushing `MEMOIZE(a, b)` is `miss`;

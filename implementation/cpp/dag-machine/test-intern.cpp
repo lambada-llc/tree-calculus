@@ -17,8 +17,8 @@
 #include "../eager-graph-nil-mmap-32.hpp"
 using E = EagerGraphNilMmap32;
 #else
-#include "../eager-graph-nil-mmap-32-v2.hpp"
-using E = EagerGraphNilMmap32V2;
+#include "../eager-fastest.hpp"
+using E = EagerFastest;
 #endif
 using Tree = E::Tree;
 

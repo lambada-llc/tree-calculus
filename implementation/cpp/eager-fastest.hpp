@@ -88,8 +88,8 @@
 // is what lets every Tree a caller is holding survive one without being
 // registered anywhere.
 //
-// EagerGraphNilMmap32V2Jets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32V2 is the same code
+// EagerFastestJets also answers lambada's skip_line natively, a jet
+// (implementation/lean/Cpp/README.md); EagerFastest is the same code
 // without it.
 //
 // This is eager-graph-nil-mmap-32.hpp (kept, for comparison) made faster on
@@ -126,7 +126,7 @@
 // more steps, and the heaviest expect tests take three times the steps at
 // 32 MB because their memo no longer fits — see collect_at and runner.md.
 
-template <bool JETS> class BasicEagerGraphNilMmap32V2 {
+template <bool JETS> class BasicEagerFastest {
 public:
   using Tree = uint32_t;
 
@@ -1147,14 +1147,14 @@ private:
 public:
   // No collection until set_budget() says so: an unregistered root set makes
   // everything look garbage, so opting in has to be the caller's decision.
-  BasicEagerGraphNilMmap32V2() : _budget(ARENA_NODES), _ceiling(ARENA_NODES) {
+  BasicEagerFastest() : _budget(ARENA_NODES), _ceiling(ARENA_NODES) {
     map_arena();
     rebuild_interned(MIN_GROUPS);
     size_memo();
     intern_jets();
   }
 
-  ~BasicEagerGraphNilMmap32V2() {
+  ~BasicEagerFastest() {
     munmap(_arena, ARENA_BYTES);
     munmap(_groups, MAX_GROUPS * sizeof(Group));
     munmap(_nursery, NURSERY * sizeof(Tree));
@@ -1168,8 +1168,8 @@ public:
   /** Give the stack's pages back, once no reduction is left on it. */
   void release_frames() { madvise(_frames, MAX_FRAMES * sizeof(Frame), MADV_DONTNEED); }
 
-  BasicEagerGraphNilMmap32V2(const BasicEagerGraphNilMmap32V2 &) = delete;
-  BasicEagerGraphNilMmap32V2 &operator=(const BasicEagerGraphNilMmap32V2 &) = delete;
+  BasicEagerFastest(const BasicEagerFastest &) = delete;
+  BasicEagerFastest &operator=(const BasicEagerFastest &) = delete;
 
   /** Back the arena, the hash-consing table and the memo with huge pages
    * (see map_pages), off by default. Takes effect on pages not yet touched. */
@@ -1551,5 +1551,5 @@ public:
   }
 };
 
-using EagerGraphNilMmap32V2 = BasicEagerGraphNilMmap32V2<false>;
-using EagerGraphNilMmap32V2Jets = BasicEagerGraphNilMmap32V2<true>;
+using EagerFastest = BasicEagerFastest<false>;
+using EagerFastestJets = BasicEagerFastest<true>;

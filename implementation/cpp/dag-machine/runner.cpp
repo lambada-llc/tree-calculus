@@ -49,7 +49,7 @@
 //   default        ../lazy-graph-nil-mmap-32.hpp — head normal form on
 //                  demand, so a binding whose normal form does not exist
 //                  costs nothing until something asks for it.
-//   -DRUNNER_EAGER ../eager-graph-nil-mmap-32-v2.hpp — every binding is
+//   -DRUNNER_EAGER ../eager-fastest.hpp — every binding is
 //                  normalized as the module is read, which is faster and
 //                  leaner *if* every binding in the module has a normal form.
 //                  (-DRUNNER_EAGER_V1 builds the evaluator it was optimized
@@ -104,12 +104,12 @@ using Reducer = EagerGraphNilMmap32Jets;
 #define RUNNER_EAGER
 #endif
 #elif defined(RUNNER_EAGER)
-#ifdef RUNNER_EAGER_HEADER // an evaluator under test, defining EagerGraphNilMmap32V2Jets
+#ifdef RUNNER_EAGER_HEADER // an evaluator under test, defining EagerFastestJets
 #include RUNNER_EAGER_HEADER
 #else
-#include "../eager-graph-nil-mmap-32-v2.hpp"
+#include "../eager-fastest.hpp"
 #endif
-using Reducer = EagerGraphNilMmap32V2Jets;
+using Reducer = EagerFastestJets;
 #else
 #include "../lazy-graph-nil-mmap-32.hpp"
 using Reducer = LazyGraphNilMmap32;

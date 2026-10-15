@@ -18,9 +18,9 @@
 using J = Evaluator<EagerGraphNilMmap32Jets>;
 using M = Evaluator<EagerGraphNilMmap32>;
 #else
-#include "../eager-graph-nil-mmap-32-v2.hpp"
-using J = Evaluator<EagerGraphNilMmap32V2Jets>;
-using M = Evaluator<EagerGraphNilMmap32V2>;
+#include "../eager-fastest.hpp"
+using J = Evaluator<EagerFastestJets>;
+using M = Evaluator<EagerFastest>;
 #endif
 using Tree = J::Tree;
 

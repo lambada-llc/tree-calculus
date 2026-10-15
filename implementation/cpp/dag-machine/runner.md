@@ -89,7 +89,7 @@ Most of a bundle's bindings have no normal form, so evaluating each one
 as it is read diverges; here a binding is an unreduced application node,
 forced only as far as a request looks at it.
 
-`../eager-graph-nil-mmap-32-v2.hpp` (`-DRUNNER_EAGER`) normalizes every
+`../eager-fastest.hpp` (`-DRUNNER_EAGER`) normalizes every
 binding as the module is read. That is a claim about the module — one
 definition that only converges lazily hangs the build — so it is the
 caller's to make, and `TREE_CALCULUS_RUNNER=eager` is where they make it.
@@ -98,8 +98,8 @@ in about half the time. It also answers lambada's `skip_line` natively, a
 jet proven sound in [`implementation/lean/Cpp/`](../../lean/Cpp/README.md).
 
 (`-DRUNNER_EAGER_V1` builds `../eager-graph-nil-mmap-32.hpp`, the evaluator
-v2 was optimized from — what it changed, and what was measured and not
-taken, is listed at the top of v2's header.)
+it was optimized from — what changed, and what was measured and not taken,
+is listed at the top of `eager-fastest.hpp`.)
 
 Both keep memory bounded by a non-moving mark-and-sweep over `roots()`,
 run from inside the reduction loop (see `RUNNER_RSS_THRESHOLD_MB`), and
@@ -196,7 +196,7 @@ goes before optimizing anything.
 `0` makes the eager runner reduce what its jets would answer, as it
 would without them, step for step.
 
-#### `RUNNER_HUGEPAGES` *(default: off; eager v2 only)*
+#### `RUNNER_HUGEPAGES` *(default: off; eager only)*
 
 Any non-`0` value backs the arena, the hash-consing table and the memo
 with transparent huge pages (`reduce_canonicalize` reads it too, for its
@@ -255,7 +255,7 @@ repository once through it, then
 
 times the evaluator alone, deterministically, with no Node in the loop,
 and `sha256sum out` says whether a change still answers the same. The
-eager v2 evaluator was optimized that way against forest's compile phase
+eager evaluator was optimized that way against forest's compile phase
 and expect tests; a cachegrind run over one heavy request gives the
 instruction counts timing is too noisy for.
 
