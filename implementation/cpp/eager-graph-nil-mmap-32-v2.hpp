@@ -165,10 +165,31 @@ private:
   //     pushes and is reached exactly when the step is finished.
   //   CALL(fn):
   //     when it lands r, begin apply(fn, r).
+  //   RETURN(x):
+  //     when it lands r, the result is x, and r is dropped.
+  //   STEM:
+  //     when it lands r, the result is △r.
+  //   FORK_WITH(x):
+  //     when it lands r, the result is △xr.
+  //   FORK_RIGHT(e):
+  //     when it lands r, the result is △re — STEM landing on APPLY_TO(e),
+  //     fused where STEM would be pushed onto APPLY_TO(e), so that △r, which
+  //     only that APPLY_TO would read, is never built. FORK_WITH(△) onto
+  //     APPLY_TO(e) likewise pushes nothing and drops the APPLY_TO: △△r
+  //     applied to e is r.
+  //
+  // RETURN, STEM and FORK_WITH are CALL(fn) for an fn that is △△x, △ or △x,
+  // and COMPUTE_AND_APPLY(fn, b) for an fn that is △△ or △ (then b, and
+  // △b(y b)): the rule such an fn takes needs nothing but r, so it is read off
+  // fn when the frame is pushed and applied when it is popped, as one frame
+  // rather than one or two steps — and △△b, which only the K rule would read,
+  // is never built. None of the four starts a reduction: the frame below gets
+  // the result. Measured on the build's heaviest compile: a quarter fewer
+  // steps, 2.4% fewer instructions, 9% fewer mispredicted branches.
   //
   // Every argument is a Tree the reduction still needs, which is what makes
   // this stack the collector's root set as well as the VM's.
-  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL };
+  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL, FORK_WITH, STEM, RETURN, FORK_RIGHT };
 
   // A frame is two 8-byte words, written whole and read back whole, because
   // it is usually popped within a few instructions of being pushed: a load
@@ -1230,11 +1251,23 @@ public:
           // not terminate, which a runner must not paper over.
           const Node xn = arena[un.u];
           if (EAGER_LIKELY(xn.v && !arena[xn.u].u)) { // u' = △△x₂: apply(x₂, apply(y, b))
-            push(top, limit, Frame(CALL, xn.v, 0));
-            a = y;
-            goto reduce;
+            const Node x2 = arena[xn.v];
+            const bool onto_apply_to = top != base && top[-1].tag() == APPLY_TO;
+            if (!x2.u) {                                                         //   x₂ = △:   △(y b)
+              if (onto_apply_to) top[-1] = Frame(FORK_RIGHT, top[-1].arg1(), 0); //     then △(y b)e
+              else push(top, limit, Frame(STEM, 0, 0));
+            } else if (!x2.v) {                                                  //   x₂ = △x₃: △x₃(y b)
+              if (onto_apply_to && x2.u == 1) --top;                             //     x₃ = △, then (y b)
+              else push(top, limit, Frame(FORK_WITH, x2.u, 0));
+            } else if (!arena[x2.u].u) push(top, limit, Frame(RETURN, x2.v, 0)); //   x₂ = △△z: z
+            else push(top, limit, Frame(CALL, xn.v, 0));
+          } else if (!xn.u) {                          // u' = △:  △b(y b)
+            push(top, limit, Frame(FORK_WITH, b, 0));
+          } else if (!xn.v && !arena[xn.u].u) {        // u' = △△: b
+            push(top, limit, Frame(RETURN, b, 0));
+          } else {
+            push(top, limit, Frame(COMPUTE_AND_APPLY, un.u, b));
           }
-          push(top, limit, Frame(COMPUTE_AND_APPLY, un.u, b));
           a = y;
           goto reduce;
         }
@@ -1270,22 +1303,33 @@ public:
       // The frames below `base` belong to an apply() further out; this one is
       // done when it has given back everything it pushed.
       while (top != base) {
-        // Tested in the order they are popped over a build: CALL 39%,
-        // APPLY_TO 23%, MEMOIZE 20%, COMPUTE_AND_APPLY 18%.
+        // Popped over the build's heaviest compile: APPLY_TO 23%, MEMOIZE 20%,
+        // FORK_WITH 18%, COMPUTE_AND_APPLY 14%, CALL 13%, STEM 7%, RETURN 4%.
+        // Compared one at a time, on purpose (the asm is a barrier to the
+        // compiler's if-to-switch): as a switch, the tag was an indirect jump,
+        // mispredicted two times in three.
         const Frame f = *--top;
-        if (f.tag() == CALL) {
+        uint32_t tag = f.tag();
+        if (tag >= FORK_WITH) { // the result-only frames: the rule fn takes with r
+          asm("" : "+r"(tag));
+          result = tag == FORK_WITH ? fork(f.arg1(), result) : tag == STEM ? stem(result)
+                 : tag == RETURN ? f.arg1() : fork(result, f.arg1());
+          continue;
+        }
+        asm("" : "+r"(tag));
+        if (tag == CALL) {
           a = f.arg1();
           b = result;
           goto reduce;
         }
-        if (f.tag() == APPLY_TO) {
+        if (tag == APPLY_TO) {
           // `result` is unreachable from any root for exactly as long as it
           // takes to become `a`, which allocates nothing.
           a = result;
           b = f.arg1();
           goto reduce;
         }
-        if (f.tag() == MEMOIZE) {
+        if (tag == MEMOIZE) {
           // A tail step (`b = △d`) shares its result with the step it became,
           // so consecutive MEMOIZE frames all record the same normal form.
           // Steps that resolved in a handful of rules are cheaper to redo than
