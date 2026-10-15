@@ -92,37 +92,37 @@
 // (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
 // without it.
 
-// Anonymous memory, reserved rather than committed: a page is only committed
-// the first time it is touched, so a region can be mapped at the most it will
-// ever need and cost what is used of it. (MAP_NORESERVE is not optional: the
-// default overcommit heuristic refuses a 16 GiB reservation on a smaller
-// machine.)
-//
-// Small pages by default. Huge ones (set_hugepages, on the three regions a
-// step reads at random: the arena, the hash-consing table and the memo) spare
-// the TLB and most of the faults, and the build's compile phase ran 13%
-// faster on them — with warm blocks. But a VM whose balloon reports free
-// memory to its host reports whole 2 MiB blocks, exactly what a huge-page
-// fault takes, and the host then backs each one 4 KiB at a time: 9.5 ms a
-// block, and the same phase took 19% longer in the state such a VM is usually
-// in (blocks are reported about two seconds after a process frees them, so no
-// probe at startup can tell a warm machine from a cold one). Hence a switch,
-// off unless the caller knows the machine.
-static void *map_pages(size_t bytes) {
-  int flags = MAP_PRIVATE | MAP_ANONYMOUS;
-#ifdef MAP_NORESERVE
-  flags |= MAP_NORESERVE;
-#endif
-  void *mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
-  if (mem == MAP_FAILED) throw std::runtime_error("mmap failed to reserve memory");
-  return mem;
-}
-
 template <bool JETS> class BasicEagerGraphNilMmap32V2 {
 public:
   using Tree = uint32_t;
 
 private:
+  // Anonymous memory, reserved rather than committed: a page is only committed
+  // the first time it is touched, so a region can be mapped at the most it will
+  // ever need and cost what is used of it. (MAP_NORESERVE is not optional: the
+  // default overcommit heuristic refuses a 16 GiB reservation on a smaller
+  // machine.)
+  //
+  // Small pages by default. Huge ones (set_hugepages, on the three regions a
+  // step reads at random: the arena, the hash-consing table and the memo) spare
+  // the TLB and most of the faults, and the build's compile phase ran 13%
+  // faster on them — with warm blocks. But a VM whose balloon reports free
+  // memory to its host reports whole 2 MiB blocks, exactly what a huge-page
+  // fault takes, and the host then backs each one 4 KiB at a time: 9.5 ms a
+  // block, and the same phase took 19% longer in the state such a VM is usually
+  // in (blocks are reported about two seconds after a process frees them, so no
+  // probe at startup can tell a warm machine from a cold one). Hence a switch,
+  // off unless the caller knows the machine.
+  static void *map_pages(size_t bytes) {
+    int flags = MAP_PRIVATE | MAP_ANONYMOUS;
+#ifdef MAP_NORESERVE
+    flags |= MAP_NORESERVE;
+#endif
+    void *mem = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, flags, -1, 0);
+    if (mem == MAP_FAILED) throw std::runtime_error("mmap failed to reserve memory");
+    return mem;
+  }
+
   static constexpr size_t ARENA_NODES = size_t(1) << 31;
   static constexpr size_t ARENA_BYTES = ARENA_NODES * 8;
 

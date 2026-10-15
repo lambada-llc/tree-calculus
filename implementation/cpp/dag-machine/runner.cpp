@@ -49,9 +49,11 @@
 //   default        ../lazy-graph-nil-mmap-32.hpp — head normal form on
 //                  demand, so a binding whose normal form does not exist
 //                  costs nothing until something asks for it.
-//   -DRUNNER_EAGER ../eager-graph-nil-mmap-32.hpp — every binding is
+//   -DRUNNER_EAGER ../eager-graph-nil-mmap-32-v2.hpp — every binding is
 //                  normalized as the module is read, which is faster and
 //                  leaner *if* every binding in the module has a normal form.
+//                  (-DRUNNER_EAGER_V1 builds the evaluator it was optimized
+//                  from, ../eager-graph-nil-mmap-32.hpp, for comparison.)
 //
 // That proviso is the whole story. Eager is the better evaluator and the
 // worse default: one definition that only converges lazily hangs the build,
@@ -95,17 +97,19 @@
 #include <unordered_map>
 #include <vector>
 
-#if defined(RUNNER_EAGER_V2)
-#ifdef RUNNER_EAGER_HEADER
+#if defined(RUNNER_EAGER_V1)
+#include "../eager-graph-nil-mmap-32.hpp"
+using Reducer = EagerGraphNilMmap32Jets;
+#ifndef RUNNER_EAGER
+#define RUNNER_EAGER
+#endif
+#elif defined(RUNNER_EAGER)
+#ifdef RUNNER_EAGER_HEADER // an evaluator under test, defining EagerGraphNilMmap32V2Jets
 #include RUNNER_EAGER_HEADER
 #else
 #include "../eager-graph-nil-mmap-32-v2.hpp"
 #endif
 using Reducer = EagerGraphNilMmap32V2Jets;
-#define RUNNER_EAGER
-#elif defined(RUNNER_EAGER)
-#include "../eager-graph-nil-mmap-32.hpp"
-using Reducer = EagerGraphNilMmap32Jets;
 #else
 #include "../lazy-graph-nil-mmap-32.hpp"
 using Reducer = LazyGraphNilMmap32;
@@ -715,7 +719,7 @@ static void* worker_main(void* p) {
   // rather than the machine (see runner.md). Unset or 0, no limit.
   if (const char* mb = std::getenv("RUNNER_RSS_LIMIT_MB")) g_e.set_limit(std::strtoull(mb, nullptr, 10));
 #endif
-#ifdef RUNNER_EAGER_V2
+#ifndef RUNNER_EAGER_V1
   // RUNNER_HUGEPAGES=1: huge pages under the evaluator's tables (see runner.md).
   if (const char* huge = std::getenv("RUNNER_HUGEPAGES")) g_e.set_hugepages(std::strcmp(huge, "0") != 0);
 #endif

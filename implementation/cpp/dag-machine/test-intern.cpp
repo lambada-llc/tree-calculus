@@ -12,9 +12,14 @@
 #include <utility>
 #include <vector>
 
+// The evaluator the runner builds, or with -DEAGER_V1 the one it was optimized from.
+#ifdef EAGER_V1
 #include "../eager-graph-nil-mmap-32.hpp"
-
 using E = EagerGraphNilMmap32;
+#else
+#include "../eager-graph-nil-mmap-32-v2.hpp"
+using E = EagerGraphNilMmap32V2;
+#endif
 using Tree = E::Tree;
 
 static int fail = 0;
