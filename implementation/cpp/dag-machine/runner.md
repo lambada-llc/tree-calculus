@@ -183,7 +183,8 @@ would without them, step for step.
 #### `RUNNER_HUGEPAGES` *(default: off; eager v2 only)*
 
 Any non-`0` value backs the arena, the hash-consing table and the memo
-with transparent huge pages. On a machine that keeps its memory, the
+with transparent huge pages (`reduce_canonicalize` reads it too, for its
+memo). On a machine that keeps its memory, the
 compile phase of a build ran 13% faster: far fewer page faults, far fewer
 TLB misses. On a VM whose balloon reports freed memory to its host it ran
 19% slower, because every 2 MiB block a huge-page fault takes has to be
