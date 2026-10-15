@@ -114,6 +114,13 @@
 //     slot carries that hash, so a flush reads neither the arena nor hashes.
 //     7.2% fewer instructions on the build's heaviest compile, with
 //     identical steps: the memo's hash is untouched (see hash()).
+//   — Allocation and the nursery: a flush is one pass (a node inserted and
+//     its slot and bit cleared as it goes, the count added once, the log read
+//     once rather than three times), `_young` is a byte per node rather than
+//     a bit, alloc() tests the budget with a compare instead of recomputing
+//     _due, and the flush threshold is precomputed: 3.5% fewer instructions
+//     on the same compile (the flush 11%, apply 4%), 10% fewer D1 misses,
+//     identical steps.
 //   — The frames: a DONE frame under what a call pushes, so that a pop never
 //     compares the top with the base; the tag in the low half of a frame's
 //     second word, so that a constant tag is an immediate store and an
@@ -140,7 +147,10 @@
 // information either way); clang, -O2 (25% slower: -O3's inlining is what
 // keeps the step in registers), PGO (nothing left to lay out), -march, branch
 // hints, dropping the stack protector; prefaulting, a startup huge-page probe
-// (cannot tell a cold VM from a warm one), DONTNEED above the live set.
+// (cannot tell a cold VM from a warm one), DONTNEED above the live set;
+// dropping the nursery's log (`_nursed`) for an SSE2 scan of its slots at
+// each flush (2.4% more instructions and 16% slower: 512 KB read per flush,
+// 3M more mispredicts).
 //
 // What remains is the memory the tables take: at a 16 MB collection budget
 // the compile phase runs 1.5x faster than at 512 MB although it takes 17%
@@ -444,10 +454,14 @@ private:
   // it, and at its full size a runner answering one small request faulted in
   // 90 pages more, 5% of its time.
   //
-  // `_young` is a bit per index, set for the nodes in the nursery. Every one of
-  // them is at least `_young_lo`, what alloc() would have handed out when the
-  // nursery was last emptied: the free list is in ascending order (sweep), and
-  // the high-water mark above it. That keeps the bits of the old nodes, most of
+  // `_young` is a byte per index, set for the nodes in the nursery — a byte
+  // rather than a bit, so that setting, testing and clearing one is a plain
+  // store, load or store rather than a read-modify-write and a shift (6%
+  // fewer instructions over the build's heaviest compile; 2 GiB reserved, of
+  // which a page per 4096 nodes nursed is touched). Every one of them is at
+  // least `_young_lo`, what alloc() would have handed out when the nursery was
+  // last emptied: the free list is in ascending order (sweep), and the
+  // high-water mark above it. That keeps the bytes of the old nodes, most of
   // the children asked about, out of the cache.
   static constexpr size_t NURSERY = size_t(1) << 16;
   struct Nurse {
@@ -459,7 +473,8 @@ private:
   size_t _nursery_mask = MIN_TABLE - 1;
   unsigned _nursery_shift = shift_for(MIN_TABLE);
   size_t _nursery_count = 0;
-  uint64_t *const _young = static_cast<uint64_t *>(map_pages(ARENA_NODES / 8));
+  size_t _nursery_full = (MIN_TABLE - 1) / 2; // flushed past this many nodes (_nursery_mask / 2): half its slots
+  uint8_t *const _young = static_cast<uint8_t *>(map_pages(ARENA_NODES));
   Tree _young_lo = 2;
 
   // A run: cells of the last long list() made, (_run, _run_end], left out of
@@ -566,14 +581,16 @@ private:
    * was false while the free list had a node, so it is recomputed only once
    * the list runs out, or the high-water mark moves. */
   Tree alloc(uint32_t u, uint32_t v) {
-    Tree result;
-    if (_free) {
-      result = _free;
-      _free = _arena[_free].v;
-      if (EAGER_UNLIKELY(!_free)) update_due();
+    // update_due() folded in: only the free list running out, or the
+    // high-water mark reaching the budget, can change _due here, and both are
+    // rare, so a step allocates with a compare rather than a recomputation.
+    Tree result = _free;
+    if (result) {
+      _free = _arena[result].v;
+      if (EAGER_UNLIKELY(!_free)) _due = _head >= _budget;
     } else {
       result = _head++;
-      update_due();
+      if (EAGER_UNLIKELY(_head >= _budget)) _due = true;
     }
     _arena[result] = {u, v};
     return _newest = result;
@@ -681,14 +698,15 @@ private:
   void insert_interned(Tree at) {
     const Node n = _arena[at];
     insert_hashed(at, node_hash(n.u, n.v));
+    ++_interned_count;
   }
 
-  /** insert_interned for a node whose node_hash is known to be `h`. */
+  /** insert_interned for a node whose node_hash is known to be `h`, not counted:
+   * a loop of these adds its count once. */
   void insert_hashed(Tree at, uint32_t h) {
     size_t g = top_bits(h, _groups_shift), i;
     while ((i = vacancy(_groups[g])) == GROUP) g = (g + 1) & _groups_mask;
     put({&_groups[g], i}, tag_of(h), at);
-    ++_interned_count;
   }
 
   // How many nodes ahead a loop of insertions asks for the line of the group a
@@ -840,26 +858,36 @@ private:
   }
 
   /** Whether `at` is in the nursery. */
-  bool young(Tree at) const { return at >= _young_lo && (_young[at >> 6] >> (at & 63) & 1); }
+  bool young(Tree at) const { return at >= _young_lo && _young[at]; }
 
   /** Put a node no search could find in the nursery's slot `i`, which is empty. */
   Tree nurse(size_t i, uint32_t h, Tree at) {
     _nursery[i] = {at, h};
-    _young[at >> 6] |= uint64_t(1) << (at & 63);
+    _young[at] = 1;
     _nursed[_nursery_count] = Tree(i);
-    if (++_nursery_count > _nursery_mask / 2) flush_nursery();
+    if (++_nursery_count > _nursery_full) flush_nursery();
     return at;
   }
 
-  /** Forget what is in the nursery, wherever it went. What goes in next is
-   * what alloc() hands out next, from here on up. */
+  /** Take the node out of nursery slot `i`, which holds one. */
+  Nurse forget(size_t i) {
+    Nurse &slot = _nursery[i];
+    const Nurse s = slot;
+    _young[s.at] = 0;
+    slot.at = 0;
+    return s;
+  }
+
+  /** Forget what is in the nursery, wherever it went. */
   void empty_nursery() {
+    for (size_t j = 0; j < _nursery_count; ++j) forget(_nursed[j]);
+    forgotten();
+  }
+
+  /** The nursery has been emptied: what goes in next is what alloc() hands
+   * out next, from here on up. */
+  void forgotten() {
     _young_lo = _free ? _free : _head;
-    for (size_t j = 0; j < _nursery_count; ++j) {
-      Nurse &slot = _nursery[_nursed[j]];
-      _young[slot.at >> 6] = 0; // every bit set is a node in the nursery
-      slot.at = 0;
-    }
     _nursery_count = 0;
   }
 
@@ -867,15 +895,20 @@ private:
    * for it, which takes the nursery in with the rest — and double it, if it
    * has not reached NURSERY. */
   [[gnu::noinline]] void flush_nursery() {
-    reserve_interned(0);
-    for (size_t j = 0; j < _nursery_count; ++j) {
-      if (j + AHEAD < _nursery_count) __builtin_prefetch(&_groups[top_bits(_nursery[_nursed[j + AHEAD]].h, _groups_shift)], 1);
-      const Nurse s = _nursery[_nursed[j]];
+    reserve_interned(0); // a re-lay takes the nursery with it, and empties it
+    // One pass: a node is inserted and its slot and bit cleared as it goes,
+    // rather than the log read again to empty the nursery afterwards.
+    const size_t count = _nursery_count;
+    for (size_t j = 0; j < count; ++j) {
+      if (j + AHEAD < count) __builtin_prefetch(&_groups[top_bits(_nursery[_nursed[j + AHEAD]].h, _groups_shift)], 1);
+      const Nurse s = forget(_nursed[j]);
       insert_hashed(s.at, s.h);
     }
-    empty_nursery();
+    _interned_count += count;
+    forgotten();
     _nursery_mask = std::min(2 * _nursery_mask + 1, NURSERY - 1);
     _nursery_shift = shift_for(_nursery_mask + 1);
+    _nursery_full = _nursery_mask / 2;
   }
 
   /**
@@ -1176,10 +1209,10 @@ private:
 
   /** What a budget of `nodes` holds at most, in bytes: the arena up to it, the
    * hash-consing table and memo at the sizes it takes them to, and a nursery
-   * bit for each of the nodes. (The nursery itself is at most 384 KB, like
+   * byte for each of the nodes. (The nursery itself is at most 384 KB, like
    * `_cold` not something a reduction grows.) */
   size_t footprint(size_t nodes) const {
-    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Group) + memo_cap(nodes) * sizeof(Memo) + nodes / 8;
+    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Group) + memo_cap(nodes) * sizeof(Memo) + nodes;
   }
 
   /** `what` would grow past what set_limit() allows, or with no limit, the arena. */
@@ -1257,7 +1290,7 @@ public:
     munmap(_groups, MAX_GROUPS * sizeof(Group));
     munmap(_nursery, NURSERY * sizeof(Nurse));
     munmap(_nursed, NURSERY / 2 * sizeof(Tree));
-    munmap(_young, ARENA_NODES / 8);
+    munmap(_young, ARENA_NODES);
     munmap(_marks, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
     munmap(_frames, MAX_FRAMES * sizeof(Frame));
