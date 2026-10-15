@@ -180,6 +180,17 @@ goes before optimizing anything.
 `0` makes the eager runner reduce what its jets would answer, as it
 would without them, step for step.
 
+#### `RUNNER_HUGEPAGES` *(default: off; eager v2 only)*
+
+Any non-`0` value backs the arena, the hash-consing table and the memo
+with transparent huge pages. On a machine that keeps its memory, the
+compile phase of a build ran 13% faster: far fewer page faults, far fewer
+TLB misses. On a VM whose balloon reports freed memory to its host it ran
+19% slower, because every 2 MiB block a huge-page fault takes has to be
+fetched back 4 KiB at a time (see `map_pages` in the evaluator). Nothing
+at startup can tell the two apart, so this is for a machine the caller
+knows.
+
 #### `RUNNER_WORKER_STACK_MB` *(default: 64)*
 
 `runner` runs all real work on a worker pthread with this stack size,
