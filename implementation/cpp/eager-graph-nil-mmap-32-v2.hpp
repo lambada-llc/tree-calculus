@@ -171,6 +171,19 @@ private:
   // (fits), 2^31 nodes take 2^28 groups, 16 GiB.
   static constexpr size_t MAX_GROUPS = size_t(1) << 28;
 
+  // Where a budgeted evaluator's budget starts, in nodes (16 MB of arena): the
+  // budget is a locality knob before it is a memory knob. The arena, the
+  // hash-consing table and the memo are read at random on every step, and a
+  // reduction runs 1.6x faster when the three fit in the cache than when they
+  // span the hundreds of MB a build-sized budget lets them (the build's compile
+  // phase: 2.1 s at 16 MB against 3.4 s at 512, with 17% more steps). So every
+  // reduction begins here, and only one that keeps collecting earns the
+  // large budget (see collect_at). At the budget this sizes the memo to
+  // 2^18 slots, 3 MB; the memo's size is most of the effect, since it is the
+  // table a step reads least locally: at 16 MB with the memo forced to 2^23
+  // slots the same phase took 3.4 s again.
+  static constexpr size_t START_BUDGET = size_t(1) << 21;
+
   // A step that resolved in fewer rule applications than this is cheaper to
   // redo than to let its entry evict a slower one from the memo (see the
   // MEMOIZE pop in apply). Low, because a step of a few rules can still be
@@ -257,7 +270,9 @@ private:
   Tree _newest = ~0u;  // the node alloc() made last, if no collection since
   size_t _live = 0;    // what the last collection found, for sizing the next one
   size_t _budget;      // collect once _head reaches this
+  size_t _ceiling;     // what set_budget() was given: the most collect_at raises _budget to on its own
   bool _due = false;   // !_free && _head >= _budget, kept by update_due()
+  uint32_t _collections = 0; // by the top-level reduction in progress (see collect_at)
 
   // What set_limit() allows (0 MB: no limit): the most a collection may raise
   // the budget to, and the most frames the stack may take.
@@ -1047,6 +1062,8 @@ private:
    * The bound is reached by growing (memo_put), not laid out up front: laying
    * a memo is a write to every slot — 96 MB at the default budget, which was
    * most of what starting a runner cost — and a small request never fills one.
+   * It follows the budget up as collect_at raises it (raise_budget), so the
+   * memo is as small as the arena is until a reduction earns them both.
    */
   void size_memo() {
     _memo_cap = memo_cap(_budget);
@@ -1076,13 +1093,31 @@ private:
 
   /**
    * Collect if the arena has grown past its budget, and raise the budget if that
-   * did not leave much room.
+   * did not leave much room, or if this reduction keeps needing to.
    *
    * Called once per reduction step, which allocates at most one node, so the
    * arena stays within a node of the budget rather than only being tidied up
    * once a request is over. `a` and `b` are the step's own operands: everything
    * else it can still reach is a Frame or a caller's root, but those two are
    * held in registers and have to be named.
+   *
+   * The budget quadruples at every collection but the first two of a
+   * top-level reduction, up to what set_budget() was given. A reduction that
+   * collects once or twice is the common one — a binding of a build, a compile
+   * of one source — and ran its allocations in START_BUDGET's cache-sized
+   * arena; one that collects a third time is a big one, and what it needs is
+   * to collect rarely: not for the collections' own cost, but because each
+   * drops the memo entries whose results it reaped, and a reduction that asks
+   * the same questions again re-derives them. The build's four heaviest tests
+   * take 3x the steps at a fixed 32 MB budget that they take at 512, whatever
+   * the memo's cap. Growing by a large factor keeps the climb short — three
+   * raises from 16 MB to 512, each of its collections dropping entries — and
+   * those four tests ran in 30 s against 31 at a fixed 512 MB (and 35 with the
+   * budget doubling from its second collection on), with a reduction that
+   * never collects three times paying for no memory it does not use. The
+   * budget is never lowered: the arena keeps its high-water mark, and
+   * allocation below the budget is what a free list over a larger arena
+   * cannot give back.
    */
   [[gnu::noinline, gnu::cold]] void collect_at(Tree a, Tree b) {
     _roots.push_back(a);
@@ -1095,16 +1130,24 @@ private:
     // allocation. There is nothing left to grow into at the ceiling.
     while (_live * 2 > _budget) {
       if (_budget >= _max_budget) out_of_memory("the live set");
-      _budget = std::min(_budget * 2, _max_budget);
-      size_memo();
+      raise_budget(2, _max_budget);
     }
+    if (++_collections > 2 && _budget < _ceiling) raise_budget(4, _ceiling);
     update_due();
+  }
+
+  /** Multiply the budget by `factor`, to at most `bound`, and let the memo grow
+   * to what the larger budget allows. Its entries stay: a collection just
+   * filtered them. */
+  void raise_budget(size_t factor, size_t bound) {
+    _budget = std::min(_budget * factor, bound);
+    _memo_cap = memo_cap(_budget);
   }
 
 public:
   // No collection until set_budget() says so: an unregistered root set makes
   // everything look garbage, so opting in has to be the caller's decision.
-  BasicEagerGraphNilMmap32V2() : _budget(ARENA_NODES) {
+  BasicEagerGraphNilMmap32V2() : _budget(ARENA_NODES), _ceiling(ARENA_NODES) {
     map_arena();
     rebuild_interned(MIN_GROUPS);
     size_memo();
@@ -1227,10 +1270,13 @@ public:
   /** How many nodes the last collection found reachable. */
   size_t live() const { return _live; }
 
-  /** Collect at most every `nodes` allocations, lowered to what set_limit()
-   * allows. 0 never collects, unless a limit says otherwise. */
+  /** Collect at least every `nodes` allocations, lowered to what set_limit()
+   * allows — and at first every START_BUDGET, the budget raising itself from
+   * there as reductions need it (collect_at). 0 never collects, unless a limit
+   * says otherwise. */
   void set_budget(size_t nodes) {
-    _budget = std::min(nodes ? nodes : ARENA_NODES, _max_budget);
+    _ceiling = std::min(nodes ? nodes : ARENA_NODES, _max_budget);
+    _budget = _ceiling == ARENA_NODES ? ARENA_NODES : std::min(START_BUDGET, _ceiling);
     size_memo();
     update_due();
   }
@@ -1253,7 +1299,7 @@ public:
     while (footprint(_max_budget) > bytes / 4 * 3) _max_budget /= 2;
     _max_frames = (bytes - footprint(_max_budget)) / sizeof(Frame) / 3 * 2;
     _frame_limit = _frames + std::min(_max_frames, MAX_FRAMES);
-    set_budget(_budget);
+    set_budget(_ceiling);
   }
 
   std::string stats() {
@@ -1355,6 +1401,7 @@ public:
     Frame *const base = _top;
     Frame *top = base;
     Frame *const limit = _frame_limit;
+    if (base == _frames) _collections = 0; // a top-level reduction begins
     uint64_t steps = stats_counters.steps;
     Node *const arena = _arena; // never remapped while a reduction runs
     Tree result;
