@@ -89,13 +89,17 @@ Most of a bundle's bindings have no normal form, so evaluating each one
 as it is read diverges; here a binding is an unreduced application node,
 forced only as far as a request looks at it.
 
-`../eager-graph-nil-mmap-32.hpp` (`-DRUNNER_EAGER`) normalizes every
+`../eager-graph-nil-mmap-32-v2.hpp` (`-DRUNNER_EAGER`) normalizes every
 binding as the module is read. That is a claim about the module — one
 definition that only converges lazily hangs the build — so it is the
 caller's to make, and `TREE_CALCULUS_RUNNER=eager` is where they make it.
 In exchange, a repository that holds itself to eager termination builds
 in about half the time. It also answers lambada's `skip_line` natively, a
 jet proven sound in [`implementation/lean/Cpp/`](../../lean/Cpp/README.md).
+
+(`-DRUNNER_EAGER_V1` builds `../eager-graph-nil-mmap-32.hpp`, the evaluator
+v2 was optimized from — what it changed, and what was measured and not
+taken, is listed at the top of v2's header.)
 
 Both keep memory bounded by a non-moving mark-and-sweep over `roots()`,
 run from inside the reduction loop (see `RUNNER_RSS_THRESHOLD_MB`), and

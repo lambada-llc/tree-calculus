@@ -88,9 +88,43 @@
 // is what lets every Tree a caller is holding survive one without being
 // registered anywhere.
 //
-// EagerGraphNilMmap32Jets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
+// EagerGraphNilMmap32V2Jets also answers lambada's skip_line natively, a jet
+// (implementation/lean/Cpp/README.md); EagerGraphNilMmap32V2 is the same code
 // without it.
+//
+// This is eager-graph-nil-mmap-32.hpp (kept, for comparison) made faster on
+// forest's build, measured by replaying the exact requests its compile phase
+// and its expect tests send the runner, with the output checked byte for byte:
+//
+//   — The step loop keeps its state in registers: a frame is a store and a
+//     bump onto an mmap'd stack (std::vector's emplace_back was an out-of-line
+//     call a step), the step counter and the arena pointer are locals, the
+//     nursery fast path of intern() is inlined, and a collection is a cold
+//     call behind one byte. 184 instructions a step became 143.
+//   — Rule (2)'s inner application is read off the function when its frame is
+//     pushed (STEM, FORK_WITH, RETURN, FORK_RIGHT): a quarter fewer steps.
+//   — A collection marks into a bitmap and re-inserts the survivors as it
+//     sweeps: 109 ms instead of 267 at a 256 MB budget.
+//   — The hash-consing table's EMPTY is 0, so an untouched page is empty.
+//
+// Measured and not taken, so that no one measures them again: 16-byte or
+// set-associative memo entries, an L1 front memo, a prefetch of the memo slot
+// at the top of a step (6-10% slower), memo regions per function (most
+// closures are looked up once: 2.8M of 3.2M on a compile), MEMO_MIN_STEPS and
+// MEMO_COLD sweeps, a smaller _cold table; growing the table 4x (more pages
+// than re-lays saved), flushing the nursery in table order, a 2^18 nursery,
+// a nursery log carrying hashes; 3-bit node kinds with 30-bit indices and a
+// switch or computed goto in place of the rule branches (13% more
+// instructions, the same mispredicts: which rule comes next is the same
+// information either way); clang, -O2 (25% slower: -O3's inlining is what
+// keeps the step in registers), PGO (nothing left to lay out), -march, branch
+// hints, dropping the stack protector; prefaulting, a startup huge-page probe
+// (cannot tell a cold VM from a warm one), DONTNEED above the live set.
+//
+// What remains is the memory the tables take: at a 16 MB collection budget
+// the compile phase runs 1.5x faster than at 512 MB although it takes 17%
+// more steps, and the heaviest expect tests take three times the steps at
+// 32 MB because their memo no longer fits — see collect_at and runner.md.
 
 template <bool JETS> class BasicEagerGraphNilMmap32V2 {
 public:
