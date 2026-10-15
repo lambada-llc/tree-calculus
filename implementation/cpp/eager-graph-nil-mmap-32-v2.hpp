@@ -94,13 +94,20 @@
 
 // Anonymous memory, reserved rather than committed: a page is only committed
 // the first time it is touched, so a region can be mapped at the most it will
-// ever need and cost what is used of it.
+// ever need and cost what is used of it. (MAP_NORESERVE is not optional: the
+// default overcommit heuristic refuses a 16 GiB reservation on a smaller
+// machine.)
 //
-// Small pages, on purpose. Huge ones (MADV_HUGEPAGE) spare the TLB, and ran
-// 8-20% faster right after a run that used them; but a VM that returns freed
-// memory to its host returns whole 2 MiB blocks — the ones a huge-page fault
-// needs — so a run that started after a pause touched its memory at a seventh
-// of the speed, and took up to twice as long.
+// Small pages by default. Huge ones (set_hugepages, on the three regions a
+// step reads at random: the arena, the hash-consing table and the memo) spare
+// the TLB and most of the faults, and the build's compile phase ran 13%
+// faster on them — with warm blocks. But a VM whose balloon reports free
+// memory to its host reports whole 2 MiB blocks, exactly what a huge-page
+// fault takes, and the host then backs each one 4 KiB at a time: 9.5 ms a
+// block, and the same phase took 19% longer in the state such a VM is usually
+// in (blocks are reported about two seconds after a process frees them, so no
+// probe at startup can tell a warm machine from a cold one). Hence a switch,
+// off unless the caller knows the machine.
 static void *map_pages(size_t bytes) {
   int flags = MAP_PRIVATE | MAP_ANONYMOUS;
 #ifdef MAP_NORESERVE
@@ -387,6 +394,16 @@ private:
   // would alias every member and have each reloaded after it.
   struct Cold { uint8_t n; };
   Cold _cold[1 << 16];
+
+  // Whether the arena, the table and the memo are to be backed by huge pages
+  // (see map_pages): applied to each region when it is mapped, and again to
+  // the arena whenever clear() remaps it.
+  bool _huge = false;
+  void advise_huge(void *mem, size_t bytes) const {
+#ifdef MADV_HUGEPAGE
+    if (_huge) madvise(mem, bytes, MADV_HUGEPAGE);
+#endif
+  }
 
   // jets.hpp's trees, interned on a fresh arena and marked by every collection,
   // so that each stays the index of its tree: interning is exact, so comparing
@@ -889,6 +906,7 @@ private:
 
   void map_arena() {
     _arena = static_cast<Node *>(map_pages(ARENA_BYTES));
+    advise_huge(_arena, ARENA_BYTES);
     _arena[0] = {0, 0}; // index 0 reserved: 0 is the null child sentinel
     _arena[1] = {0, 0}; // the shared leaf
     _head = 2;
@@ -992,6 +1010,15 @@ public:
 
   BasicEagerGraphNilMmap32V2(const BasicEagerGraphNilMmap32V2 &) = delete;
   BasicEagerGraphNilMmap32V2 &operator=(const BasicEagerGraphNilMmap32V2 &) = delete;
+
+  /** Back the arena, the hash-consing table and the memo with huge pages
+   * (see map_pages), off by default. Takes effect on pages not yet touched. */
+  void set_hugepages(bool on) {
+    _huge = on;
+    advise_huge(_arena, ARENA_BYTES);
+    advise_huge(_groups, MAX_GROUPS * sizeof(Group));
+    advise_huge(_memo, MAX_MEMO * sizeof(Memo));
+  }
 
   /** Whether apply() takes jets, on by default. Off, their trees are not even
    * interned, so it reduces as EagerGraphNilMmap32 does. Clears, as clear(). */

@@ -715,6 +715,10 @@ static void* worker_main(void* p) {
   // rather than the machine (see runner.md). Unset or 0, no limit.
   if (const char* mb = std::getenv("RUNNER_RSS_LIMIT_MB")) g_e.set_limit(std::strtoull(mb, nullptr, 10));
 #endif
+#ifdef RUNNER_EAGER_V2
+  // RUNNER_HUGEPAGES=1: huge pages under the evaluator's tables (see runner.md).
+  if (const char* huge = std::getenv("RUNNER_HUGEPAGES")) g_e.set_hugepages(std::strcmp(huge, "0") != 0);
+#endif
   *static_cast<int*>(p) = run_server();
   return nullptr;
 }
