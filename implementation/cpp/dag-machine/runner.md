@@ -243,6 +243,22 @@ Compiler used for the on-demand build of `runner.cpp`, next to it, to
 `runner.exe` (or `runner-eager.exe` under `TREE_CALCULUS_RUNNER=eager`).
 The build flags are fixed: `-O3 -std=c++17 -pthread`.
 
+## Measuring
+
+What a build asks of the runner is a stream on stdin, so it can be kept
+and replayed: stand a shim in for `runner-eager.exe` that copies its
+stdin to a file (and the module each `load` names beside it, so the
+transcript stands alone) while forwarding to the real binary, build the
+repository once through it, then
+
+    RUNNER_STATS=1 runner-eager.exe < transcript > out
+
+times the evaluator alone, deterministically, with no Node in the loop,
+and `sha256sum out` says whether a change still answers the same. The
+eager v2 evaluator was optimized that way against forest's compile phase
+and expect tests; a cachegrind run over one heavy request gives the
+instruction counts timing is too noisy for.
+
 ## Tuning recipes
 
 How many runners a build keeps busy is the build's to say: each one is
