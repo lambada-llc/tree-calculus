@@ -11,10 +11,17 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../eager-graph-nil-mmap-32.hpp"
 #include "../evaluator.hpp"
-
+// The evaluator the runner builds, or with -DEAGER_V1 the one it was optimized from.
+#ifdef EAGER_V1
+#include "../eager-graph-nil-mmap-32.hpp"
 using J = Evaluator<EagerGraphNilMmap32Jets>;
+using M = Evaluator<EagerGraphNilMmap32>;
+#else
+#include "../eager-graph-nil-mmap-32-v2.hpp"
+using J = Evaluator<EagerGraphNilMmap32V2Jets>;
+using M = Evaluator<EagerGraphNilMmap32V2>;
+#endif
 using Tree = J::Tree;
 
 static int fail = 0;
@@ -92,7 +99,7 @@ int main() {
   {
     // Off, step for step and node for node the evaluator without jets.
     J e;
-    Evaluator<EagerGraphNilMmap32> m;
+    M m;
     e.set_jets(false);
     const bool fresh = e.allocated() == m.allocated();
     const Tree se = skip_line(e), sm = skip_line(m);

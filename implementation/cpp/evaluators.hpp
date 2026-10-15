@@ -20,6 +20,7 @@
 #include "eager-ternary-nil-mmap-peek.hpp"
 #include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "eager-graph-nil-mmap-32.hpp"
+#include "eager-graph-nil-mmap-32-v2.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
 #include "lazy-app-stream.hpp"
 
@@ -60,5 +61,6 @@
   X(EagerTernaryNilMmapPeek,   "eager-ternary-nil-mmap-peek",  1, 90, 24) \
   X(EagerTernaryNilMmap32Peek, "eager-ternary-nil-mmap-32-peek", 1, 90, 24) \
   X(EagerGraphNilMmap32,       "eager-graph-nil-mmap-32",      1, 90, 24) \
+  X(EagerGraphNilMmap32V2,     "eager-graph-nil-mmap-32-v2",   1, 90, 24) \
   X(LazyGraphNilMmap32,        "lazy-graph-nil-mmap-32",       1, 90, 24) \
   X(LazyAppStream,             "lazy-app-stream",              0, 22,  9)

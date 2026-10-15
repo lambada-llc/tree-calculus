@@ -14,6 +14,11 @@ for t in intern jets lazy; do
   "${CXX:-c++}" "$DIR/test-$t.cpp" -O3 -std=c++17 -o "$DIR/test-$t.exe"
   "$DIR/test-$t.exe"
 done
+# The eager evaluator the runner was optimized from, kept for comparison, as well.
+for t in intern jets; do
+  "${CXX:-c++}" "$DIR/test-$t.cpp" -O3 -std=c++17 -DEAGER_V1 -o "$DIR/test-$t-v1.exe"
+  "$DIR/test-$t-v1.exe"
+done
 
 # The runner has an end-to-end suite of its own: native evaluators and the
 # reduction cache against the pure-Node evaluator as oracle.
