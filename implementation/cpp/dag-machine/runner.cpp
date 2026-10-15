@@ -534,10 +534,12 @@ static std::string dump_module() {
 }
 #endif
 
-// Collection budget, in nodes. 0 lets the arena grow unchecked. The default keeps
-// peak memory below the hard limits typical hosted CI builders impose (Cloudflare
-// Pages, etc.); bump it on a roomy local machine (e.g.
-// RUNNER_RSS_THRESHOLD_MB=4096) to collect less often.
+// Collection budget, in nodes: under -DRUNNER_EAGER the most the budget raises
+// itself to (every reduction starts at the evaluator's START_BUDGET, 16 MiB,
+// and only one that keeps collecting climbs to this), under the lazy evaluator
+// the budget itself. 0 lets the arena grow unchecked. The default keeps peak
+// memory below the hard limits typical hosted CI builders impose; see runner.md
+// before raising it.
 static size_t collection_budget_nodes() {
   const char* env = std::getenv("RUNNER_RSS_THRESHOLD_MB");
   size_t mb = env ? std::strtoull(env, nullptr, 10) : 512;

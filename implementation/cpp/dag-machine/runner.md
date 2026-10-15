@@ -132,16 +132,28 @@ Nothing moves, so the reduction already written into the bundle's nodes
 survives — which is the sharing that makes a long-lived server worth
 having.
 
-Bump this on a roomy local machine (e.g. `RUNNER_RSS_THRESHOLD_MB=4096`)
-to collect less often. The budget also raises itself if a collection
-finds that most of the arena is still live, so a genuinely large term
-does not turn into a collection per allocation. It stops at the size of
-the arena (8 GiB lazy, 16 GiB eager): a request that needs it raised
-further fails with `arena exhausted`.
+Under `-DRUNNER_EAGER` this is a ceiling, not the budget a request runs
+under. Every reduction begins under a 16 MiB budget: the arena, the
+hash-consing table and the memo it sizes are read at random on every
+step, and a reduction runs about 1.5x faster while the three fit in the
+cache than when they span hundreds of MB — the budget is a locality knob
+before it is a memory knob. A reduction that collects a third time is a
+big one, and from then on each of its collections quadruples the budget,
+up to this setting: what a big reduction needs is to collect rarely, since
+each collection drops the memoized results it reaped, which it then
+derives again (the build's heaviest tests take three times the steps at a
+fixed 32 MiB). The budget is never lowered, so this setting is still the
+arena's peak: keep it below the hard limits of the hosted builder, and do
+not expect a larger one to help — 1 GiB measured slower than 512 MiB on
+those tests. The memo's cap follows the budget as it is raised (a slot
+per eight nodes), so a tighter ceiling also costs a little more
+re-reduction.
 
-Under `-DRUNNER_EAGER` the same setting also sizes the memo, which is the
-rest of what a collection has to bound; a tighter budget therefore costs
-a little more re-reduction as well as more sweeps.
+The budget also raises itself past this setting if a collection finds
+that most of the arena is still live, so a genuinely large term does not
+turn into a collection per allocation. It stops at the size of the arena
+(8 GiB lazy, 16 GiB eager): a request that needs it raised further fails
+with `arena exhausted`.
 
 #### `RUNNER_RSS_LIMIT_MB` *(default: none; eager only)*
 
@@ -240,7 +252,6 @@ heavy request, so memory scales with the count.
 | environment            | recommended setting                            |
 | ---------------------- | ---------------------------------------------- |
 | Hosted CI (Cloudflare) | leave defaults                                 |
-| Local with lots of RAM | `RUNNER_RSS_THRESHOLD_MB=4096`                 |
 | Debugging stack issues | `RUNNER_WORKER_STACK_MB=256`                   |
 | Never collect          | `RUNNER_RSS_THRESHOLD_MB=0`                    |
 | A runner per core      | `RUNNER_RSS_LIMIT_MB=<memory per runner>`      |
