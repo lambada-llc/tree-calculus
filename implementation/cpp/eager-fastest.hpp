@@ -106,6 +106,14 @@
 //   — A collection marks into a bitmap and re-inserts the survivors as it
 //     sweeps: 109 ms instead of 267 at a 256 MB budget.
 //   — The hash-consing table's EMPTY is 0, so an untouched page is empty.
+//   — Hashing was 12.6% of the instructions, 21M hash() calls per 10M steps;
+//     now 4.7%: a MEMOIZE frame carries the memo hash so the put never
+//     hashes again, the cold index is one 32-bit multiply (the same 16 bits
+//     hash(a, 0) gave), the table and the nursery hash with two 32-bit
+//     multiplies by immediates (no 64-bit constant to load) and a nursery
+//     slot carries that hash, so a flush reads neither the arena nor hashes.
+//     7.2% fewer instructions on the build's heaviest compile, with
+//     identical steps: the memo's hash is untouched (see hash()).
 //
 // Measured and not taken, so that no one measures them again: 16-byte or
 // set-associative memo entries, an L1 front memo, a prefetch of the memo slot
@@ -246,15 +254,22 @@ private:
   // that the store buffer cannot answer from one earlier store (a 16-byte
   // Frame read back from its four 4-byte fields, say) waits for those stores
   // to retire instead — a stall on nearly every step.
+  //
+  // The tag takes a byte; the rest of the low word's low half is a MEMOIZE
+  // frame's step counter at push (24 bits: the MEMO_MIN_STEPS test needs a
+  // difference of a few), and the high half of its high word the memo hash
+  // of (a, b), so that the put when it is popped neither hashes again nor
+  // loads anything but the frame.
   struct Frame {
     uint64_t lo, hi;
     Frame() = default;
-    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2, uint32_t meta = 0)
-        : lo(tag | uint64_t(arg1) << 32), hi(arg2 | uint64_t(meta) << 32) {}
-    FrameTag tag() const { return FrameTag(uint32_t(lo)); }
+    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2, uint32_t steps = 0, uint32_t meta = 0)
+        : lo(tag | uint64_t(steps & 0xffffff) << 8 | uint64_t(arg1) << 32), hi(arg2 | uint64_t(meta) << 32) {}
+    FrameTag tag() const { return FrameTag(uint8_t(lo)); }
     uint32_t arg1() const { return lo >> 32; }
     uint32_t arg2() const { return uint32_t(hi); } // 0 on an APPLY_TO frame, which mark() ignores
-    uint32_t meta() const { return hi >> 32; }     // MEMOIZE: low bits of the step counter at push
+    uint32_t steps() const { return uint32_t(lo) >> 8; } // MEMOIZE: low bits of the step counter at push
+    uint32_t meta() const { return hi >> 32; }           // MEMOIZE: low bits of memo_hash(a, b)
   };
 
   /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
@@ -367,12 +382,13 @@ private:
   static constexpr size_t MIN_GROUPS = MIN_TABLE * sizeof(Tree) / sizeof(Group); // as many bytes as MIN_TABLE indices
   Group *const _groups = static_cast<Group *>(map_pages(MAX_GROUPS * sizeof(Group)));
   size_t _groups_mask = 0;
+  unsigned _groups_shift = 32; // node_hash >> this is the group it picks
   size_t _groups_touched = 0; // groups a re-lay has ever written; above it the mapping is still zero
   size_t _interned_count = 0;
 
   // The nursery: the nodes intern() made since it was last flushed into
-  // `_groups`, in a table of their own — plain 4-byte slots, 0 the empty one —
-  // small enough to stay in cache.
+  // `_groups`, in a table of their own — 8-byte slots, the node and its
+  // node_hash, 0 the empty one — small enough to stay in cache.
   //
   // Where a node can be is what makes it pay, and what keeps it exact. A node
   // is made after its children, and nothing outside the nursery has a child in
@@ -408,9 +424,14 @@ private:
   // the high-water mark above it. That keeps the bits of the old nodes, most of
   // the children asked about, out of the cache.
   static constexpr size_t NURSERY = size_t(1) << 16;
-  Tree *const _nursery = static_cast<Tree *>(map_pages(NURSERY * sizeof(Tree)));
+  struct Nurse {
+    Tree at;    // 0: empty
+    uint32_t h; // node_hash of at's shape: compared before at's node is loaded, and what a flush inserts by
+  };
+  Nurse *const _nursery = static_cast<Nurse *>(map_pages(NURSERY * sizeof(Nurse)));
   Tree *const _nursed = static_cast<Tree *>(map_pages(NURSERY / 2 * sizeof(Tree)));
   size_t _nursery_mask = MIN_TABLE - 1;
+  unsigned _nursery_shift = shift_for(MIN_TABLE);
   size_t _nursery_count = 0;
   uint64_t *const _young = static_cast<uint64_t *>(map_pages(ARENA_NODES / 8));
   Tree _young_lo = 2;
@@ -473,25 +494,42 @@ private:
   }
 
   /**
-   * The pair of indices is the key, and it needs mixing — but every step hashes
-   * before it can load anything, so the mixing is on the critical path. One
-   * multiply (Fibonacci hashing), with the high half, where a product mixes
-   * best, folded onto the low bits the tables index by.
+   * The memo's hash. The pair of indices is the key, and it needs mixing — but
+   * every step hashes before it can load anything, so the mixing is on the
+   * critical path. One multiply (Fibonacci hashing), with the high half, where
+   * a product mixes best, folded onto the low bits the memo indexes by.
    *
-   * Which leaves the bits of `u` at and above a table's index width out of the
-   * index: bit 32 + j of the product depends on bits 0..j of u only, so in a
-   * table of 2^k slots (u, v) and (u + 2^k, v) always share a slot. The
-   * hash-consing table is sized to the live nodes, and indices outrun it only
-   * by what collections have freed (a search reads 1.08 groups over the
-   * build's test runner); the memo is smaller than the arena by design, and
-   * there such pairs evict each other. Folding a 128-bit product instead keeps
-   * every bit, and took 0.15% fewer steps on the build's three heaviest tests —
-   * in 35.9 s against this hash's 35.4 s.
+   * Which leaves the bits of `u` at and above the memo's index width out of
+   * the index: bit 32 + j of the product depends on bits 0..j of u only, so in
+   * a memo of 2^k slots (u, v) and (u + 2^k, v) always share a slot, and since
+   * the memo is smaller than the arena by design, such pairs evict each other.
+   * Folding a 128-bit product instead keeps every bit, and took 0.15% fewer
+   * steps on the build's three heaviest tests — in 35.9 s against this hash's
+   * 35.4 s. The fold itself is not optional: the high half alone, unfolded,
+   * took 0.2% more steps on the build's compile phase and 0.8% more on its
+   * heavy tests, for the two instructions it saves.
    */
   static uint64_t hash(uint32_t u, uint32_t v) {
     const uint64_t x = ((uint64_t(u) << 32) | v) * 0x9e3779b97f4a7c15ULL;
     return x ^ (x >> 32);
   }
+
+  /** The hash-consing table's and the nursery's hash of a node's shape, which
+   * only has to spread (a search compares the key): a 32-bit multiply per
+   * child, by an immediate, so no 64-bit constant is loaded at every site the
+   * way hash()'s is. Three instructions where hash() is seven. The table and
+   * the nursery index by its top bits (top_bits), the mixed ones of a
+   * product, and the control tag is its low 7 bits — of one product's low
+   * bits xor the other's, distinct for consecutive indices. It reads 1.06
+   * groups a search on the build's heaviest compile, where the memo's hash
+   * read 1.10. 32 bits, so that a nursery slot carries it: a flush then
+   * neither reads the arena nor hashes, and a probe compares it before it
+   * loads a node. Not the memo's hash: that one's slot must stay hash()'s
+   * (see memo_hash). */
+  static uint32_t node_hash(uint32_t u, uint32_t v) { return u * 0x9e3779b1u ^ v * 0x85ebca6bu; }
+  /** The group or nursery slot a node_hash picks: its top bits. */
+  static size_t top_bits(uint32_t h, unsigned shift) { return h >> shift; }
+  static unsigned shift_for(size_t slots) { return 32 - unsigned(__builtin_ctzll(slots)); } // slots a power of two
 
   /** Whether the next step has to collect: no free node, and the high-water
    * mark at the budget. Recomputed wherever one of the three changes, so that
@@ -546,7 +584,7 @@ private:
     return GROUP - w >= Word::WIDTH ? ~uint64_t(0) : (uint64_t(1) << ((GROUP - w) << Word::SHIFT)) - 1;
   }
   static size_t lane(uint64_t mask) { return size_t(__builtin_ctzll(mask)) >> Word::SHIFT; }
-  static uint8_t tag_of(uint64_t h) { const uint8_t t = uint8_t(h >> 57); return t + !t; } // never EMPTY
+  static uint8_t tag_of(uint32_t h) { const uint8_t t = h & 0x7f; return t + !t; } // never EMPTY
 
   /** An empty slot, which a node is about to take. */
   struct Slot {
@@ -588,9 +626,9 @@ private:
     Slot empty;
   };
 
-  Found search(uint64_t h, uint32_t u, uint32_t v) const {
+  Found search(uint32_t h, uint32_t u, uint32_t v) const {
     const uint8_t tag = tag_of(h);
-    for (size_t g = h & _groups_mask;; g = (g + 1) & _groups_mask) {
+    for (size_t g = top_bits(h, _groups_shift);; g = (g + 1) & _groups_mask) {
       Group &group = _groups[g];
 #ifdef __SSE2__
       for (unsigned m = bytes_equal(group, tag); m; m &= m - 1) {
@@ -613,8 +651,12 @@ private:
   /** Put a live node in the hash-consing table, which must have room for it. */
   void insert_interned(Tree at) {
     const Node n = _arena[at];
-    const uint64_t h = hash(n.u, n.v);
-    size_t g = h & _groups_mask, i;
+    insert_hashed(at, node_hash(n.u, n.v));
+  }
+
+  /** insert_interned for a node whose node_hash is known to be `h`. */
+  void insert_hashed(Tree at, uint32_t h) {
+    size_t g = top_bits(h, _groups_shift), i;
     while ((i = vacancy(_groups[g])) == GROUP) g = (g + 1) & _groups_mask;
     put({&_groups[g], i}, tag_of(h), at);
     ++_interned_count;
@@ -630,7 +672,7 @@ private:
   /** Ask for the line of the group `at` goes in, unless it is a swept node. */
   void prefetch_group(Tree at) const {
     const Node n = _arena[at];
-    if (n.u) __builtin_prefetch(&_groups[hash(n.u, n.v) & _groups_mask], 1);
+    if (n.u) __builtin_prefetch(&_groups[top_bits(node_hash(n.u, n.v), _groups_shift)], 1);
   }
 
   /** Re-lay the hash-consing table at `groups` from the arena's live nodes
@@ -692,6 +734,7 @@ private:
     if (stream) zero_lines(_groups, bytes); else std::memset(_groups, EMPTY, bytes);
     _groups_touched = std::max(_groups_touched, groups);
     _groups_mask = groups - 1;
+    _groups_shift = shift_for(groups);
     _interned_count = 0;
   }
 
@@ -709,8 +752,8 @@ private:
    * cell right where it looks, and never probes the table at all. */
   Tree find(uint32_t u, uint32_t v) const {
     if (const Tree cell = in_run(u, v)) return cell;
-    const uint64_t h = hash(u, v);
-    if (const Tree at = _nursery[nursery_slot(h, u, v)]) return at;
+    const uint32_t h = node_hash(u, v);
+    if (const Tree at = _nursery[nursery_slot(h, u, v)].at) return at;
     return search(h, u, v).at;
   }
 
@@ -757,11 +800,12 @@ private:
 
   /** The slot of the nursery holding the node for this shape, whose hash is
    * `h`, or the empty one it would take. */
-  size_t nursery_slot(uint64_t h, uint32_t u, uint32_t v) const {
-    for (size_t i = h & _nursery_mask;; i = (i + 1) & _nursery_mask) {
-      const Tree at = _nursery[i];
-      if (!at) return i;
-      const Node n = _arena[at];
+  size_t nursery_slot(uint32_t h, uint32_t u, uint32_t v) const {
+    for (size_t i = top_bits(h, _nursery_shift);; i = (i + 1) & _nursery_mask) {
+      const Nurse s = _nursery[i];
+      if (!s.at) return i;
+      if (s.h != h) continue;
+      const Node n = _arena[s.at];
       if (n.u == u && n.v == v) return i;
     }
   }
@@ -770,8 +814,8 @@ private:
   bool young(Tree at) const { return at >= _young_lo && (_young[at >> 6] >> (at & 63) & 1); }
 
   /** Put a node no search could find in the nursery's slot `i`, which is empty. */
-  Tree nurse(size_t i, Tree at) {
-    _nursery[i] = at;
+  Tree nurse(size_t i, uint32_t h, Tree at) {
+    _nursery[i] = {at, h};
     _young[at >> 6] |= uint64_t(1) << (at & 63);
     _nursed[_nursery_count] = Tree(i);
     if (++_nursery_count > _nursery_mask / 2) flush_nursery();
@@ -783,9 +827,9 @@ private:
   void empty_nursery() {
     _young_lo = _free ? _free : _head;
     for (size_t j = 0; j < _nursery_count; ++j) {
-      Tree &slot = _nursery[_nursed[j]];
-      _young[slot >> 6] = 0; // every bit set is a node in the nursery
-      slot = 0;
+      Nurse &slot = _nursery[_nursed[j]];
+      _young[slot.at >> 6] = 0; // every bit set is a node in the nursery
+      slot.at = 0;
     }
     _nursery_count = 0;
   }
@@ -796,11 +840,13 @@ private:
   [[gnu::noinline]] void flush_nursery() {
     reserve_interned(0);
     for (size_t j = 0; j < _nursery_count; ++j) {
-      if (j + AHEAD < _nursery_count) prefetch_group(_nursery[_nursed[j + AHEAD]]);
-      insert_interned(_nursery[_nursed[j]]);
+      if (j + AHEAD < _nursery_count) __builtin_prefetch(&_groups[top_bits(_nursery[_nursed[j + AHEAD]].h, _groups_shift)], 1);
+      const Nurse s = _nursery[_nursed[j]];
+      insert_hashed(s.at, s.h);
     }
     empty_nursery();
     _nursery_mask = std::min(2 * _nursery_mask + 1, NURSERY - 1);
+    _nursery_shift = shift_for(_nursery_mask + 1);
   }
 
   /**
@@ -815,22 +861,22 @@ private:
    * then it takes the slot that search ended on, already in cache.
    */
   [[gnu::always_inline]] Tree intern(uint32_t u, uint32_t v) {
-    const uint64_t h = hash(u, v);
+    const uint32_t h = node_hash(u, v);
     if (u == _newest || v == _newest) {
-      size_t i = h & _nursery_mask;
-      while (_nursery[i]) i = (i + 1) & _nursery_mask;
-      return nurse(i, alloc(u, v));
+      size_t i = top_bits(h, _nursery_shift);
+      while (_nursery[i].at) i = (i + 1) & _nursery_mask;
+      return nurse(i, h, alloc(u, v));
     }
     const size_t i = nursery_slot(h, u, v);
-    if (const Tree at = _nursery[i]) return at;
-    if (young(u) || young(v)) return nurse(i, alloc(u, v));
+    if (const Tree at = _nursery[i].at) return at;
+    if (young(u) || young(v)) return nurse(i, h, alloc(u, v));
     return intern_old(h, u, v);
   }
 
   /** intern() past the nursery: the table, the run, or a fresh node in the
    * slot the search ended on. Out of line, like the rest of what a step
    * reaches only now and then. */
-  [[gnu::noinline]] Tree intern_old(uint64_t h, uint32_t u, uint32_t v) {
+  [[gnu::noinline]] Tree intern_old(uint32_t h, uint32_t u, uint32_t v) {
     const auto [at, empty] = search(h, u, v);
     if (at) return at;
     if (const Tree cell = in_run(u, v)) return cell;
@@ -841,17 +887,24 @@ private:
     return fresh;
   }
 
-  Tree memo_get(uint32_t a, uint32_t b) {
-    const Memo &m = _memo[hash(a, b) & _memo_mask];
+  /** The memo's hash of the step's operands: hash()'s low 32 bits, which a
+   * slot index comes from (the memo is at most 2^24 slots), and what a
+   * MEMOIZE frame carries (Frame::meta). */
+  static uint32_t memo_hash(uint32_t a, uint32_t b) { return uint32_t(hash(a, b)); }
+
+  Tree memo_get(uint32_t h, uint32_t a, uint32_t b) {
+    const Memo &m = _memo[h & _memo_mask];
     if (m.a == a && m.b == b) { ++stats_counters.memo_hits; return m.r; }
     return 0; // no tree is index 0, so 0 is "miss"
   }
 
-  /** Record an entry, and double the memo once it has taken as many entries
-   * as it has slots, until it reaches its bound. */
-  void memo_put(uint32_t a, uint32_t b, uint32_t r) {
+  /** Record an entry whose memo_hash is `h`, and double the memo once it has
+   * taken as many entries as it has slots, until it reaches its bound. The
+   * memo only ever doubles, so the slot `h` picks stays the one hash(a, b)
+   * would pick now, whatever it has grown by since `h` was taken. */
+  void memo_put(uint32_t h, uint32_t a, uint32_t b, uint32_t r) {
     ++stats_counters.memo_puts;
-    _memo[hash(a, b) & _memo_mask] = {a, b, r};
+    _memo[h & _memo_mask] = {a, b, r};
     if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
   }
 
@@ -865,7 +918,7 @@ private:
     std::fill_n(_memo + half, half, Memo{0, 0, 0});
     _memo_mask = 2 * half - 1;
     for (Memo *m = _memo; m < _memo + half; ++m)
-      if (m->a && (hash(m->a, m->b) & half)) {
+      if (m->a && (memo_hash(m->a, m->b) & half)) {
         m[half] = *m;
         *m = {0, 0, 0};
       }
@@ -890,15 +943,24 @@ private:
    * does with every lookup made.
    */
   [[gnu::always_inline]] Tree recall(Tree a, Tree b, Frame *&top, Frame *limit, uint32_t steps) {
-    Cold &cold = _cold[uint32_t(hash(a, 0) >> 48)];
+    Cold &cold = _cold[cold_index(a)];
     if (cold.n >= MEMO_COLD && ++cold.n < MEMO_COLD + 16) return 0;
-    if (const Tree hit = memo_get(a, b)) {
+    const uint32_t h = memo_hash(a, b);
+    if (const Tree hit = memo_get(h, a, b)) {
       cold.n = 0;
       return hit;
     }
     cold.n = std::min(cold.n + 1, int(MEMO_COLD)); // a sampled miss counts afresh
-    push(top, limit, Frame(MEMOIZE, a, b, steps));
+    push(top, limit, Frame(MEMOIZE, a, b, steps, h));
     return 0;
+  }
+
+  /** The function's cold count: the top 16 bits of hash(a, 0), which is (P << 32 | P)
+   * for P = a * 0x7f4a7c15 mod 2^32 (the low word of the product is 0, the high
+   * one P), so the same 16 bits come out of one 32-bit multiply. */
+  static uint32_t cold_index(Tree a) {
+    static_assert(sizeof(_cold) / sizeof(Cold) == size_t(1) << 16, "cold_index yields 16 bits");
+    return (a * 0x7f4a7c15u) >> 16;
   }
 
   /** The tree a jets.hpp DAG denotes, read as dag2lean.mjs reads it: a line of
@@ -943,7 +1005,7 @@ private:
     }
     if (top != _frames && top[-1].tag() == MEMOIZE &&
         top[-1].arg1() == _skip_line && top[-1].arg2() == b)
-      memo_put(_skip_line, b, xs);
+      memo_put(memo_hash(_skip_line, b), _skip_line, b, xs);
     return xs;
   }
 
@@ -1157,7 +1219,7 @@ public:
   ~BasicEagerFastest() {
     munmap(_arena, ARENA_BYTES);
     munmap(_groups, MAX_GROUPS * sizeof(Group));
-    munmap(_nursery, NURSERY * sizeof(Tree));
+    munmap(_nursery, NURSERY * sizeof(Nurse));
     munmap(_nursed, NURSERY / 2 * sizeof(Tree));
     munmap(_young, ARENA_NODES / 8);
     munmap(_marks, ARENA_NODES / 8);
@@ -1526,8 +1588,8 @@ public:
           // so consecutive MEMOIZE frames all record the same normal form.
           // Steps that resolved in a handful of rules are cheaper to redo than
           // to let their entries evict a slower one from the memo.
-          if (uint32_t(steps) - f.meta() >= MEMO_MIN_STEPS)
-            memo_put(f.arg1(), f.arg2(), result);
+          if (((uint32_t(steps) - f.steps()) & 0xffffff) >= MEMO_MIN_STEPS)
+            memo_put(f.meta(), f.arg1(), f.arg2(), result);
           continue;
         }
         push(top, limit, Frame(APPLY_TO, result, 0)); // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
