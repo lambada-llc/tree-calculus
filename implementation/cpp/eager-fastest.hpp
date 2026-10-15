@@ -114,9 +114,22 @@
 //     slot carries that hash, so a flush reads neither the arena nor hashes.
 //     7.2% fewer instructions on the build's heaviest compile, with
 //     identical steps: the memo's hash is untouched (see hash()).
+//   — The frames: a DONE frame under what a call pushes, so that a pop never
+//     compares the top with the base; the tag in the low half of a frame's
+//     second word, so that a constant tag is an immediate store and an
+//     APPLY_TO frame's second word is 0 (the fusions onto it test one word);
+//     the pop chain in pop-frequency order; the memo's growth a countdown;
+//     the free-list allocation leaving `_due` alone until the list runs out.
+//     6.4% fewer instructions on the build's heaviest compile, the same
+//     steps and memo traffic.
 //
 // Measured and not taken, so that no one measures them again: 16-byte or
-// set-associative memo entries, an L1 front memo, a prefetch of the memo slot
+// set-associative memo entries, folding the MEMOIZE frame into the
+// result-only frame pushed over it (FORK_WITH, STEM, RETURN with the memo's
+// operands: one frame fewer on a third of the memoized steps, but the flag
+// that chooses the frame, the wider frame and the operands kept live across
+// rule (2) cost more than the frame saved — 2% more instructions, not 1%
+// fewer), an L1 front memo, a prefetch of the memo slot
 // at the top of a step (6-10% slower), memo regions per function (most
 // closures are looked up once: 2.8M of 3.2M on a compile), MEMO_MIN_STEPS and
 // MEMO_COLD sweeps, a smaller _cold table; growing the table 4x (more pages
@@ -200,6 +213,11 @@ private:
   // took twice the steps.
   static constexpr uint32_t MEMO_MIN_STEPS = 4;
 
+  /** Whether a step that pushed its MEMOIZE frame at step `meta` took
+   * MEMO_MIN_STEPS rules or more by `steps` now (0 for a step a jet
+   * answered, which pops the frame in the step that pushed it). */
+  static bool admitted(uint32_t pushed, uint64_t steps) { return ((uint32_t(steps) - pushed) & 0xffffff) >= MEMO_MIN_STEPS; }
+
   // How many lookups in a row may miss for one function before it stops being
   // looked up at all (see recall).
   static constexpr uint8_t MEMO_COLD = 64;
@@ -247,7 +265,14 @@ private:
   //
   // Every argument is a Tree the reduction still needs, which is what makes
   // this stack the collector's root set as well as the VM's.
-  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL, FORK_WITH, STEM, RETURN, FORK_RIGHT };
+  //   DONE:
+  //     the frame under everything an apply() call pushes, pushed on entry:
+  //     popping it is how the call knows it has given back everything it
+  //     pushed, so no pop compares the top with the base. Its arguments are 0.
+  //
+  // APPLY_TO is 0 so that an APPLY_TO frame's whole second word is 0, and
+  // the result-only tags are the ones at and above FORK_WITH.
+  enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL, DONE, FORK_WITH = 8, STEM, RETURN, FORK_RIGHT };
 
   // A frame is two 8-byte words, written whole and read back whole, because
   // it is usually popped within a few instructions of being pushed: a load
@@ -255,20 +280,21 @@ private:
   // Frame read back from its four 4-byte fields, say) waits for those stores
   // to retire instead — a stall on nearly every step.
   //
-  // The tag takes a byte; the rest of the low word's low half is a MEMOIZE
-  // frame's step counter at push (24 bits: the MEMO_MIN_STEPS test needs a
-  // difference of a few), and the high half of its high word the memo hash
-  // of (a, b), so that the put when it is popped neither hashes again nor
-  // loads anything but the frame.
+  // The arguments in the first word; in the second, the tag (a byte), a
+  // MEMOIZE frame's step counter at push (24 bits: the MEMO_MIN_STEPS test
+  // needs a difference of a few) and, in its high half, the memo hash of
+  // (a, b), so that the put when it is popped neither hashes again nor loads
+  // anything but the frame. A frame of a constant tag is a store of each
+  // word, the second an immediate, and an APPLY_TO frame's second word is 0.
   struct Frame {
     uint64_t lo, hi;
     Frame() = default;
-    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2, uint32_t steps = 0, uint32_t meta = 0)
-        : lo(tag | uint64_t(steps & 0xffffff) << 8 | uint64_t(arg1) << 32), hi(arg2 | uint64_t(meta) << 32) {}
-    FrameTag tag() const { return FrameTag(uint8_t(lo)); }
-    uint32_t arg1() const { return lo >> 32; }
-    uint32_t arg2() const { return uint32_t(hi); } // 0 on an APPLY_TO frame, which mark() ignores
-    uint32_t steps() const { return uint32_t(lo) >> 8; } // MEMOIZE: low bits of the step counter at push
+    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2 = 0, uint32_t steps = 0, uint32_t meta = 0)
+        : lo(arg1 | uint64_t(arg2) << 32), hi(tag | uint64_t(steps & 0xffffff) << 8 | uint64_t(meta) << 32) {}
+    FrameTag tag() const { return FrameTag(uint8_t(hi)); }
+    uint32_t arg1() const { return uint32_t(lo); }
+    uint32_t arg2() const { return lo >> 32; } // 0 where the frame has no second argument, which mark() ignores
+    uint32_t steps() const { return uint32_t(hi) >> 8; } // MEMOIZE: low bits of the step counter at push
     uint32_t meta() const { return hi >> 32; }           // MEMOIZE: low bits of memo_hash(a, b)
   };
 
@@ -460,7 +486,7 @@ private:
   Memo *const _memo = static_cast<Memo *>(map_pages(MAX_MEMO * sizeof(Memo)));
   size_t _memo_mask = 0;
   size_t _memo_cap = 0;  // the bound (see size_memo)
-  size_t _memo_puts = 0; // since it last grew (see memo_put)
+  size_t _memo_room = 0; // puts until it next grows (see memo_put)
 
   // Per function (the `a` of apply(a, b), by hash), how many of its lookups in
   // a row have missed, up to MEMO_COLD, and past it how many it has skipped
@@ -536,17 +562,20 @@ private:
    * a step tests one byte rather than loads all three. */
   void update_due() { _due = !_free && _head >= _budget; }
 
-  /** A node, from the free list or the high-water mark. Not interned. */
+  /** A node, from the free list or the high-water mark. Not interned. _due
+   * was false while the free list had a node, so it is recomputed only once
+   * the list runs out, or the high-water mark moves. */
   Tree alloc(uint32_t u, uint32_t v) {
     Tree result;
     if (_free) {
       result = _free;
       _free = _arena[_free].v;
+      if (EAGER_UNLIKELY(!_free)) update_due();
     } else {
       result = _head++;
+      update_due();
     }
     _arena[result] = {u, v};
-    update_due();
     return _newest = result;
   }
 
@@ -905,7 +934,14 @@ private:
   void memo_put(uint32_t h, uint32_t a, uint32_t b, uint32_t r) {
     ++stats_counters.memo_puts;
     _memo[h & _memo_mask] = {a, b, r};
-    if (++_memo_puts > _memo_mask && _memo_mask + 1 < _memo_cap) grow_memo();
+    if (EAGER_UNLIKELY(--_memo_room == 0)) memo_full();
+  }
+
+  /** As many puts as the memo has slots since it last grew: grow it, or at
+   * its bound, wait — a raised bound lets it grow at the very next put. */
+  [[gnu::noinline]] void memo_full() {
+    if (_memo_mask + 1 < _memo_cap) grow_memo();
+    else _memo_room = SIZE_MAX;
   }
 
   /**
@@ -922,7 +958,7 @@ private:
         m[half] = *m;
         *m = {0, 0, 0};
       }
-    _memo_puts = 0;
+    _memo_room = _memo_mask + 1;
   }
 
   /**
@@ -1003,8 +1039,7 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (top != _frames && top[-1].tag() == MEMOIZE &&
-        top[-1].arg1() == _skip_line && top[-1].arg2() == b)
+    if (top[-1].tag() == MEMOIZE && top[-1].arg1() == _skip_line && top[-1].arg2() == b)
       memo_put(memo_hash(_skip_line, b), _skip_line, b, xs);
     return xs;
   }
@@ -1131,7 +1166,7 @@ private:
     _memo_cap = memo_cap(_budget);
     std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
     _memo_mask = MIN_TABLE - 1;
-    _memo_puts = 0;
+    _memo_room = MIN_TABLE;
     std::fill(std::begin(_cold), std::end(_cold), Cold{0});
   }
 
@@ -1204,6 +1239,7 @@ private:
   void raise_budget(size_t factor, size_t bound) {
     _budget = std::min(_budget * factor, bound);
     _memo_cap = memo_cap(_budget);
+    if (_memo_room > _memo_mask + 1) _memo_room = 1; // the memo was waiting at its bound
   }
 
 public:
@@ -1469,6 +1505,7 @@ public:
     Tree result;
 
     try {
+      push(top, limit, Frame(DONE, 0)); // popped last: see dispatch
     reduce: // ---- evaluate apply(a, b) ----
       {
         ++steps;
@@ -1506,19 +1543,19 @@ public:
           const Node xn = arena[un.u];
           if (EAGER_LIKELY(xn.v && !arena[xn.u].u)) { // u' = △△x₂: apply(x₂, apply(y, b))
             const Node x2 = arena[xn.v];
-            const bool onto_apply_to = top != base && top[-1].tag() == APPLY_TO;
+            // top[-1] is at least the DONE frame; an APPLY_TO frame's second word is 0.
             if (!x2.u) {                                                         //   x₂ = △:   △(y b)
-              if (onto_apply_to) top[-1] = Frame(FORK_RIGHT, top[-1].arg1(), 0); //     then △(y b)e
-              else push(top, limit, Frame(STEM, 0, 0));
+              if (top[-1].hi == APPLY_TO) top[-1].hi = FORK_RIGHT;                //     then △(y b)e
+              else push(top, limit, Frame(STEM, 0));
             } else if (!x2.v) {                                                  //   x₂ = △x₃: △x₃(y b)
-              if (onto_apply_to && x2.u == 1) --top;                             //     x₃ = △, then (y b)
-              else push(top, limit, Frame(FORK_WITH, x2.u, 0));
-            } else if (!arena[x2.u].u) push(top, limit, Frame(RETURN, x2.v, 0)); //   x₂ = △△z: z
-            else push(top, limit, Frame(CALL, xn.v, 0));
+              if (x2.u == 1 && top[-1].hi == APPLY_TO) --top;                     //     x₃ = △, then (y b)
+              else push(top, limit, Frame(FORK_WITH, x2.u));
+            } else if (!arena[x2.u].u) push(top, limit, Frame(RETURN, x2.v));    //   x₂ = △△z: z
+            else push(top, limit, Frame(CALL, xn.v));
           } else if (!xn.u) {                          // u' = △:  △b(y b)
-            push(top, limit, Frame(FORK_WITH, b, 0));
+            push(top, limit, Frame(FORK_WITH, b));
           } else if (!xn.v && !arena[xn.u].u) {        // u' = △△: b
-            push(top, limit, Frame(RETURN, b, 0));
+            push(top, limit, Frame(RETURN, b));
           } else {
             push(top, limit, Frame(COMPUTE_AND_APPLY, un.u, b));
           }
@@ -1546,7 +1583,7 @@ public:
             if ((result = skip_line(b, top))) goto dispatch;
             goto reduce;
           }
-          push(top, limit, Frame(APPLY_TO, bn.v, 0));
+          push(top, limit, Frame(APPLY_TO, bn.v));
           a = y;
           b = bn.u;
           goto reduce;
@@ -1555,27 +1592,16 @@ public:
 
     dispatch: // ---- feed the result to the pending continuation ----
       // The frames below `base` belong to an apply() further out; this one is
-      // done when it has given back everything it pushed.
-      while (top != base) {
+      // done when it pops the DONE frame it pushed on entry, so no pop compares
+      // the top with the base.
+      for (;;) {
         // Popped over the build's heaviest compile: APPLY_TO 23%, MEMOIZE 20%,
-        // FORK_WITH 18%, COMPUTE_AND_APPLY 14%, CALL 13%, STEM 7%, RETURN 4%.
-        // Compared one at a time, on purpose (the asm is a barrier to the
-        // compiler's if-to-switch): as a switch, the tag was an indirect jump,
-        // mispredicted two times in three.
+        // FORK_WITH 18%, COMPUTE_AND_APPLY 14%, CALL 13%, STEM 7%, RETURN 4%,
+        // and compared in that order, one at a time, on purpose (the asm is a
+        // barrier to the compiler's if-to-switch): as a switch, the tag was
+        // an indirect jump, mispredicted two times in three.
         const Frame f = *--top;
         uint32_t tag = f.tag();
-        if (tag >= FORK_WITH) { // the result-only frames: the rule fn takes with r
-          asm("" : "+r"(tag));
-          result = tag == FORK_WITH ? fork(f.arg1(), result) : tag == STEM ? stem(result)
-                 : tag == RETURN ? f.arg1() : fork(result, f.arg1());
-          continue;
-        }
-        asm("" : "+r"(tag));
-        if (tag == CALL) {
-          a = f.arg1();
-          b = result;
-          goto reduce;
-        }
         if (tag == APPLY_TO) {
           // `result` is unreachable from any root for exactly as long as it
           // takes to become `a`, which allocates nothing.
@@ -1583,19 +1609,34 @@ public:
           b = f.arg1();
           goto reduce;
         }
+        asm("" : "+r"(tag));
+        if (tag >= FORK_WITH) { // the result-only frames: the rule fn takes with r
+          asm("" : "+r"(tag));
+          result = tag == FORK_WITH ? fork(f.arg1(), result) : tag == STEM ? stem(result)
+                 : tag == RETURN ? f.arg1() : fork(result, f.arg1());
+          continue;
+        }
+        asm("" : "+r"(tag));
         if (tag == MEMOIZE) {
           // A tail step (`b = △d`) shares its result with the step it became,
           // so consecutive MEMOIZE frames all record the same normal form.
           // Steps that resolved in a handful of rules are cheaper to redo than
           // to let their entries evict a slower one from the memo.
-          if (((uint32_t(steps) - f.steps()) & 0xffffff) >= MEMO_MIN_STEPS)
-            memo_put(f.meta(), f.arg1(), f.arg2(), result);
+          if (admitted(f.steps(), steps)) memo_put(f.meta(), f.arg1(), f.arg2(), result);
           continue;
         }
-        push(top, limit, Frame(APPLY_TO, result, 0)); // COMPUTE_AND_APPLY: apply(apply(fn, arg), result)
-        a = f.arg1();
-        b = f.arg2();
-        goto reduce;
+        if (tag == COMPUTE_AND_APPLY) {
+          push(top, limit, Frame(APPLY_TO, result)); // apply(apply(fn, arg), result)
+          a = f.arg1();
+          b = f.arg2();
+          goto reduce;
+        }
+        if (tag == CALL) {
+          a = f.arg1();
+          b = result;
+          goto reduce;
+        }
+        break; // DONE: top is back at base
       }
       _top = base;
       stats_counters.steps = steps;
