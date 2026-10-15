@@ -124,38 +124,74 @@ export class DagModule {
   }
 
   /**
-   * Keep only the definitions `symbols` are built from, dropping everything else
-   * the module happens to carry. Linking a library produces one big module; this
-   * takes a value back out of it — or a set of them, sharing what they share
-   * rather than repeating it, which is why it is not several extracts.
+   * Keep only the definitions `symbols` are built from, as a DAG that stands on
+   * its own: canonical, each symbol named, and ended by its value when there is
+   * just one. Linking a library produces one big module; this takes a value
+   * back out of it — or a set of them, sharing what they share rather than
+   * repeating it, which is why it is not several extracts.
    *
    * Naming what stays is also how one drops something: what only the rest
    * reached is gone. No `drop` needed.
    *
-   * One backwards pass suffices: a reference resolves to a definition above it,
-   * so by the time a line is reached, every line that could need it has been
-   * seen. Names are kept as they are — a reference by name says which symbol was
-   * used, which an id no longer does.
+   * Nodes are numbered in the order a walk from the symbols, taken in sorted
+   * order, finishes their definitions — each after what it refers to — rather
+   * than in the order the module has them. So what comes out depends on what
+   * the symbols are built from and how that is written, not on where in the
+   * module it sat: nothing else the module defines, wherever it is and whatever
+   * uses it, changes a byte. Names two-word lines bind are kept as they are — a
+   * reference by name says which symbol was used, which an id no longer does —
+   * and `as_written` shares nodes as `canonicalize` does with it.
+   *
+   * That order is not the one the module's text was written for: linked
+   * modules each number their nodes from scratch, and a name can be bound
+   * twice. So the definitions are numbered while they still hold their boxes,
+   * never read back from text, and each symbol is named again at the end —
+   * the walk may have finished an earlier binding of its name after its own,
+   * and a three-word line names nothing once it is numbered.
    */
-  extract(...symbols: string[]): DagModule {
-    const needed = new Set<Box>();
-    for (const symbol of symbols) {
-      const root = this.definition(symbol);
-      if (!root) throw new Error(`unknown symbol: ${symbol}`);
-      needed.add(root);
+  extract(symbols: string[], { as_written = false }: { as_written?: boolean } = {}): DagModule {
+    const definitions = new Map<Box, Line>();
+    const latest = new Map<string, Box>();
+    for (const line of this.lines) {
+      if (line.length !== 2 && line.length !== 3) continue;
+      definitions.set(line[0], line);
+      latest.set(line[0].symbol, line[0]);
+    }
+    const names = [...new Set(symbols)].sort();
+    const roots = names.map(name => {
+      if (!is_symbol_name(name)) throw new Error(`${name} is an id, which names nothing once renumbered`);
+      const root = latest.get(name);
+      if (!root) throw new Error(`unknown symbol: ${name}`);
+      return root;
+    });
+
+    const kept = new DagModule();
+    const reached = new Set<Box>();
+    for (const root of roots) {
+      if (reached.has(root)) continue;
+      reached.add(root);
+      // Depth first, by hand: a definition can sit thousands of references deep.
+      const stack = [{ line: definitions.get(root)!, next: 1 }];
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        if (top.next === top.line.length) {
+          kept.lines.push(top.line);
+          stack.pop();
+          continue;
+        }
+        const child = top.line[top.next++];
+        const line = definitions.get(child);
+        if (!line || reached.has(child)) continue;
+        reached.add(child);
+        stack.push({ line, next: 1 });
+      }
     }
 
-    const kept: Line[] = [];
-    for (let i = this.lines.length - 1; i >= 0; i--) {
-      const line = this.lines[i];
-      if (line.length === 1 || !needed.has(line[0])) continue;
-      for (let j = 1; j < line.length; j++) needed.add(line[j]);
-      kept.push(line);
-    }
-
-    const out = new DagModule();
-    out.lines = kept.reverse();
-    return out;
+    roots.forEach((root, i) => kept.lines.push([box(names[i]), root]));
+    // A DAG ends in the name of its value; a set of them has none, so it ends
+    // in nothing and is read as a library.
+    if (roots.length === 1) kept.lines.push([roots[0]]);
+    return kept.canonicalize({ as_written });
   }
 
   /**
@@ -193,8 +229,8 @@ export class DagModule {
    * A definition belongs to a root when that root is the only thing that
    * reaches it. Anything reached by two roots, or by a name outside them, stays
    * in `shared` — so concatenating `shared` with any one root's part gives back
-   * exactly what `extract` would have produced for that root, and no line is
-   * ever in two parts at once.
+   * every line `extract` would have kept for that root, and no line is ever in
+   * two parts at once.
    *
    * What counts as "outside" is the module's own notion of an interface: a
    * symbolic name is something a reader can ask for, a numeric id is internal
@@ -207,11 +243,12 @@ export class DagModule {
    * its own cost, at a time of the caller's choosing, and without repeating
    * whatever two roots have in common.
    *
-   * One backwards pass suffices, for the reason `extract` gives. Shadowed
-   * definitions are renamed first: a part is read after all of `shared`, so a
-   * name `shared` goes on to bind again would mean the later one by then. That
-   * rewrites this module in place — the parts hand back its own lines, so there
-   * was never a copy to rename instead.
+   * One backwards pass suffices: a reference resolves to a definition above it,
+   * so by the time a line is reached, every line that could claim it has been
+   * seen. Shadowed definitions are renamed first: a part is read after all of
+   * `shared`, so a name `shared` goes on to bind again would mean the later one
+   * by then. That rewrites this module in place — the parts hand back its own
+   * lines, so there was never a copy to rename instead.
    */
   partition(roots: string[]): { shared: DagModule; exclusive: Map<string, DagModule> } {
     this.disambiguate();
@@ -319,27 +356,59 @@ export class DagModule {
       for (const b of line)
         if (b.symbol === LEAF) ids.set(b, LEAF_ID);
 
+    // What a definition bound to something this module does not define stands
+    // for: that thing, by its own name.
+    const imports = new Map<Box, Box>();
+
     let next_id = 1;
     const forks = new Map<string, number>();
     const named = new Set<string>();
-    const aliased = new Map<string, number | undefined>();
+    // What each name means as the lines written so far bind it, as `key` says.
+    const aliased = new Map<string, string>();
     const out = new DagModule();
 
     // How a reference is written: the leaf always as △, then any name already
     // defined above, then the node's id. As written, a name comes first even
-    // for the leaf: `:t` bound to △ is still written `:t`.
+    // for the leaf: `:t` bound to △ is still written `:t`. A name is used only
+    // while the last line binding it binds this node: a box can be spelled like
+    // a name that, by then, means something else.
     const ref = (b: Box): string => {
       const id = ids.get(b);
-      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol);
+      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol) && aliased.get(b.symbol) === key(b);
       if (id === LEAF_ID && !(as_written && by_name)) return LEAF;
       if (by_name) return b.symbol;
-      return id === undefined ? b.symbol : String(id);
+      if (id !== undefined) return String(id);
+      // Nothing here defines it, so only its own name can say what it is —
+      // and not once a line above has bound that name to something else.
+      const outside = imports.get(b) ?? b;
+      if (aliased.has(outside.symbol) && aliased.get(outside.symbol) !== key(b))
+        throw new Error(`${outside.symbol} refers past this module, but is bound above its use`);
+      return outside.symbol;
     };
-    // What sharing is decided on. Unresolved references — symbols this module
-    // does not define — can only be told apart by name.
+    // What a box means, and so what sharing is decided on. Unresolved
+    // references — symbols this module does not define — can only be told
+    // apart by name.
     const key = (b: Box): string => {
       const id = ids.get(b);
-      return id === undefined ? `?${b.symbol}` : String(id);
+      return id === undefined ? `?${(imports.get(b) ?? b).symbol}` : String(id);
+    };
+
+    // Write `name written`, which binds the name for every line below — unless
+    // the lines above already bind it the same way. Only a name a two-word line
+    // gave is then written in references: a label's three-word line marks its
+    // node rather than naming it to the lines that use it.
+    const bind = (name: string, meaning: string, written: string, nameable: boolean) => {
+      const previous = aliased.get(name);
+      if (previous === meaning) return; // already said
+      if (previous === undefined) {
+        if (nameable && is_symbol_name(name)) named.add(name);
+      } else {
+        // Redefined to something else — the name is no longer a stable
+        // reference, so later lines must use ids.
+        named.delete(name);
+      }
+      aliased.set(name, meaning);
+      out.lines.push([box(name), box(written)]);
     };
 
     for (const line of this.lines) {
@@ -356,29 +425,21 @@ export class DagModule {
           ids.set(head, id);
           out.lines.push(line_out);
         }
-        // Labels name a node the caller wants to find again; keep them.
+        // Labels name a node the caller wants to find again; keep them, as the
+        // two-word line that says so.
         if (is_label(head.symbol)) {
           const id = ids.get(head)!;
-          out.lines.push([box(head.symbol), box(id === LEAF_ID ? LEAF : String(id))]);
+          bind(head.symbol, key(head), id === LEAF_ID ? LEAF : String(id), false);
         }
 
       } else if (line.length === 2) {
         const [head, target] = line;
         const target_id = ids.get(target);
         if (target_id !== undefined) ids.set(head, target_id);
-        const id = ids.get(head);
-        const name = head.symbol;
-        const previous = aliased.get(name);
-        if (previous !== undefined && previous === id) continue; // already said
-        if (previous === undefined) {
-          if (is_symbol_name(name)) named.add(name);
-        } else {
-          // Redefined to something else — the name is no longer a stable
-          // reference, so later lines must use ids.
-          named.delete(name);
-        }
-        aliased.set(name, id);
-        out.lines.push([box(name), box(ref(target))]);
+        else imports.set(head, imports.get(target) ?? target);
+        // The target is written as the lines above have it: this one binds its
+        // name only below itself, which matters when the two are spelled alike.
+        bind(head.symbol, key(head), ref(target), true);
 
       } else if (line.length === 1) {
         out.lines.push([box(ref(line[0]))]);

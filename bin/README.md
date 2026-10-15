@@ -72,7 +72,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `link <file>...` | Concatenate modules in dependency order. Rejects duplicate exports and dependency cycles. |
 | `canonicalize [file]` | Hash-cons into globally unique numeric ids. |
 | `qualify --prefix <p> [file]` | Namespace a module's exports under `<p>`. Definitions that are not exported are made unique but stay private. |
-| `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several share what they share, rather than repeating it. |
+| `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several share what they share, rather than repeating it. It comes out canonical, numbered by a walk from the symbols, so from `link` output it depends only on what they are built from. |
 | `eval [file]` | Evaluate a module and print one of its symbols. |
 | `interface [file]` | List what a module exports and what it needs. |
 
@@ -83,6 +83,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `--matching <regex>` | `extract`'s symbols by pattern; `^Nat\.` is a module. |
 | `--except <regex>` | The same, by what they are not. |
 | `--format <f>` | Output format for `eval`, as for `main.js`. Defaults to `term`. |
+| `--as-written` | `canonicalize` and `extract` share a node only with one written the same way, so nodes built through different names stay apart, each attributed to the name it was built through. |
 
 ## Examples
 
@@ -91,11 +92,14 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 # then put them together and evaluate one of the results.
 $ ./dag.js qualify --prefix Bool. bool.dag > .bool.dag
 $ ./dag.js qualify --prefix Nat. nat.dag > .nat.dag
-$ ./dag.js link .bool.dag .nat.dag | ./dag.js canonicalize > bundle.dag
+$ ./dag.js link .bool.dag .nat.dag > linked.dag
+$ ./dag.js canonicalize linked.dag > bundle.dag
 $ ./dag.js eval --symbol Bool.not --format term bundle.dag
 
-# Take one value back out of the bundle, as a DAG that stands on its own.
-$ ./dag.js extract --symbol Bool.not bundle.dag | ./dag.js canonicalize > not.dag
+# Take one value back out, as a DAG that stands on its own. Taken from the
+# linked modules rather than the bundle, it depends only on what it is built
+# from, so nothing else in them changes its bytes.
+$ ./dag.js extract --symbol Bool.not linked.dag > not.dag
 
 # Or several at once, as a library to read other things against.
 $ ./dag.js extract --symbol Bool.not --symbol Nat.add bundle.dag > pair.dag
