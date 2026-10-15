@@ -83,10 +83,10 @@
 // memo without hash-consing never sees the same pair of indices twice. Together
 // they take the same measurement from exponential to flat.
 //
-// Marks live in the top bit of the left field, so an index is 31 bits and the
-// arena is sized to match: 2^31 nodes, 16 GiB. Nothing moves, so a Tree stays
-// the index it was across a collection — which is what lets every Tree a caller
-// is holding survive one without being registered anywhere.
+// An index is 31 bits and the arena is sized to match: 2^31 nodes, 16 GiB.
+// Nothing moves, so a Tree stays the index it was across a collection — which
+// is what lets every Tree a caller is holding survive one without being
+// registered anywhere.
 //
 // EagerGraphNilMmap32Jets also answers lambada's skip_line natively, a jet
 // (implementation/lean/Cpp/README.md); EagerGraphNilMmap32 is the same code
@@ -123,10 +123,6 @@ public:
   using Tree = uint32_t;
 
 private:
-  // The top bit of the left field is the collector's mark, cleared before a
-  // collection returns. An index is therefore 31 bits.
-  static constexpr uint32_t MARK = 0x80000000u;
-  static constexpr uint32_t IDX = 0x7fffffffu;
   static constexpr size_t ARENA_NODES = size_t(1) << 31;
   static constexpr size_t ARENA_BYTES = ARENA_NODES * 8;
 
@@ -264,6 +260,16 @@ private:
   }
   std::vector<Tree> _roots;
   std::vector<Tree> _grey; // mark stack, reused across collections
+
+  // The collector's marks: a bit per index, set by mark() and cleared again by
+  // the sweep, so that between collections every word is 0. Beside the nodes
+  // rather than in them (the top bit of the left field, once): the live set is
+  // a percent or so of the arena a collection walks — a module's bindings
+  // under the garbage of normalizing them — and a bit per node is 64 times
+  // denser than the node, so the memo filter's three lookups an entry hit
+  // cache where they missed into the arena, and the sweep reads a word to pass
+  // 64 nodes, and writes only the dead ones.
+  uint64_t *const _marks = static_cast<uint64_t *>(map_pages(ARENA_NODES / 8));
 
   // Hash-consing: open addressing over node indices, keyed by the (u, v) of the
   // node a slot names, so the keys are the arena.
@@ -586,13 +592,7 @@ private:
    * its helpers the compiler inlined then hung on any edit to it, for as much
    * as 13% more instructions a step. */
   [[gnu::noinline]] void rebuild_interned(size_t groups) {
-    // Whole lines, slots and all: a memset that writes every byte of a line
-    // never has to read it first. Only as far as a re-lay has ever written:
-    // above that the mapping is untouched, every byte of it 0 — EMPTY.
-    std::memset(_groups, EMPTY, std::min(groups, _groups_touched) * sizeof(Group));
-    _groups_touched = std::max(_groups_touched, groups);
-    _groups_mask = groups - 1;
-    _interned_count = 0;
+    relay_interned(groups, false);
     empty_nursery();
     // A swept node is {0, next-free}: the leaf is the only live node whose left
     // field is 0, and it is at index 1, below where interning starts.
@@ -605,6 +605,49 @@ private:
     insert_live(2, _run + 1);
     insert_live(_run_end + 1, _head);
   }
+
+  // Lines written whole, past the cache (SSE2's non-temporal stores): a
+  // regular store of a line reads it first, and the lines are what the stores
+  // then cost; a table re-laid after a collection, or the arena swept, is far
+  // more than any cache holds, and what the next thing to touch them wants is
+  // not what is there. Below STREAM_MIN a memset, which keeps it in the cache.
+  static constexpr size_t STREAM_MIN = size_t(8) << 20;
+  static void zero_lines(void *p, size_t bytes) {
+#ifdef __SSE2__
+    if (bytes >= STREAM_MIN) {
+      __m128i *q = static_cast<__m128i *>(p);
+      const __m128i z = _mm_setzero_si128();
+      for (size_t i = 0, n = bytes / 16; i < n; i += 4) {
+        _mm_stream_si128(q + i, z);
+        _mm_stream_si128(q + i + 1, z);
+        _mm_stream_si128(q + i + 2, z);
+        _mm_stream_si128(q + i + 3, z);
+      }
+      _mm_sfence();
+      return;
+    }
+#endif
+    std::memset(p, 0, bytes);
+  }
+
+  /** Empty the table at `groups` groups, for a re-lay to fill — past the
+   * cache if `stream`: after a collection, where a percent of what was in it
+   * goes back in; grown between collections, all of it does, and a table the
+   * cache holds is where those inserts find it. */
+  void relay_interned(size_t groups, bool stream) {
+    // Whole lines, slots and all: a store that writes every byte of a line
+    // never has to read it first. Only as far as a re-lay has ever written:
+    // above that the mapping is untouched, every byte of it 0 — EMPTY.
+    static_assert(EMPTY == 0, "a zeroed line is an empty group");
+    const size_t bytes = std::min(groups, _groups_touched) * sizeof(Group);
+    if (stream) zero_lines(_groups, bytes); else std::memset(_groups, EMPTY, bytes);
+    _groups_touched = std::max(_groups_touched, groups);
+    _groups_mask = groups - 1;
+    _interned_count = 0;
+  }
+
+  /** Whether `at` is a cell of the run, which the table leaves out. */
+  bool in_run_range(Tree at) const { return at > _run && at <= _run_end; }
 
   /** The cell of the run that is (u, v), or 0: the one above v, if v is a tail in the run. */
   Tree in_run(uint32_t u, uint32_t v) const {
@@ -858,50 +901,89 @@ private:
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
    * are permanent (padding and the shared leaf), so they count as live. */
   bool marked(Tree at) const {
-    return at < 2 || (_arena[at].u & MARK);
+    return at < 2 || (_marks[at >> 6] >> (at & 63) & 1);
   }
 
-  /** Set MARK on everything reachable from x. Iterative: the live set is deep. */
+  /** Mark everything reachable from x, counting it in _live. Iterative: the
+   * live set is deep. */
   void mark(Tree x) {
     _grey.push_back(x);
     while (!_grey.empty()) {
       const Tree at = _grey.back();
       _grey.pop_back();
       // Index 0 is padding and index 1 the shared leaf: neither is ever swept,
-      // so neither may be marked — a mark left on one would outlive the
-      // collection that set it, and be read back as part of an index. It is
-      // also what lets an unused frame argument be marked as a plain 0.
+      // so neither is marked. It is also what lets an unused frame argument be
+      // marked as a plain 0.
       if (at < 2) continue;
-      Node &n = _arena[at];
-      if (n.u & MARK) continue;
-      n.u |= MARK;
-      _grey.push_back(n.u & IDX);
+      uint64_t &word = _marks[at >> 6];
+      const uint64_t bit = uint64_t(1) << (at & 63);
+      if (word & bit) continue;
+      word |= bit;
+      ++_live;
+      const Node n = _arena[at];
+      _grey.push_back(n.u);
       if (n.v) _grey.push_back(n.v);
     }
   }
 
   /**
-   * Clear every mark, and chain what was not marked onto the free list.
+   * Chain every unmarked node onto the free list, put every marked one but the
+   * run's cells in the table, which relay_interned() must have emptied with
+   * room for them, and clear the marks: one pass over the arena, where it was a
+   * sweep and then rebuild_interned's scan of what the sweep had left — each
+   * reading every node, for the percent of them that are live.
    *
-   * The list is rebuilt from scratch, so nodes freed by an earlier sweep simply
-   * turn up again as unmarked — no separate "already free" state to track.
+   * The free list is rebuilt from scratch, so nodes freed by an earlier sweep
+   * simply turn up again as unmarked — no separate "already free" state to
+   * track. Downwards, so the list comes out in ascending order and allocation
+   * walks the arena forwards rather than backwards. A word of marks at a time:
+   * a word of none is 64 nodes written without being read, and the nodes of a
+   * word with some have the lines of their groups asked for together, before
+   * any is inserted — the live nodes are dense where they are (a module's
+   * bindings, interned one after another), so that is a batch of up to 64
+   * misses in flight, where rebuild_interned's scan keeps AHEAD.
    */
-  void sweep() {
-    _free = 0;
-    _newest = ~0u;
-    _live = 0;
-    // Downwards, so the list comes out in ascending order and allocation walks
-    // the arena forwards rather than backwards.
-    for (Tree at = _head; at-- > 2;) {
-      Node &n = _arena[at];
-      if (n.u & MARK) {
-        n.u &= ~MARK;
-        ++_live;
-      } else {
-        n = {0, _free};
-        _free = at;
+  void sweep_and_insert() {
+    Node *const arena = _arena;
+    const Tree head = _head;
+    Tree free = 0;
+    for (size_t w = (head + 63) >> 6; w-- > 0;) {
+      const uint64_t live = _marks[w];
+      _marks[w] = 0;
+      const Tree base = Tree(w << 6);
+      const Tree lo = std::max(base, Tree(2)); // 0 and 1 are never swept
+      const Tree hi = Tree(std::min<size_t>(base + 64, head));
+      if (!live) {
+#ifdef __SSE2__
+        if (lo == base && hi == base + 64) { // a whole block: 8 lines, streamed
+          __m128i *line = reinterpret_cast<__m128i *>(arena + base);
+          for (Tree at = base; at < base + 64; at += 2, ++line) // nodes at, at + 1
+            _mm_stream_si128(line, _mm_set_epi32(int(at + 2 < base + 64 ? at + 2 : free), 0, int(at + 1), 0));
+          free = base;
+          continue;
+        }
+#endif
+        for (Tree at = hi; at-- > lo;) { arena[at] = {0, free}; free = at; }
+        continue;
+      }
+      for (uint64_t m = live; m; m &= m - 1) {
+        const Tree at = base + Tree(__builtin_ctzll(m));
+        if (!in_run_range(at)) prefetch_group(at);
+      }
+      for (Tree at = hi; at-- > lo;) {
+        if (live >> (at - base) & 1) {
+          if (!in_run_range(at)) insert_interned(at);
+        } else {
+          arena[at] = {0, free};
+          free = at;
+        }
       }
     }
+#ifdef __SSE2__
+    _mm_sfence();
+#endif
+    _free = free;
+    _newest = ~0u;
   }
 
   void map_arena() {
@@ -1001,6 +1083,7 @@ public:
     munmap(_nursery, NURSERY * sizeof(Tree));
     munmap(_nursed, NURSERY / 2 * sizeof(Tree));
     munmap(_young, ARENA_NODES / 8);
+    munmap(_marks, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
     munmap(_frames, MAX_FRAMES * sizeof(Frame));
   }
@@ -1067,28 +1150,27 @@ public:
    * cache, so re-earning its entries is the cheaper correctness.
    */
   [[gnu::noinline]] void collect() {
+    _live = 0;
     for (Tree root : _roots) mark(root);
     for (const Frame *f = _frames; f != _top; ++f) { // a reduction in progress is live
       mark(f->arg1());
       mark(f->arg2());
     }
     if constexpr (JETS) mark(_skip_line), mark(_newline);
-    // Between mark and sweep is the one moment liveness is written on the
-    // nodes themselves, which is what lets the memo be filtered rather than
-    // dropped: nothing moves, so an entry whose operands and result all
-    // survived still says exactly what it said, and an entry any of whose
-    // nodes is about to be swept must go — the index may be reused. What the
-    // filter keeps is reduction work; re-earning it was the old cost of every
-    // collection.
-    for (Memo *m = _memo; m <= _memo + _memo_mask; ++m) {
+    // Between mark and sweep is the one moment liveness is written down, which
+    // is what lets the memo be filtered rather than dropped: nothing moves, so
+    // an entry whose operands and result all survived still says exactly what
+    // it said, and an entry any of whose nodes is about to be swept must go —
+    // the index may be reused. What the filter keeps is reduction work;
+    // re-earning it was the old cost of every collection.
+    for (Memo *m = _memo, *const end = _memo + _memo_mask + 1; m != end; ++m) {
       if (!m->a) continue;
       if (marked(m->a) && marked(m->b) && marked(m->r)) continue;
       *m = {0, 0, 0};
     }
     // Swept indices will be reused by other functions.
     std::fill(std::begin(_cold), std::end(_cold), Cold{0});
-    sweep();
-    while (_run_end > _run && !_arena[_run_end].u) --_run_end; // what survived of the run
+    while (_run_end > _run && !marked(_run_end)) --_run_end; // what survived of the run
     if (_run_end == _run) _run = _run_end = 0;
     ++stats_counters.gcs;
     stats_counters.gc_marked += _live;
@@ -1099,7 +1181,9 @@ public:
     // does not fit: the nursery's nodes go in here too, and nothing made room
     // for them as they went in. Sized by what goes in: _live less the run's
     // cells, which stay out (and after the trim above are all live).
-    rebuild_interned(capacity_for(_live - (_run_end - _run)));
+    relay_interned(capacity_for(_live - (_run_end - _run)), true);
+    sweep_and_insert();
+    empty_nursery();
     update_due();
   }
 
