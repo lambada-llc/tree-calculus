@@ -417,39 +417,75 @@ var DagModule = class _DagModule {
     return null;
   }
   /**
-   * Keep only the definitions `symbols` are built from, dropping everything else
-   * the module happens to carry. Linking a library produces one big module; this
-   * takes a value back out of it — or a set of them, sharing what they share
-   * rather than repeating it, which is why it is not several extracts.
+   * Keep only the definitions `symbols` are built from, as a DAG that stands on
+   * its own: canonical, each symbol named, and ended by its value when there is
+   * just one. Linking a library produces one big module; this takes a value
+   * back out of it — or a set of them, sharing what they share rather than
+   * repeating it, which is why it is not several extracts.
    *
    * Naming what stays is also how one drops something: what only the rest
    * reached is gone. No `drop` needed.
    *
-   * One backwards pass suffices: a reference resolves to a definition above it,
-   * so by the time a line is reached, every line that could need it has been
-   * seen. Names are kept as they are — a reference by name says which symbol was
-   * used, which an id no longer does.
+   * Nodes are numbered in the order a walk from the symbols, taken in sorted
+   * order, finishes their definitions — each after what it refers to — rather
+   * than in the order the module has them. So what comes out depends on what
+   * the symbols are built from and how that is written, not on where in the
+   * module it sat: nothing else the module defines, wherever it is and whatever
+   * uses it, changes a byte. Names two-word lines bind are kept as they are — a
+   * reference by name says which symbol was used, which an id no longer does —
+   * and `as_written` shares nodes as `canonicalize` does with it.
+   *
+   * That order is not the one the module's text was written for: linked
+   * modules each number their nodes from scratch, and a name can be bound
+   * twice. So the definitions are numbered while they still hold their boxes,
+   * never read back from text, and each symbol is named again at the end —
+   * the walk may have finished an earlier binding of its name after its own,
+   * and a three-word line names nothing once it is numbered.
    */
-  extract(...symbols) {
-    const needed = /* @__PURE__ */ new Set();
-    for (const symbol of symbols) {
-      const root = this.definition(symbol);
-      if (!root)
-        throw new Error(`unknown symbol: ${symbol}`);
-      needed.add(root);
-    }
-    const kept = [];
-    for (let i = this.lines.length - 1; i >= 0; i--) {
-      const line = this.lines[i];
-      if (line.length === 1 || !needed.has(line[0]))
+  extract(symbols, { as_written = false } = {}) {
+    const definitions = /* @__PURE__ */ new Map();
+    const latest = /* @__PURE__ */ new Map();
+    for (const line of this.lines) {
+      if (line.length !== 2 && line.length !== 3)
         continue;
-      for (let j = 1; j < line.length; j++)
-        needed.add(line[j]);
-      kept.push(line);
+      definitions.set(line[0], line);
+      latest.set(line[0].symbol, line[0]);
     }
-    const out = new _DagModule();
-    out.lines = kept.reverse();
-    return out;
+    const names = [...new Set(symbols)].sort();
+    const roots = names.map((name) => {
+      if (!is_symbol_name(name))
+        throw new Error(`${name} is an id, which names nothing once renumbered`);
+      const root = latest.get(name);
+      if (!root)
+        throw new Error(`unknown symbol: ${name}`);
+      return root;
+    });
+    const kept = new _DagModule();
+    const reached = /* @__PURE__ */ new Set();
+    for (const root of roots) {
+      if (reached.has(root))
+        continue;
+      reached.add(root);
+      const stack = [{ line: definitions.get(root), next: 1 }];
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        if (top.next === top.line.length) {
+          kept.lines.push(top.line);
+          stack.pop();
+          continue;
+        }
+        const child = top.line[top.next++];
+        const line = definitions.get(child);
+        if (!line || reached.has(child))
+          continue;
+        reached.add(child);
+        stack.push({ line, next: 1 });
+      }
+    }
+    roots.forEach((root, i) => kept.lines.push([box(names[i]), root]));
+    if (roots.length === 1)
+      kept.lines.push([roots[0]]);
+    return kept.canonicalize({ as_written });
   }
   /**
    * Give every shadowed definition a name of its own.
@@ -489,8 +525,8 @@ var DagModule = class _DagModule {
    * A definition belongs to a root when that root is the only thing that
    * reaches it. Anything reached by two roots, or by a name outside them, stays
    * in `shared` — so concatenating `shared` with any one root's part gives back
-   * exactly what `extract` would have produced for that root, and no line is
-   * ever in two parts at once.
+   * every line `extract` would have kept for that root, and no line is ever in
+   * two parts at once.
    *
    * What counts as "outside" is the module's own notion of an interface: a
    * symbolic name is something a reader can ask for, a numeric id is internal
@@ -503,11 +539,12 @@ var DagModule = class _DagModule {
    * its own cost, at a time of the caller's choosing, and without repeating
    * whatever two roots have in common.
    *
-   * One backwards pass suffices, for the reason `extract` gives. Shadowed
-   * definitions are renamed first: a part is read after all of `shared`, so a
-   * name `shared` goes on to bind again would mean the later one by then. That
-   * rewrites this module in place — the parts hand back its own lines, so there
-   * was never a copy to rename instead.
+   * One backwards pass suffices: a reference resolves to a definition above it,
+   * so by the time a line is reached, every line that could claim it has been
+   * seen. Shadowed definitions are renamed first: a part is read after all of
+   * `shared`, so a name `shared` goes on to bind again would mean the later one
+   * by then. That rewrites this module in place — the parts hand back its own
+   * lines, so there was never a copy to rename instead.
    */
   partition(roots) {
     this.disambiguate();
@@ -607,6 +644,7 @@ var DagModule = class _DagModule {
       for (const b of line)
         if (b.symbol === LEAF)
           ids.set(b, LEAF_ID);
+    const imports = /* @__PURE__ */ new Map();
     let next_id = 1;
     const forks = /* @__PURE__ */ new Map();
     const named = /* @__PURE__ */ new Set();
@@ -614,16 +652,34 @@ var DagModule = class _DagModule {
     const out = new _DagModule();
     const ref = (b) => {
       const id = ids.get(b);
-      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol);
+      const by_name = is_symbol_name(b.symbol) && named.has(b.symbol) && aliased.get(b.symbol) === key(b);
       if (id === LEAF_ID && !(as_written && by_name))
         return LEAF;
       if (by_name)
         return b.symbol;
-      return id === void 0 ? b.symbol : String(id);
+      if (id !== void 0)
+        return String(id);
+      const outside = imports.get(b) ?? b;
+      if (aliased.has(outside.symbol) && aliased.get(outside.symbol) !== key(b))
+        throw new Error(`${outside.symbol} refers past this module, but is bound above its use`);
+      return outside.symbol;
     };
     const key = (b) => {
       const id = ids.get(b);
-      return id === void 0 ? `?${b.symbol}` : String(id);
+      return id === void 0 ? `?${(imports.get(b) ?? b).symbol}` : String(id);
+    };
+    const bind = (name, meaning, written, nameable) => {
+      const previous = aliased.get(name);
+      if (previous === meaning)
+        return;
+      if (previous === void 0) {
+        if (nameable && is_symbol_name(name))
+          named.add(name);
+      } else {
+        named.delete(name);
+      }
+      aliased.set(name, meaning);
+      out.lines.push([box(name), box(written)]);
     };
     for (const line of this.lines) {
       if (line.length === 3) {
@@ -641,26 +697,16 @@ var DagModule = class _DagModule {
         }
         if (is_label(head.symbol)) {
           const id = ids.get(head);
-          out.lines.push([box(head.symbol), box(id === LEAF_ID ? LEAF : String(id))]);
+          bind(head.symbol, key(head), id === LEAF_ID ? LEAF : String(id), false);
         }
       } else if (line.length === 2) {
         const [head, target] = line;
         const target_id = ids.get(target);
         if (target_id !== void 0)
           ids.set(head, target_id);
-        const id = ids.get(head);
-        const name = head.symbol;
-        const previous = aliased.get(name);
-        if (previous !== void 0 && previous === id)
-          continue;
-        if (previous === void 0) {
-          if (is_symbol_name(name))
-            named.add(name);
-        } else {
-          named.delete(name);
-        }
-        aliased.set(name, id);
-        out.lines.push([box(name), box(ref(target))]);
+        else
+          imports.set(head, imports.get(target) ?? target);
+        bind(head.symbol, key(head), ref(target), true);
       } else if (line.length === 1) {
         out.lines.push([box(ref(line[0]))]);
       }
@@ -1246,7 +1292,10 @@ Commands:
                           that are not exported are made unique but stay private.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
-                          DAG naming them. Several share what they share.
+                          DAG naming them. Several share what they share. It
+                          comes out canonical, numbered by a walk from the
+                          symbols, so from 'link' output it depends only on what
+                          they are built from.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
@@ -1259,10 +1308,10 @@ Options:
   --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(", ")}.
                           Defaults to term.
-  --as-written            'canonicalize' shares a node only with one written
-                          the same way, so nodes built through different names
-                          stay apart, each attributed to the name it was built
-                          through.
+  --as-written            'canonicalize' and 'extract' share a node only with one
+                          written the same way, so nodes built through different
+                          names stay apart, each attributed to the name it was
+                          built through.
 
 A file argument of '-', or no file at all, reads stdin.`;
 var COMMANDS = ["link", "canonicalize", "qualify", "extract", "eval", "interface"];
@@ -1329,7 +1378,7 @@ function run(command, files, options) {
       ])];
       if (!symbols.length)
         raise("extract needs --symbol, --matching or --except");
-      return utf8(module2.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
+      return utf8(module2.extract(symbols, { as_written: options.as_written }).toString());
     }
     case "eval": {
       const text = read_input(files);

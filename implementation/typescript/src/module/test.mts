@@ -70,48 +70,118 @@ function test_qualify() {
 // --- Extracting ---
 
 function test_extract() {
-  const library = 'k △ △\nunused △ k\ni △ (△ (△ △)) △\n';
+  // Names bound by two-word lines stay names; numbered, a three-word line is
+  // just a node.
+  const library = '1 △ △\nk 1\n2 △ k\nunused 2\n3 △ △\n4 3 △\ni 4\n';
   assert_equal(
-    'i △ (△ (△ △)) △\ni\n',
-    DagModule.parse(library).extract('i').toString(['i']),
+    '1 △ △\n2 1 △\ni 2\ni\n',
+    DagModule.parse(library).extract(['i']).toString(),
     'only what the symbol is built from is kept, closed by naming it');
   assert_equal(
-    'k △ △\nunused △ k\n',
-    DagModule.parse(library).extract('unused').toString(),
+    '1 △ △\nk 1\n2 △ k\nunused 2\nunused\n',
+    DagModule.parse(library).extract(['unused']).toString(),
     'a definition brings along what it refers to, by name');
 
-  // Extracting a shadowed name yields its last definition, like a reference would.
+  // Extracting a shadowed name yields its last definition, like a reference
+  // would. Bound to the leaf, its value is written △.
   assert_equal(
-    'a △\n',
-    DagModule.parse('a △ △\nb a\na △\n').extract('a').toString(),
+    'a △\n△\n',
+    DagModule.parse('a △ △\nb a\na △\n').extract(['a']).toString(),
     'the latest definition wins');
 
-  assert_throws(() => DagModule.parse('a △\n').extract('nope'), 'unknown symbol: nope',
+  assert_throws(() => DagModule.parse('a △\n').extract(['nope']), 'unknown symbol: nope',
     'extracting something undefined is an error');
 
   // Several roots at once. What they share is kept once — `k` is below both,
   // and appears in the result the one time it was written.
-  const shared = 'k △ △\nleft △ k\nright k △\ndead △ (△ △)\n';
+  const shared = '1 △ △\nk 1\n2 △ k\nleft 2\n3 k △\nright 3\n4 △ 1\ndead 4\n';
   assert_equal(
-    'k △ △\nleft △ k\nright k △\n',
-    DagModule.parse(shared).extract('left', 'right').toString(),
+    '1 △ △\nk 1\n2 △ k\nleft 2\n3 k △\nright 3\n',
+    DagModule.parse(shared).extract(['left', 'right']).toString(),
     'two roots keep what both are built from, once');
   assert_equal(
-    DagModule.parse(shared).extract('left', 'right').toString(),
-    DagModule.parse(shared).extract('right', 'left').toString(),
+    DagModule.parse(shared).extract(['left', 'right']).toString(),
+    DagModule.parse(shared).extract(['right', 'left']).toString(),
     'the order roots are named in does not show');
 
   // Naming what stays is how one says "everything but": nothing else is built
   // from `dead`, so nothing keeps it.
   assert_equal(
-    'k △ △\nleft △ k\nright k △\n',
-    DagModule.parse(shared).extract('k', 'left', 'right').toString(),
+    '1 △ △\nk 1\n2 △ k\nleft 2\n3 k △\nright 3\n',
+    DagModule.parse(shared).extract(['k', 'left', 'right']).toString(),
     'dropping a root drops what only it reached');
 
   assert_equal(
     '\n',
-    DagModule.parse(shared).extract().toString(),
+    DagModule.parse(shared).extract([]).toString(),
     'no roots keeps nothing');
+
+  // What comes out is what the root is built from, numbered in the order a walk
+  // from it finishes each definition — not where the module happened to put
+  // them. So a definition added above, even one equal to a node the root uses,
+  // and the root's own definitions written in another order, leave it as it was.
+  const built = 'a △ △\nc △ a\nb △ △\nd b △\nroot c d\n';
+  const extracted = '1 △ △\n2 △ 1\n3 1 △\n4 2 3\nroot 4\nroot\n';
+  assert_equal(extracted, DagModule.parse(built).extract(['root']).toString(),
+    'each definition comes after what it refers to');
+  assert_equal(extracted,
+    DagModule.parse('other △ △\nunused other △\n' + built).extract(['root']).toString(),
+    'a definition added above changes nothing');
+  assert_equal(extracted,
+    DagModule.parse('b △ △\nd b △\na △ △\nc △ a\nroot c d\n').extract(['root']).toString(),
+    'nor does the order the definitions were written in');
+
+  // A root a three-word line defines is still named: numbered, that line no
+  // longer says it.
+  assert_equal(
+    '1 △ △\n2 △ 1\n3 1 △\nleft 2\nright 3\n',
+    DagModule.parse('k △ △\nleft △ k\nright k △\n').extract(['left', 'right']).toString(),
+    'every root is named');
+
+  // That order is not the one the text was written for, which matters where
+  // the text repeats itself. Linked modules each number their nodes from
+  // scratch, and a `:i` alias names whatever its target was where it stood.
+  const linked = DagModule.parse('0 △ △\n1 0 △\nA._f:0 :i 1\n1 △ 0\n2 A._f:0 1\nA.x 2\n1 A.x △\nR.r 1\n');
+  assert_same_value(linked.canonicalize().toString(), linked.extract(['R.r']).toString(),
+    'R.r', 'ids a module repeats keep their meaning');
+
+  // A name bound twice: `Y` is walked after `X`, since it sorts after it, and
+  // reaches the earlier binding of `X`, which is therefore finished last — and
+  // `X` still means its latest one.
+  const rebound = DagModule.parse('1 △ △\nX 1\n2 X △\nY 2\n3 △ 1\nX 3\n');
+  for (const symbol of ['X', 'Y'])
+    assert_same_value(rebound.canonicalize().toString(), rebound.extract(['X', 'Y']).toString(),
+      symbol, `a root bound twice means what it last meant (${symbol})`);
+
+  // And a label bound by a two-word line in one module and by a three-word one
+  // in another: walked into the middle of a line that refers to the first, the
+  // second is not what that reference means.
+  const labels = DagModule.parse('1 △ △\n2 △ 1\n:x △ 2\nB.w :x\n1 △ △\n:x 1\n2 :x B.w\nZ.v 2\n');
+  assert_same_value(labels.canonicalize().toString(), labels.extract(['Z.v']).toString(),
+    'Z.v', 'a label rebound in between is not what an earlier reference meant');
+
+  // Something the module does not define can only be written by its own name,
+  // which a binding the walk put above it would take over. Rather than mean
+  // something else, extract says so.
+  assert_throws(
+    () => DagModule.parse('1 △ x\nZ 1\nx △\n2 △ x\nA 2\n').extract(['A', 'Z']),
+    'x refers past this module, but is bound above its use',
+    'a reference past the module is not written under a binding of its name');
+
+  // An id names nothing once the output is renumbered.
+  assert_throws(() => DagModule.parse('1 △ △\nA 1\n').extract(['1']),
+    '1 is an id, which names nothing once renumbered', 'an id is not a root');
+
+  // As written, extract shares a node only as `canonicalize` does with it.
+  const spellings = '1 △ △\nk 1\nK 1\nx △ k\ny △ K\nr x y\n';
+  assert_equal(
+    '1 △ △\nk 1\n2 △ k\nK 1\n3 2 2\nr 3\nr\n',
+    DagModule.parse(spellings).extract(['r']).toString(),
+    'by default, nodes built through different names for one value are shared');
+  assert_equal(
+    '1 △ △\nk 1\n2 △ k\nK 1\n3 △ K\n4 2 3\nr 4\nr\n',
+    DagModule.parse(spellings).extract(['r'], { as_written: true }).toString(),
+    'as written, nodes built through different names stay apart');
 }
 
 // --- Canonicalizing ---
@@ -154,6 +224,27 @@ function test_canonicalize() {
     as_written,
     'as written, nodes built through different names stay apart');
   assert_same_value(through_names, as_written, ':r', 'as written preserves the value');
+
+  // A label's three-word line binds it as the two-word line it becomes would,
+  // so the same binding after it is already said — and canonical stays
+  // canonical.
+  const label = DagModule.parse('1 △ △\n:x △ △\n:x 1\n2 △ :x\n:r 2\n').canonicalize().toString();
+  assert_equal('1 △ △\n:x 1\n2 △ 1\n:r 2\n', label, 'a label is bound once');
+  assert_equal(label, DagModule.parse(label).canonicalize().toString(), 'canonicalizing twice changes nothing');
+
+  // A definition bound to something the module does not define stands for it,
+  // so once its name is rebound, a reference through it is written as that.
+  assert_equal(
+    'x ext\n1 △ △\nx 1\n2 ext △\n:r 2\n',
+    DagModule.parse('x ext\ny :i x\n0 △ △\nx 0\nr y △\n:r r\n').canonicalize().toString(),
+    'a name bound past the module keeps meaning that once rebound');
+
+  // A name is written only while it means the node: `X` is bound by a two-word
+  // line, then rebound by a three-word one, which numbering leaves nameless —
+  // so `r` refers to the second by id, not by a name that says the first.
+  const rebound = '1 △ △\n2 1 1\nX 2\nX △ △\nr △ X\n:r r\n';
+  assert_same_value(rebound, DagModule.parse(rebound).canonicalize().toString(), ':r',
+    'a name rebound by a three-word line is not written for it');
 
   // `_` is a name like any other: a program may bind it (to the leaf, say),
   // and a reference through it is written through it.
@@ -232,10 +323,10 @@ function test_partition() {
   // The point of the split: shared + one root reproduces that root's extract.
   const module = DagModule.parse(library);
   assert_equal(
-    module.extract('two').toString(['two']),
+    module.extract(['two']).toString(),
     DagModule.parse(module.partition(['two']).shared.toString()
       + module.partition(['two']).exclusive.get('two')!.toString(['two']))
-      .extract('two').toString(['two']),
+      .extract(['two']).toString(),
     'shared plus a root is what extracting that root gives');
 
   assert_equal(
