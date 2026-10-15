@@ -150,12 +150,20 @@
 // (cannot tell a cold VM from a warm one), DONTNEED above the live set;
 // dropping the nursery's log (`_nursed`) for an SSE2 scan of its slots at
 // each flush (2.4% more instructions and 16% slower: 512 KB read per flush,
-// 3M more mispredicts).
+// 3M more mispredicts); never memoizing an application of a closure built
+// since the module was loaded (a compile 2.6% faster, the expect tests 6%
+// slower and the heaviest of them 33%: recursion through fresh closures
+// needs the memo).
 //
-// What remains is the memory the tables take: at a 16 MB collection budget
-// the compile phase runs 1.5x faster than at 512 MB although it takes 17%
-// more steps, and the heaviest expect tests take three times the steps at
-// 32 MB because their memo no longer fits — see collect_at and runner.md.
+// Together: 184 instructions a step became 153 on the build's heaviest
+// compile, with the same rules and the same output. What remains is the
+// memory the tables take: at a 16 MB collection budget the compile phase
+// runs 1.5x faster than at 512 MB although it takes 17% more steps, and the
+// heaviest expect tests take three times the steps at 32 MB because their
+// memo no longer fits — see collect_at and runner.md. Beyond that, jets:
+// one for the compiler's identifier scanner, keyed like skip_line, took 7%
+// of the instructions off a compile with identical output, and waits on its
+// Lean check (a take-while over the 128 ASCII characters).
 
 template <bool JETS> class BasicEagerFastest {
 public:
