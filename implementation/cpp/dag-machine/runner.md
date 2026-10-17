@@ -158,8 +158,8 @@ with `arena exhausted`.
 #### `RUNNER_RSS_LIMIT_MB` *(default: none; eager only)*
 
 The most the eager runner may hold, in MiB: its arena up to the
-collection budget, the hash-consing table, nursery bitmap and memo that
-budget sizes, and its continuation stack. A request that would take it
+collection budget, the hash-consing table, the nursery's byte per node and
+memo that budget sizes, and its continuation stack. A request that would take it
 past this answers `err out of memory: the stack would pass
 RUNNER_RSS_LIMIT_MB=…` (or `the live set …`), and the runner goes on to
 the next one.

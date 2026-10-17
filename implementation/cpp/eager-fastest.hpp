@@ -115,7 +115,7 @@
 //     7.2% fewer instructions on the build's heaviest compile, with
 //     identical steps: the memo's hash is untouched (see hash()).
 //   — Allocation and the nursery: a flush is one pass (a node inserted and
-//     its slot and bit cleared as it goes, the count added once, the log read
+//     its slot cleared as it goes, the count added once, the log read
 //     once rather than three times), `_young` is a byte per node rather than
 //     a bit, alloc() tests the budget with a compare instead of recomputing
 //     _due, and the flush threshold is precomputed: 3.5% fewer instructions
@@ -129,15 +129,58 @@
 //     the free-list allocation leaving `_due` alone until the list runs out.
 //     6.4% fewer instructions on the build's heaviest compile, the same
 //     steps and memo traffic.
+//   — The hash-consing table is laid at the size its budget takes it to
+//     (groups_for_budget) rather than doubled up to it: every node the arena
+//     holds before a collection is interned, so the table reached that size
+//     anyway, re-inserting everything in it at each doubling — 2.94M
+//     insertions in 10 re-lays on the build's heaviest compile, 8.8% of its
+//     instructions, with one collection; on the heavy expect tests, which
+//     raise their budget, 11.7M. The budget is decided between a
+//     collection's mark and its sweep, so the sweep's re-lay is the one that
+//     sizes the table for it. And the search past the nursery calls nothing
+//     and builds no struct on its way out (intern_old, intern_fresh, the
+//     one-instruction tag): together 11% fewer instructions on that compile,
+//     the expect tests 4-8% faster, peak memory the same on the build's
+//     phases (a raise the live set forces lays no larger table: see
+//     collect_at).
+//   — The step itself, by the instruction: the memo keyed by the one word
+//     hash() multiplies (compared in one, carried by the MEMOIZE frame), the
+//     step's operands 64-bit locals (both in registers, no zero-extension to
+//     index with; one had lived in a stack slot), a node read as one word, a
+//     32-bit memo mask, the cold count stepped without a clamp, the step
+//     counter kept scaled so a MEMOIZE frame's low word is the counter with
+//     its tag, the pop's top pinned to one register (the compiler carried
+//     two), tags tested in the frame's word as loaded, the nursery indexed
+//     by the hash's low bits. 6.5% fewer instructions on the same compile,
+//     the same steps, output, hashes and memo traffic.
+//   — The flush: a flushed node's `_young` byte is left set, since nothing
+//     reads it again until a collection clears them all (forgotten()); a
+//     group's empty slots are one movemask off the tags' top bits (empties);
+//     the flush loop keeps its members in registers and its prefetch has no
+//     bounds test. 45 instructions a node flushed became 26: 4% fewer on
+//     the heaviest compile. And the nursery is flushed a quarter full rather
+//     than half: its probe chains are what a step waits on, and the shorter
+//     ones cut 7% of apply()'s mispredicted branches and 7-15% off the
+//     compile phase's time (two runs, on a shared machine).
 //
-// Measured and not taken, so that no one measures them again: 16-byte or
-// set-associative memo entries, folding the MEMOIZE frame into the
+// Measured and not taken, so that no one measures them again: sizing the
+// table for the start budget only, not for a raised one (the heavy expect
+// tests then gain nothing: the re-lays that cost are those after a raise);
+// a frame's first word laid out as the memo key (a shift on every push and
+// pop of a one-argument frame: 1% more instructions), choosing the
+// result-only frames' intern operands by conditional moves rather than two
+// compares (0.5% more instructions for 0.5M fewer of cachegrind's
+// mispredicts), a collection flag in the step counter's sign bit (one
+// instruction a step, but threaded through alloc()'s callers: not worth
+// it), the stats counters as locals (0.7 instructions a step, and no
+// callee-saved register left to hold them); 16-byte or set-associative memo
+// entries, folding the MEMOIZE frame into the
 // result-only frame pushed over it (FORK_WITH, STEM, RETURN with the memo's
 // operands: one frame fewer on a third of the memoized steps, but the flag
 // that chooses the frame, the wider frame and the operands kept live across
 // rule (2) cost more than the frame saved — 2% more instructions, not 1%
-// fewer), an L1 front memo, a prefetch of the memo slot
-// at the top of a step (6-10% slower), memo regions per function (most
+// fewer), an L1 front memo, a prefetch of the memo slot at the top of a step
+// (6-10% slower), memo regions per function (most
 // closures are looked up once: 2.8M of 3.2M on a compile), MEMO_MIN_STEPS and
 // MEMO_COLD sweeps, a smaller _cold table; growing the table 4x (more pages
 // than re-lays saved), flushing the nursery in table order, a 2^18 nursery,
@@ -150,12 +193,30 @@
 // (cannot tell a cold VM from a warm one), DONTNEED above the live set;
 // dropping the nursery's log (`_nursed`) for an SSE2 scan of its slots at
 // each flush (2.4% more instructions and 16% slower: 512 KB read per flush,
-// 3M more mispredicts); never memoizing an application of a closure built
-// since the module was loaded (a compile 2.6% faster, the expect tests 6%
-// slower and the heaviest of them 33%: recursion through fresh closures
-// needs the memo).
+// 3M more mispredicts); `_young` as a wrapped byte so that its stores alias
+// no member (nothing: the members a nurse() loads it loads once anyway);
+// the nursery flushed three quarters full (2% more instructions, 5% more
+// mispredicts) or a ring of the slots read ahead so that a flush reads each
+// once (one instruction a node at best); never memoizing an application of
+// a closure built since the module was loaded (a compile 2.6% faster, the
+// expect tests 6% slower and the heaviest of them 33%: recursion through
+// fresh closures needs the memo). On the build's four heaviest expect tests,
+// which run at
+// 53 ns a step where a compile runs at 40 (their L2 misses are the table's
+// lines and the memo's, 1.4 a step; the rules' own loads hit): huge pages
+// (no faster: not the TLB), a prefetch of the next step's memo slot, a memo
+// cap of 2^23 or 2^24 slots at a 256 MB budget (3% fewer steps, no faster),
+// MEMO_COLD at 16, 200 or off (off: 2.3x the puts, 24% slower), a nursery of
+// 2^13 or 2^14 slots (within noise, 0.4% more instructions on a compile),
+// and keeping the memo entries hit since the last collection as roots (a
+// flag in the entry, set on a hit): 11% fewer steps on those tests, and the
+// re-derivation after a collection all but gone (test 162: 100M steps
+// against 98M with no collection at all), but each kept entry roots 8-10
+// nodes — 0.6-4M a collection, marked and re-inserted — for 2% less time on
+// those tests, and on a compile 350K nodes kept per collection at a 16 MB
+// budget, a third slower. See collect_at for the budget policies measured.
 //
-// Together: 184 instructions a step became 153 on the build's heaviest
+// Together: 184 instructions a step became 121 on the build's heaviest
 // compile, with the same rules and the same output. What remains is the
 // memory the tables take: at a 16 MB collection budget the compile phase
 // runs 1.5x faster than at 512 MB although it takes 17% more steps, and the
@@ -231,10 +292,17 @@ private:
   // took twice the steps.
   static constexpr uint32_t MEMO_MIN_STEPS = 4;
 
-  /** Whether a step that pushed its MEMOIZE frame at step `meta` took
-   * MEMO_MIN_STEPS rules or more by `steps` now (0 for a step a jet
-   * answered, which pops the frame in the step that pushed it). */
-  static bool admitted(uint32_t pushed, uint64_t steps) { return ((uint32_t(steps) - pushed) & 0xffffff) >= MEMO_MIN_STEPS; }
+  // The step counter apply() keeps is the count shifted up by a tag's width
+  // (STEP), so that a MEMOIZE frame's low word is the counter with the tag
+  // in its low byte, no shift or mask: pushing one and testing admitted()
+  // cost two instructions fewer. stats_counters.steps holds the count itself.
+  static constexpr uint64_t STEP = 256;
+
+  /** Whether a step that pushed its MEMOIZE frame when the counter was
+   * `pushed` (its low word, tag included) took MEMO_MIN_STEPS rules or more
+   * by `steps` now (none for a step a jet answered, which pops the frame in
+   * the step that pushed it): the difference's low 24 bits of count. */
+  static bool admitted(uint32_t pushed, uint64_t steps) { return uint32_t(steps) - (pushed - MEMOIZE) >= MEMO_MIN_STEPS * STEP; }
 
   // How many lookups in a row may miss for one function before it stops being
   // looked up at all (see recall).
@@ -244,6 +312,20 @@ private:
     uint32_t u;
     uint32_t v;
   };
+
+  // A node as the one 8-byte word it is, for the step loop: loaded in one,
+  // its left child the low half, its right the high — a shift that also
+  // leaves "stem" in the flags, where two 4-byte loads shared an address
+  // computation and each needed a test (0.8% fewer instructions on the
+  // build's heaviest compile; the compiler still keeps a copy of the low
+  // half and zero-extends it to index with).
+  static uint64_t node_word(const Node *arena, uint64_t at) {
+    uint64_t w;
+    std::memcpy(&w, arena + at, sizeof w);
+    return w;
+  }
+  static uint32_t left(uint64_t w) { return uint32_t(w); }
+  static uint32_t right(uint64_t w) { return w >> 32; }
 
   // Continuation frames for the reduction loop. APPLY_TO and COMPUTE_AND_APPLY
   // are EagerTernaryNilMmapVM32's:
@@ -289,7 +371,8 @@ private:
   //     pushed, so no pop compares the top with the base. Its arguments are 0.
   //
   // APPLY_TO is 0 so that an APPLY_TO frame's whole second word is 0, and
-  // the result-only tags are the ones at and above FORK_WITH.
+  // the result-only tags are the ones with FORK_WITH's bit, so that one bit
+  // of the word tells them from the rest.
   enum FrameTag : uint32_t { APPLY_TO, COMPUTE_AND_APPLY, MEMOIZE, CALL, DONE, FORK_WITH = 8, STEM, RETURN, FORK_RIGHT };
 
   // A frame is two 8-byte words, written whole and read back whole, because
@@ -298,7 +381,10 @@ private:
   // Frame read back from its four 4-byte fields, say) waits for those stores
   // to retire instead — a stall on nearly every step.
   //
-  // The arguments in the first word; in the second, the tag (a byte), a
+  // The arguments in the first word, the first in its low half, so that a
+  // frame of one argument is that argument zero-extended (memo_key()'s
+  // layout, the other way about, costs a shift on every push and pop of
+  // such a frame: 1% more instructions); in the second, the tag (a byte), a
   // MEMOIZE frame's step counter at push (24 bits: the MEMO_MIN_STEPS test
   // needs a difference of a few) and, in its high half, the memo hash of
   // (a, b), so that the put when it is popped neither hashes again nor loads
@@ -307,20 +393,41 @@ private:
   struct Frame {
     uint64_t lo, hi;
     Frame() = default;
-    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2 = 0, uint32_t steps = 0, uint32_t meta = 0)
-        : lo(arg1 | uint64_t(arg2) << 32), hi(tag | uint64_t(steps & 0xffffff) << 8 | uint64_t(meta) << 32) {}
+    Frame(FrameTag tag, uint32_t arg1, uint32_t arg2 = 0) : lo(arg1 | uint64_t(arg2) << 32), hi(tag) {}
+    /** MEMOIZE(a, b) for a step whose memo_key is `key`, pushed with the
+     * (scaled) step counter at `steps`, hashing to `h`. */
+    static Frame memoize(uint64_t key, uint32_t steps, uint32_t h) {
+      Frame f;
+      f.lo = swap_halves(key);
+      f.hi = (steps | MEMOIZE) | uint64_t(h) << 32;
+      return f;
+    }
     FrameTag tag() const { return FrameTag(uint8_t(hi)); }
     uint32_t arg1() const { return uint32_t(lo); }
     uint32_t arg2() const { return lo >> 32; } // 0 where the frame has no second argument, which mark() ignores
-    uint32_t steps() const { return uint32_t(hi) >> 8; } // MEMOIZE: low bits of the step counter at push
+    uint64_t key() const { return swap_halves(lo); } // MEMOIZE: memo_key(a, b)
+    uint32_t steps() const { return uint32_t(hi); }      // MEMOIZE: low bits of the scaled step counter at push, tag included
     uint32_t meta() const { return hi >> 32; }           // MEMOIZE: low bits of memo_hash(a, b)
   };
 
-  /** One memo entry: apply(a, b) normalizes to r. a == 0 marks an empty slot. */
+  /** The memo's key for apply(a, b): the pair as the one word hash()
+   * multiplies, which a lookup then compares in one. 0 for no pair, since no
+   * tree is index 0. A MEMOIZE frame holds it with its halves swapped: a
+   * rotate at the push and one at the put (see Frame for why the frame is
+   * not laid out as the key). */
+  static uint64_t memo_key(uint32_t a, uint32_t b) { return uint64_t(a) << 32 | b; }
+  static uint32_t key_a(uint64_t key) { return key >> 32; }
+  static uint32_t key_b(uint64_t key) { return uint32_t(key); }
+  static uint64_t swap_halves(uint64_t x) { return x << 32 | x >> 32; }
+
+  /** One memo entry: apply(a, b) normalizes to r, the key memo_key(a, b) in
+   * its first 8 bytes (read and written whole, through memcpy, since the
+   * slot is 4-byte aligned: 12 bytes, not 16). A key of 0 marks an empty slot. */
   struct Memo {
-    uint32_t a;
-    uint32_t b;
+    uint32_t key[2];
     uint32_t r;
+    uint64_t key_word() const { uint64_t k; std::memcpy(&k, key, 8); return k; }
+    void set(uint64_t k, uint32_t result) { std::memcpy(key, &k, 8); r = result; }
   };
 
   Node *_arena;
@@ -395,13 +502,14 @@ private:
   // below), where the cell would be. Every node is in exactly one of the three.
   //
   // A slot is a node index and a control byte: EMPTY, or a tag, 7 bits of the
-  // node's hash that the group index does not use. Slots come in groups of
-  // GROUP to a cache line: 16 control bytes, the last 4 of them no slot's, then
-  // the 12 indices. A search reads the group its hash picks, compares every
-  // tag with its own at once (Word), and loads the node of a slot only where
-  // they match: the node it is after, and 1 in 128 others. So a shape not
-  // built yet costs that line and no arena load, one that was the line and its
-  // node, an insertion the line alone. One line, because each line is a miss:
+  // node's hash that the group index does not use, under a set top bit. Slots
+  // come in groups of GROUP to a cache line: 16 control bytes, the last 4 of
+  // them no slot's, then the 12 indices. A search reads the group its hash
+  // picks, compares every tag with its own at once (Word), and loads the node
+  // of a slot only where they match: the node it is after, and 1 in 128
+  // others. So a shape not built yet costs that line and no arena load, one
+  // that was the line and its node, an insertion the line alone. One line,
+  // because each line is a miss:
   // with a bare index for a slot, every occupied slot on the way to an empty
   // one was a load of its node, a cache miss of its own behind the one into
   // the table; with the control bytes in an array of their own, every hit and
@@ -414,9 +522,14 @@ private:
   // nothing needs the old copy. Memory already touched costs a memset to
   // re-lay; a fresh mapping costs a fault per page all over again — on a VM, a
   // host round trip per page — and holds both copies at once while it grows.
+  // Under a budget the table is laid at the size the budget takes it to,
+  // and grows between collections only for a list() past the budget
+  // (groups_for_budget); without one it doubles from MIN_GROUPS as it fills.
   static constexpr size_t GROUP = 12;
   // EMPTY is 0, the byte a fresh page holds, so the part of the table no re-lay
-  // has reached yet needs no memset (rebuild_interned); a tag is 1..127.
+  // has reached yet needs no memset (rebuild_interned); a tag is 128..255, so
+  // that a group's occupancy is the sign bits of its control bytes (empties),
+  // and the tag one instruction of the hash (tag_of).
   static constexpr uint8_t EMPTY = 0x00;
   struct alignas(64) Group {
     uint8_t ctrl[16]; // GROUP control bytes, then 4 that lanes() masks off
@@ -429,6 +542,14 @@ private:
   unsigned _groups_shift = 32; // node_hash >> this is the group it picks
   size_t _groups_touched = 0; // groups a re-lay has ever written; above it the mapping is still zero
   size_t _interned_count = 0;
+  size_t _interned_room = 0; // the most nodes the table and the nursery may hold together (fits), set by relay_interned
+
+  // How many nodes ahead a loop of insertions asks for the line of the group a
+  // node goes in (rebuild_interned, flush_nursery). None of them waits on
+  // another, so their misses can overlap, once the line is asked for well
+  // before the insertion that needs it rather than left to the out-of-order
+  // core: re-laying took 30% less time over the build's test runner.
+  static constexpr size_t AHEAD = 16;
 
   // The nursery: the nodes intern() made since it was last flushed into
   // `_groups`, in a table of their own — 8-byte slots, the node and its
@@ -457,10 +578,23 @@ private:
   // slot at a time: clearing all of it at every flush made a session of 5,000
   // small `bind`s, each of which flushes it, take a quarter longer.
   //
-  // It is flushed half full. It is MIN_TABLE slots to begin with, doubled at
-  // each flush up to NURSERY: hashed, a few hundred nodes touch every page of
-  // it, and at its full size a runner answering one small request faulted in
-  // 90 pages more, 5% of its time.
+  // It is flushed a quarter full (NURSERY_LOAD). What that sets is the length
+  // of its probe chains, which a step waits on: each slot of a chain is a load
+  // the next compare and branch depend on, and the branch is the one a
+  // predictor cannot learn. Flushed half full it read 1.48 slots a probe on
+  // the build's heaviest compile; a quarter full, 1.17, with 7% fewer
+  // mispredicted branches in apply() and the compile phase 7-15% faster (two
+  // runs, on a shared machine; the heavy expect tests 4-7%), for 2%
+  // more searches of `_groups` (a node that would have been found here has
+  // been flushed) and 1.5% more nodes flushed (fewer die in it before a
+  // collection). An eighth full read 1.07 slots, with 11% fewer mispredicts
+  // and 5% more searches, and timed the same within noise. A nursery of half
+  // the slots flushed half full — the same nodes a flush, the same chains —
+  // timed as the half-full one, so it is the chains and not the count. It is
+  // MIN_TABLE slots to begin with, doubled at each flush up to NURSERY:
+  // hashed, a few hundred nodes touch every page of it, and at its full size
+  // a runner answering one small request faulted in 90 pages more, 5% of its
+  // time.
   //
   // `_young` is a byte per index, set for the nodes in the nursery — a byte
   // rather than a bit, so that setting, testing and clearing one is a plain
@@ -472,16 +606,21 @@ private:
   // high-water mark above it. That keeps the bytes of the old nodes, most of
   // the children asked about, out of the cache.
   static constexpr size_t NURSERY = size_t(1) << 16;
+  static constexpr size_t NURSERY_LOAD = 4; // flushed at a slot in this many
   struct Nurse {
     Tree at;    // 0: empty
     uint32_t h; // node_hash of at's shape: compared before at's node is loaded, and what a flush inserts by
   };
   Nurse *const _nursery = static_cast<Nurse *>(map_pages(NURSERY * sizeof(Nurse)));
-  Tree *const _nursed = static_cast<Tree *>(map_pages(NURSERY / 2 * sizeof(Tree)));
+  // AHEAD entries past what a flush can hold, so that its prefetch reads the
+  // log past the end without a bounds test: a stale entry is a slot index, a
+  // fresh one 0, and the line of a group that no node is going in is a
+  // harmless prefetch.
+  static constexpr size_t NURSED = NURSERY / NURSERY_LOAD + AHEAD;
+  Tree *const _nursed = static_cast<Tree *>(map_pages(NURSED * sizeof(Tree)));
   size_t _nursery_mask = MIN_TABLE - 1;
-  unsigned _nursery_shift = shift_for(MIN_TABLE);
   size_t _nursery_count = 0;
-  size_t _nursery_full = (MIN_TABLE - 1) / 2; // flushed past this many nodes (_nursery_mask / 2): half its slots
+  size_t _nursery_full = (MIN_TABLE - 1) / NURSERY_LOAD; // flushed past this many nodes: _nursery_mask / NURSERY_LOAD
   uint8_t *const _young = static_cast<uint8_t *>(map_pages(ARENA_NODES));
   Tree _young_lo = 2;
 
@@ -507,7 +646,7 @@ private:
   // natural size is the number of distinct redexes rather than the number of
   // live nodes, and losing an entry costs time, not correctness.
   Memo *const _memo = static_cast<Memo *>(map_pages(MAX_MEMO * sizeof(Memo)));
-  size_t _memo_mask = 0;
+  uint32_t _memo_mask = 0; // 32 bits, like the hash it masks: one `and` with a memory operand, no zero-extension
   size_t _memo_cap = 0;  // the bound (see size_memo)
   size_t _memo_room = 0; // puts until it next grows (see memo_put)
 
@@ -558,8 +697,8 @@ private:
    * took 0.2% more steps on the build's compile phase and 0.8% more on its
    * heavy tests, for the two instructions it saves.
    */
-  static uint64_t hash(uint32_t u, uint32_t v) {
-    const uint64_t x = ((uint64_t(u) << 32) | v) * 0x9e3779b97f4a7c15ULL;
+  static uint64_t hash(uint64_t key) {
+    const uint64_t x = key * 0x9e3779b97f4a7c15ULL;
     return x ^ (x >> 32);
   }
 
@@ -638,49 +777,57 @@ private:
     return GROUP - w >= Word::WIDTH ? ~uint64_t(0) : (uint64_t(1) << ((GROUP - w) << Word::SHIFT)) - 1;
   }
   static size_t lane(uint64_t mask) { return size_t(__builtin_ctzll(mask)) >> Word::SHIFT; }
-  static uint8_t tag_of(uint32_t h) { const uint8_t t = h & 0x7f; return t + !t; } // never EMPTY
+  /** The control byte of a node_hash: its low 7 bits under a set top bit,
+   * never EMPTY. One instruction; `t + !t` over 1..127 was three, on every
+   * search and insertion. (Word's byte tricks are exact for 0 and borrow the
+   * same way whatever the top bit; the set top bit is what lets SSE2's
+   * empties() read a group's occupancy straight off a movemask.) */
+  static uint8_t tag_of(uint32_t h) { return uint8_t(h) | 0x80; }
 
-  /** An empty slot, which a node is about to take. */
-  struct Slot {
-    Group *group;
-    size_t i;
-  };
-
-  /** Fill an empty slot. */
-  static void put(Slot slot, uint8_t tag, Tree at) {
-    slot.group->ctrl[slot.i] = tag;
-    slot.group->at[slot.i] = at;
+  /** Fill slot `i` of `group`, which is empty. */
+  static void put(Group &group, size_t i, uint8_t tag, Tree at) {
+    group.ctrl[i] = tag;
+    group.at[i] = at;
   }
 
 #ifdef __SSE2__
   /** The slots of `group` whose control byte is `b`, as a bit per slot. */
   static unsigned bytes_equal(const Group &group, uint8_t b) {
     const __m128i ctrl = _mm_load_si128(reinterpret_cast<const __m128i *>(group.ctrl));
-    return unsigned(_mm_movemask_epi8(_mm_cmpeq_epi8(ctrl, _mm_set1_epi8(char(b))))) & ((1u << GROUP) - 1);
+    // The byte spread over a word first: a movd and a shuffle, where
+    // _mm_set1_epi8 of a variable is a movd and three unpacks.
+    const __m128i tag = _mm_set1_epi32(int(b * 0x01010101u));
+    return unsigned(_mm_movemask_epi8(_mm_cmpeq_epi8(ctrl, tag))) & ((1u << GROUP) - 1);
   }
-  /** The first empty slot of `group`, or GROUP if it has none. */
-  static size_t vacancy(const Group &group) {
-    const unsigned e = bytes_equal(group, EMPTY);
-    return e ? size_t(__builtin_ctz(e)) : GROUP;
+  /** The empty slots of `group`, as a bit per slot: the control bytes whose
+   * top bit is clear, since a tag's is set and EMPTY's clear, read as the
+   * group's sign bits — no compare, and the 4 bytes past GROUP are always
+   * 0. (As a mask rather than a first index, so that a loop looking for a
+   * group with one tests the mask: "first index, or GROUP" was a second
+   * compare after the ctz, 2% more instructions on the compile, half in the
+   * flush and half in the re-lay.) */
+  static unsigned empties(const Group &group) {
+    const __m128i ctrl = _mm_load_si128(reinterpret_cast<const __m128i *>(group.ctrl));
+    return unsigned(_mm_movemask_epi8(ctrl)) ^ ((1u << GROUP) - 1);
   }
 #else
-  /** The first empty slot of `group`, or GROUP if it has none. */
-  static size_t vacancy(const Group &group) {
+  /** The empty slots of `group`, as a bit per slot. */
+  static unsigned empties(const Group &group) {
+    unsigned e = 0;
     for (size_t w = 0; w < GROUP; w += Word::WIDTH)
-      if (const uint64_t e = Word(group.ctrl + w).empty() & lanes(w)) return w + lane(e);
-    return GROUP;
+      for (uint64_t m = Word(group.ctrl + w).empty() & lanes(w); m; m &= m - 1) e |= 1u << (w + lane(m));
+    return e;
   }
 #endif
+  /** The first slot of an empties() mask, which must have one. */
+  static size_t first(unsigned empties) { return size_t(__builtin_ctz(empties)); }
 
-  /** Where a search of the table ended: the node for the shape, if the table
-   * has it; else 0, and the slot it would take, the first empty one of the
-   * first group that has one. */
-  struct Found {
-    Tree at;
-    Slot empty;
-  };
-
-  Found search(uint32_t h, uint32_t u, uint32_t v) const {
+  /** The node for the shape, if the table has it; else what `miss` makes of
+   * the slot it would take, the first empty one of the first group that has
+   * one. A continuation rather than a struct of both: returned as a struct,
+   * the slot was built and stored on the way out of every search that found
+   * its node. */
+  template <typename Miss> Tree search(uint32_t h, uint32_t u, uint32_t v, Miss miss) const {
     const uint8_t tag = tag_of(h);
     for (size_t g = top_bits(h, _groups_shift);; g = (g + 1) & _groups_mask) {
       Group &group = _groups[g];
@@ -688,17 +835,17 @@ private:
       for (unsigned m = bytes_equal(group, tag); m; m &= m - 1) {
         const Tree at = group.at[__builtin_ctz(m)];
         const Node n = _arena[at];
-        if (n.u == u && n.v == v) return {at, {}};
+        if (n.u == u && n.v == v) return at;
       }
 #else
       for (size_t w = 0; w < GROUP; w += Word::WIDTH)
         for (uint64_t m = Word(group.ctrl + w).match(tag) & lanes(w); m; m &= m - 1) {
           const Tree at = group.at[w + lane(m)];
           const Node n = _arena[at];
-          if (n.u == u && n.v == v) return {at, {}};
+          if (n.u == u && n.v == v) return at;
         }
 #endif
-      if (const size_t i = vacancy(group); i < GROUP) return {0, {&group, i}};
+      if (const unsigned e = empties(group)) return miss(group, first(e));
     }
   }
 
@@ -712,17 +859,11 @@ private:
   /** insert_interned for a node whose node_hash is known to be `h`, not counted:
    * a loop of these adds its count once. */
   void insert_hashed(Tree at, uint32_t h) {
-    size_t g = top_bits(h, _groups_shift), i;
-    while ((i = vacancy(_groups[g])) == GROUP) g = (g + 1) & _groups_mask;
-    put({&_groups[g], i}, tag_of(h), at);
+    size_t g = top_bits(h, _groups_shift);
+    unsigned e;
+    while (!(e = empties(_groups[g]))) g = (g + 1) & _groups_mask;
+    put(_groups[g], first(e), tag_of(h), at);
   }
-
-  // How many nodes ahead a loop of insertions asks for the line of the group a
-  // node goes in (rebuild_interned, flush_nursery). None of them waits on
-  // another, so their misses can overlap, once the line is asked for well
-  // before the insertion that needs it rather than left to the out-of-order
-  // core: re-laying took 30% less time over the build's test runner.
-  static constexpr size_t AHEAD = 16;
 
   /** Ask for the line of the group `at` goes in, unless it is a swept node. */
   void prefetch_group(Tree at) const {
@@ -791,6 +932,7 @@ private:
     _groups_mask = groups - 1;
     _groups_shift = shift_for(groups);
     _interned_count = 0;
+    _interned_room = groups * GROUP * 14 / 15;
   }
 
   /** Whether `at` is a cell of the run, which the table leaves out. */
@@ -809,7 +951,7 @@ private:
     if (const Tree cell = in_run(u, v)) return cell;
     const uint32_t h = node_hash(u, v);
     if (const Tree at = _nursery[nursery_slot(h, u, v)].at) return at;
-    return search(h, u, v).at;
+    return search(h, u, v, [](Group &, size_t) { return Tree(0); });
   }
 
   /** Put the run's cells in the table, so that it no longer takes a run to find them. */
@@ -833,7 +975,7 @@ private:
    * under each power of two was twice the size: the build's compile runner
    * peaked at 275 MB rather than 211 MB.
    */
-  static bool fits(size_t nodes, size_t groups) { return nodes * 15 <= groups * GROUP * 14; }
+  static bool fits(size_t nodes, size_t groups) { return nodes <= groups * GROUP * 14 / 15; }
 
   /** Grow the table, if need be, so that the nursery and `more` further nodes
    * fit. Grown, it has room for the run's cells as well, as if they were in it:
@@ -843,20 +985,51 @@ private:
    * compiling a 5 MB source with a compiler that walks every character of it). */
   void reserve_interned(size_t more) {
     const size_t nodes = _interned_count + _nursery_count + more;
-    if (!fits(nodes, _groups_mask + 1)) rebuild_interned(capacity_for(nodes + (_run_end - _run)));
+    if (EAGER_UNLIKELY(nodes > _interned_room)) rebuild_interned(capacity_for(nodes + (_run_end - _run)));
   }
 
-  /** The table's size in groups, doubled as often as it takes to hold `nodes`. */
-  size_t capacity_for(size_t nodes) const {
-    size_t groups = _groups_mask + 1;
+  /** The smallest table that holds `nodes`. */
+  static size_t groups_for(size_t nodes) {
+    size_t groups = MIN_GROUPS;
     while (!fits(nodes, groups)) groups *= 2;
     return groups;
   }
 
+  /** The table's size in groups, doubled as often as it takes to hold `nodes`. */
+  size_t capacity_for(size_t nodes) const { return std::max(_groups_mask + 1, groups_for(nodes)); }
+
+  /** The table a budget takes: one that holds every node the arena can hold
+   * before the next collection, since every one of them is interned. Laid at
+   * that size when the budget is set or lowered (set_budget, clear) and when
+   * a collection raises it (collect_at), rather than reached by doubling from
+   * MIN_GROUPS: each doubling re-inserted everything in the table, about
+   * twice the final count in all — on the build's heaviest compile 2.94M
+   * insertions in 10 re-lays, 8.8% of its instructions, for a table that
+   * ends at exactly this size. An untouched page of the table is empty
+   * (EMPTY is 0), so the larger table costs nothing until an insertion lands
+   * on a page, and it would have landed on every page of this size before
+   * the collection anyway; a reduction that stops short of its budget has
+   * touched pages it would not have, which is memory rather than time: a
+   * module load that raised its budget to 64 MB and used half of it held
+   * 32 MB more, in the same time, and the build's compile and test phases
+   * peak at what they peaked at. Without a budget, MIN_GROUPS and doubling,
+   * as before: a table sized for the whole arena would be zeroed whole at a
+   * re-lay. */
+  size_t groups_for_budget() const { return _budget < ARENA_NODES ? groups_for(_budget) : MIN_GROUPS; }
+
+  /** The nursery slot a node_hash picks: its low bits — one `and` with the
+   * mask in memory, where the top bits were a shift by a count loaded into
+   * cl and the result moved back out (0.5% fewer instructions on the build's
+   * heaviest compile, the same probe lengths: the nursery is small, and the
+   * low bits of a product by an odd constant are distinct for consecutive
+   * indices, which is what its children mostly are). The table keeps the top
+   * bits (top_bits). */
+  size_t nursery_home(uint32_t h) const { return h & _nursery_mask; }
+
   /** The slot of the nursery holding the node for this shape, whose hash is
    * `h`, or the empty one it would take. */
   size_t nursery_slot(uint32_t h, uint32_t u, uint32_t v) const {
-    for (size_t i = top_bits(h, _nursery_shift);; i = (i + 1) & _nursery_mask) {
+    for (size_t i = nursery_home(h);; i = (i + 1) & _nursery_mask) {
       const Nurse s = _nursery[i];
       if (!s.at) return i;
       if (s.h != h) continue;
@@ -877,11 +1050,11 @@ private:
     return at;
   }
 
-  /** Take the node out of nursery slot `i`, which holds one. */
+  /** Take the node out of nursery slot `i`, which holds one. Its `_young`
+   * byte stays: see forgotten(). */
   Nurse forget(size_t i) {
     Nurse &slot = _nursery[i];
     const Nurse s = slot;
-    _young[s.at] = 0;
     slot.at = 0;
     return s;
   }
@@ -893,7 +1066,15 @@ private:
   }
 
   /** The nursery has been emptied: what goes in next is what alloc() hands
-   * out next, from here on up. */
+   * out next, from here on up — and everything that was in it is below.
+   * The free list is ascending and alloc() takes it in order, so an epoch's
+   * nodes are either all off the list below its head now, or the list ran
+   * out and they are all below the high-water mark. So the `_young` bytes of
+   * the nodes flushed are never read again (young() tests the bound first),
+   * and a flush leaves them set rather than clearing one per node: 2.5%
+   * fewer instructions on the build's heaviest compile. Only a collection
+   * moves the bound down, when the sweep rebuilds the free list, and it
+   * clears all the bytes up to the high-water mark instead (collect). */
   void forgotten() {
     _young_lo = _free ? _free : _head;
     _nursery_count = 0;
@@ -904,19 +1085,32 @@ private:
    * has not reached NURSERY. */
   [[gnu::noinline]] void flush_nursery() {
     reserve_interned(0); // a re-lay takes the nursery with it, and empties it
-    // One pass: a node is inserted and its slot and bit cleared as it goes,
-    // rather than the log read again to empty the nursery afterwards.
+    // One pass: a node is inserted and its slot cleared as it goes, rather
+    // than the log read again to empty the nursery afterwards. 26
+    // instructions a node (was 45): the members in locals (a byte store into
+    // `_young` aliased every one of them, and there is none now, see
+    // forgotten()), the prefetch unguarded (see _nursed), the group's empty
+    // slots one movemask (empties).
     const size_t count = _nursery_count;
-    for (size_t j = 0; j < count; ++j) {
-      if (j + AHEAD < count) __builtin_prefetch(&_groups[top_bits(_nursery[_nursed[j + AHEAD]].h, _groups_shift)], 1);
-      const Nurse s = forget(_nursed[j]);
-      insert_hashed(s.at, s.h);
+    Nurse *const nursery = _nursery;
+    Group *const groups = _groups;
+    const unsigned shift = _groups_shift;
+    const size_t mask = _groups_mask;
+    const Tree *const end = _nursed + count;
+    for (ptrdiff_t j = -ptrdiff_t(count); j != 0; ++j) {
+      __builtin_prefetch(&groups[top_bits(nursery[end[j + ptrdiff_t(AHEAD)]].h, shift)], 1); // past the end: see _nursed
+      Nurse &slot = nursery[end[j]];
+      const Nurse s = slot;
+      slot.at = 0;
+      size_t g = top_bits(s.h, shift);
+      unsigned e;
+      while (!(e = empties(groups[g]))) g = (g + 1) & mask;
+      put(groups[g], first(e), tag_of(s.h), s.at);
     }
     _interned_count += count;
     forgotten();
     _nursery_mask = std::min(2 * _nursery_mask + 1, NURSERY - 1);
-    _nursery_shift = shift_for(_nursery_mask + 1);
-    _nursery_full = _nursery_mask / 2;
+    _nursery_full = _nursery_mask / NURSERY_LOAD;
   }
 
   /**
@@ -933,7 +1127,7 @@ private:
   [[gnu::always_inline]] Tree intern(uint32_t u, uint32_t v) {
     const uint32_t h = node_hash(u, v);
     if (u == _newest || v == _newest) {
-      size_t i = top_bits(h, _nursery_shift);
+      size_t i = nursery_home(h);
       while (_nursery[i].at) i = (i + 1) & _nursery_mask;
       return nurse(i, h, alloc(u, v));
     }
@@ -947,11 +1141,20 @@ private:
    * slot the search ended on. Out of line, like the rest of what a step
    * reaches only now and then. */
   [[gnu::noinline]] Tree intern_old(uint32_t h, uint32_t u, uint32_t v) {
-    const auto [at, empty] = search(h, u, v);
-    if (at) return at;
+    return search(h, u, v, [&](Group &group, size_t i) { return intern_fresh(u, v, group, i); });
+  }
+
+  /** intern_old() past a search that found nothing: the run, or a fresh node
+   * in slot `i` of `group`, where the search ended. Its own function, a tail
+   * call that takes no hash (three instructions to redo here, one node in six),
+   * so that intern_old() calls nothing, keeps nothing live past its search
+   * and saves one register (the table's base): with the re-lay this one may
+   * run reached from it, the four searches in five that find their node
+   * paid a prologue and epilogue of six instructions. */
+  [[gnu::noinline]] Tree intern_fresh(uint32_t u, uint32_t v, Group &group, size_t i) {
     if (const Tree cell = in_run(u, v)) return cell;
     const Tree fresh = alloc(u, v);
-    put(empty, tag_of(h), fresh);
+    put(group, i, tag_of(node_hash(u, v)), fresh);
     ++_interned_count;
     reserve_interned(0);
     return fresh;
@@ -960,11 +1163,11 @@ private:
   /** The memo's hash of the step's operands: hash()'s low 32 bits, which a
    * slot index comes from (the memo is at most 2^24 slots), and what a
    * MEMOIZE frame carries (Frame::meta). */
-  static uint32_t memo_hash(uint32_t a, uint32_t b) { return uint32_t(hash(a, b)); }
+  static uint32_t memo_hash(uint64_t key) { return uint32_t(hash(key)); }
 
-  Tree memo_get(uint32_t h, uint32_t a, uint32_t b) {
+  Tree memo_get(uint32_t h, uint64_t key) {
     const Memo &m = _memo[h & _memo_mask];
-    if (m.a == a && m.b == b) { ++stats_counters.memo_hits; return m.r; }
+    if (m.key_word() == key) { ++stats_counters.memo_hits; return m.r; }
     return 0; // no tree is index 0, so 0 is "miss"
   }
 
@@ -972,16 +1175,16 @@ private:
    * taken as many entries as it has slots, until it reaches its bound. The
    * memo only ever doubles, so the slot `h` picks stays the one hash(a, b)
    * would pick now, whatever it has grown by since `h` was taken. */
-  void memo_put(uint32_t h, uint32_t a, uint32_t b, uint32_t r) {
+  void memo_put(uint32_t h, uint64_t key, uint32_t r) {
     ++stats_counters.memo_puts;
-    _memo[h & _memo_mask] = {a, b, r};
+    _memo[h & _memo_mask].set(key, r);
     if (EAGER_UNLIKELY(--_memo_room == 0)) memo_full();
   }
 
   /** As many puts as the memo has slots since it last grew: grow it, or at
    * its bound, wait — a raised bound lets it grow at the very next put. */
   [[gnu::noinline]] void memo_full() {
-    if (_memo_mask + 1 < _memo_cap) grow_memo();
+    if (size_t(_memo_mask) + 1 < _memo_cap) grow_memo();
     else _memo_room = SIZE_MAX;
   }
 
@@ -991,15 +1194,15 @@ private:
    * added — so no entry moves onto another.
    */
   [[gnu::noinline]] void grow_memo() {
-    const size_t half = _memo_mask + 1;
-    std::fill_n(_memo + half, half, Memo{0, 0, 0});
-    _memo_mask = 2 * half - 1;
+    const size_t half = size_t(_memo_mask) + 1;
+    std::fill_n(_memo + half, half, Memo{});
+    _memo_mask = uint32_t(2 * half - 1);
     for (Memo *m = _memo; m < _memo + half; ++m)
-      if (m->a && (memo_hash(m->a, m->b) & half)) {
+      if (const uint64_t key = m->key_word(); key && (memo_hash(key) & half)) {
         m[half] = *m;
-        *m = {0, 0, 0};
+        *m = Memo{};
       }
-    _memo_room = _memo_mask + 1;
+    _memo_room = size_t(_memo_mask) + 1;
   }
 
   /**
@@ -1018,17 +1221,26 @@ private:
    * once it needs the memo after all — linear, not exponential: a recursion
    * that calls itself twice on one argument takes about twice the steps it
    * does with every lookup made.
+   *
+   * The count is below MEMO_COLD at every lookup made: the sampled one puts it
+   * back to MEMO_COLD - 1 first, so that a miss counts the same step up as
+   * any other, with no clamp — a sampled miss then counts afresh at
+   * MEMO_COLD, as before, for four instructions fewer on every miss.
    */
   [[gnu::always_inline]] Tree recall(Tree a, Tree b, Frame *&top, Frame *limit, uint32_t steps) {
     Cold &cold = _cold[cold_index(a)];
-    if (cold.n >= MEMO_COLD && ++cold.n < MEMO_COLD + 16) return 0;
-    const uint32_t h = memo_hash(a, b);
-    if (const Tree hit = memo_get(h, a, b)) {
+    if (cold.n >= MEMO_COLD) {
+      if (++cold.n < MEMO_COLD + 16) return 0;
+      cold.n = MEMO_COLD - 1;
+    }
+    const uint64_t key = memo_key(a, b);
+    const uint32_t h = memo_hash(key);
+    if (const Tree hit = memo_get(h, key)) {
       cold.n = 0;
       return hit;
     }
-    cold.n = std::min(cold.n + 1, int(MEMO_COLD)); // a sampled miss counts afresh
-    push(top, limit, Frame(MEMOIZE, a, b, steps, h));
+    ++cold.n;
+    push(top, limit, Frame::memoize(key, steps, h));
     return 0;
   }
 
@@ -1080,8 +1292,8 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (top[-1].tag() == MEMOIZE && top[-1].arg1() == _skip_line && top[-1].arg2() == b)
-      memo_put(memo_hash(_skip_line, b), _skip_line, b, xs);
+    if (const uint64_t key = memo_key(_skip_line, b); top[-1].tag() == MEMOIZE && top[-1].key() == key)
+      memo_put(memo_hash(key), key, xs);
     return xs;
   }
 
@@ -1205,7 +1417,7 @@ private:
    */
   void size_memo() {
     _memo_cap = memo_cap(_budget);
-    std::fill_n(_memo, MIN_TABLE, Memo{0, 0, 0});
+    std::fill_n(_memo, MIN_TABLE, Memo{});
     _memo_mask = MIN_TABLE - 1;
     _memo_room = MIN_TABLE;
     std::fill(std::begin(_cold), std::end(_cold), Cold{0});
@@ -1218,9 +1430,12 @@ private:
   /** What a budget of `nodes` holds at most, in bytes: the arena up to it, the
    * hash-consing table and memo at the sizes it takes them to, and a nursery
    * byte for each of the nodes. (The nursery itself is at most 384 KB, like
-   * `_cold` not something a reduction grows.) */
-  size_t footprint(size_t nodes) const {
-    return nodes * sizeof(Node) + capacity_for(nodes) * sizeof(Group) + memo_cap(nodes) * sizeof(Memo) + nodes;
+   * `_cold` not something a reduction grows.) The table at the size the budget
+   * takes it to (groups_for), whatever size it is now: set_limit() lowers a
+   * budget by this, and the table laid for the larger one follows it down
+   * (set_budget) — counted, no limit under its size could ever be met. */
+  static size_t footprint(size_t nodes) {
+    return nodes * sizeof(Node) + groups_for(nodes) * sizeof(Group) + memo_cap(nodes) * sizeof(Memo) + nodes;
   }
 
   /** `what` would grow past what set_limit() allows, or with no limit, the arena. */
@@ -1256,22 +1471,34 @@ private:
    * budget is never lowered: the arena keeps its high-water mark, and
    * allocation below the budget is what a free list over a larger arena
    * cannot give back.
+   *
+   * Not raised sooner, or by more: raised from the first or second collection
+   * the compile phase runs 1.5x or 1.2x slower (its sources lose the 16 MB
+   * budget), and x16 or straight to the ceiling the four heaviest tests take
+   * 2.5% more or 10% fewer steps but 4-12% longer, the load's third collection
+   * having put every test after it on a 256 or 512 MB budget.
    */
   [[gnu::noinline, gnu::cold]] void collect_at(Tree a, Tree b) {
     _roots.push_back(a);
     _roots.push_back(b);
-    collect();
+    mark_all();
     _roots.pop_back();
     _roots.pop_back();
     // Growing the budget when the live set turns out to be a large share of it
     // is what keeps a genuinely big term from turning into a collection per
-    // allocation. There is nothing left to grow into at the ceiling.
-    while (_live * 2 > _budget) {
-      if (_budget >= _max_budget) out_of_memory("the live set");
-      raise_budget(2, _max_budget);
-    }
+    // allocation. There is nothing left to grow into at the ceiling: the
+    // reduction fails, once the sweep has left the arena whole.
+    const bool forced = _live * 2 > _budget;
+    while (_live * 2 > _budget && _budget < _max_budget) raise_budget(2, _max_budget);
     if (++_collections > 2 && _budget < _ceiling) raise_budget(4, _ceiling);
-    update_due();
+    // The budget decided first, so that the one re-lay is at the size the
+    // raised budget takes the table to (groups_for_budget) — unless the live
+    // set forced the raise: that is mostly a run (a 5 MB string bound, say),
+    // whose cells never enter the table, and a table laid for the headroom
+    // over it is memory committed for nothing (a 128 MB table for 62 nodes,
+    // 90 MB more at peak over that bind and light work after it).
+    sweep_into(std::max(capacity_for(_live - (_run_end - _run)), forced ? MIN_GROUPS : groups_for_budget()));
+    if (_live * 2 > _budget) out_of_memory("the live set");
   }
 
   /** Multiply the budget by `factor`, to at most `bound`, and let the memo grow
@@ -1280,7 +1507,7 @@ private:
   void raise_budget(size_t factor, size_t bound) {
     _budget = std::min(_budget * factor, bound);
     _memo_cap = memo_cap(_budget);
-    if (_memo_room > _memo_mask + 1) _memo_room = 1; // the memo was waiting at its bound
+    if (_memo_room > size_t(_memo_mask) + 1) _memo_room = 1; // the memo was waiting at its bound
   }
 
 public:
@@ -1288,7 +1515,7 @@ public:
   // everything look garbage, so opting in has to be the caller's decision.
   BasicEagerFastest() : _budget(ARENA_NODES), _ceiling(ARENA_NODES) {
     map_arena();
-    rebuild_interned(MIN_GROUPS);
+    rebuild_interned(groups_for_budget());
     size_memo();
     intern_jets();
   }
@@ -1297,7 +1524,7 @@ public:
     munmap(_arena, ARENA_BYTES);
     munmap(_groups, MAX_GROUPS * sizeof(Group));
     munmap(_nursery, NURSERY * sizeof(Nurse));
-    munmap(_nursed, NURSERY / 2 * sizeof(Tree));
+    munmap(_nursed, NURSED * sizeof(Tree));
     munmap(_young, ARENA_NODES);
     munmap(_marks, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
@@ -1329,20 +1556,37 @@ public:
   /** Drop everything allocated so far. Every Tree handed out becomes invalid. */
   void clear() {
     Node *old = _arena;
+    const uint32_t head = _head;
     map_arena(); // first, so a failed mapping leaves the old arena intact
     munmap(old, ARENA_BYTES);
+    zero_lines(_young, (head + 63) & ~size_t(63));
     _top = _frames;
     release_frames();
     _roots.clear();
     _grey.clear();
     _grey.shrink_to_fit();
-    if (_groups_touched > MIN_GROUPS) {
-      madvise(_groups + MIN_GROUPS, (_groups_touched - MIN_GROUPS) * sizeof(Group), MADV_DONTNEED);
-      _groups_touched = MIN_GROUPS;
-    }
-    rebuild_interned(MIN_GROUPS);
+    release_interned(MIN_GROUPS);
+    rebuild_interned(groups_for_budget());
     size_memo();
     intern_jets();
+  }
+
+  /** Give back the pages of the table above `groups` groups that a re-lay has
+   * touched: they are untouched again, every byte 0, to be faulted in only if
+   * a re-lay reaches them (a fresh mapping costs a fault per page; a table
+   * that is not coming back should not keep them). */
+  void release_interned(size_t groups) {
+    if (_groups_touched > groups) {
+      madvise(_groups + groups, (_groups_touched - groups) * sizeof(Group), MADV_DONTNEED);
+      _groups_touched = groups;
+    }
+  }
+
+  /** Re-lay the table at `groups` groups, which must hold what it holds,
+   * giving back what it had above that. */
+  void lay_interned(size_t groups) {
+    release_interned(groups);
+    rebuild_interned(groups);
   }
 
   /**
@@ -1362,10 +1606,19 @@ public:
    * Both tables name nodes, so both are the collection's business. The
    * hash-consing table is re-laid over what survived — an entry left pointing
    * at a freed slot would hand out a node that has since become something else.
-   * The memo is dropped outright: its keys are node indices too, and it is a
-   * cache, so re-earning its entries is the cheaper correctness.
+   * The memo is filtered by the marks (mark_all): an entry any of whose
+   * nodes is swept goes, the rest stay.
    */
   [[gnu::noinline]] void collect() {
+    mark_all();
+    sweep_into(capacity_for(_live - (_run_end - _run)));
+  }
+
+  /** The first half of a collection: mark what the roots and the frames
+   * reach, filter the memo by it and trim the run to it. Between it and
+   * sweep_into() is where collect_at() decides the budget, which the table the
+   * sweep re-lays is sized for. */
+  void mark_all() {
     _live = 0;
     for (Tree root : _roots) mark(root);
     for (const Frame *f = _frames; f != _top; ++f) { // a reduction in progress is live
@@ -1379,10 +1632,11 @@ public:
     // it said, and an entry any of whose nodes is about to be swept must go —
     // the index may be reused. What the filter keeps is reduction work;
     // re-earning it was the old cost of every collection.
-    for (Memo *m = _memo, *const end = _memo + _memo_mask + 1; m != end; ++m) {
-      if (!m->a) continue;
-      if (marked(m->a) && marked(m->b) && marked(m->r)) continue;
-      *m = {0, 0, 0};
+    for (Memo *m = _memo, *const end = _memo + size_t(_memo_mask) + 1; m != end; ++m) {
+      const uint64_t key = m->key_word();
+      if (!key) continue;
+      if (marked(key_a(key)) && marked(key_b(key)) && marked(m->r)) continue;
+      *m = Memo{};
     }
     // Swept indices will be reused by other functions.
     std::fill(std::begin(_cold), std::end(_cold), Cold{0});
@@ -1390,15 +1644,20 @@ public:
     if (_run_end == _run) _run = _run_end = 0;
     ++stats_counters.gcs;
     stats_counters.gc_marked += _live;
-    // Re-laid at the size it already had rather than at the size of what
-    // survived: the arena keeps its high-water mark, so the free list will fill
-    // back up to about here before the next collection, and shrinking now only
-    // buys a run of rehashes on the way back. Grown, though, if what survived
-    // does not fit: the nursery's nodes go in here too, and nothing made room
-    // for them as they went in. Sized by what goes in: _live less the run's
-    // cells, which stay out (and after the trim above are all live).
-    relay_interned(capacity_for(_live - (_run_end - _run)), true);
+  }
+
+  /** The second half: the table re-laid at `groups`, which must hold what
+   * survived outside the run, and the arena swept into it. Re-laid at the size
+   * it already had rather than at the size of what survived: the arena keeps
+   * its high-water mark, so the free list will fill back up to about here
+   * before the next collection, and shrinking now only buys a run of rehashes
+   * on the way back. Grown, though, if what survived does not fit: the
+   * nursery's nodes go in here too, and nothing made room for them as they
+   * went in. */
+  void sweep_into(size_t groups) {
+    relay_interned(groups, true);
     sweep_and_insert();
+    zero_lines(_young, (_head + 63) & ~size_t(63)); // the stale bytes of every flush since: see forgotten()
     empty_nursery();
     update_due();
   }
@@ -1416,6 +1675,10 @@ public:
   void set_budget(size_t nodes) {
     _ceiling = std::min(nodes ? nodes : ARENA_NODES, _max_budget);
     _budget = _ceiling == ARENA_NODES ? ARENA_NODES : std::min(START_BUDGET, _ceiling);
+    // The table at the size this budget takes it to, up or down (set_limit
+    // lowers one), and never below what it holds.
+    const size_t groups = std::max(groups_for_budget(), groups_for(_interned_count + _nursery_count + (_run_end - _run)));
+    if (groups != _groups_mask + 1) lay_interned(groups);
     size_memo();
     update_due();
   }
@@ -1444,7 +1707,7 @@ public:
   std::string stats() {
     return std::to_string(allocated()) + " nodes in arena, " +
            std::to_string(_interned_count + _nursery_count) + " shared, " +
-           std::to_string(_memo_mask + 1) + " memo slots";
+           std::to_string(size_t(_memo_mask) + 1) + " memo slots";
   }
 
   Tree leaf() { return 1; }
@@ -1532,7 +1795,12 @@ public:
    * into runner.cpp's parse_dag_into, it reloads the arena and the stack on
    * every step.
    */
-  [[gnu::noinline, gnu::no_stack_protector]] Tree apply(Tree a, Tree b) {
+  [[gnu::noinline, gnu::no_stack_protector]] Tree apply(Tree a_, Tree b_) {
+    // The operands as 64-bit locals: an index that is known to be zero-
+    // extended is an addressing mode's index register as it is, where a
+    // 32-bit one is a zero-extension and an address computation on every
+    // node read.
+    uint64_t a = a_, b = b_;
     // The step's hot state lives in locals: the evaluator is a global, and
     // stores into the arena, the tables and the frames may alias its members,
     // so a member would be reloaded on every step. The top is written back
@@ -1541,7 +1809,7 @@ public:
     Frame *top = base;
     Frame *const limit = _frame_limit;
     if (base == _frames) _collections = 0; // a top-level reduction begins
-    uint64_t steps = stats_counters.steps;
+    uint64_t steps = stats_counters.steps * STEP;
     Node *const arena = _arena; // never remapped while a reduction runs
     Tree result;
 
@@ -1549,84 +1817,87 @@ public:
       push(top, limit, Frame(DONE, 0)); // popped last: see dispatch
     reduce: // ---- evaluate apply(a, b) ----
       {
-        ++steps;
+        steps += STEP;
         if (EAGER_UNLIKELY(_due)) {
           _top = top;
-          stats_counters.steps = steps;
-          collect_at(a, b);
+          stats_counters.steps = steps / STEP;
+          collect_at(Tree(a), Tree(b));
         }
 
-        const Node an = arena[a];
+        const uint64_t an = node_word(arena, a);
 
-        if (!an.u) {                                     // apply(△, b) = △b
-          result = stem(b);
+        if (!left(an)) {                                 // apply(△, b) = △b
+          result = stem(Tree(b));
           goto dispatch;
         }
-        if (!an.v) {                                     // apply(△u, b) = △ub
-          result = fork(an.u, b);
+        if (!right(an)) {                                // apply(△u, b) = △ub
+          result = fork(left(an), Tree(b));
           goto dispatch;
         }
 
         // a = fork(u, y)
-        const Tree y = an.v;
-        const Node un = arena[an.u];
+        const Tree y = right(an);
+        const uint64_t un = node_word(arena, left(an));
 
-        if (!un.u) {                                     // apply(△△y, b) = y
+        if (!left(un)) {                                 // apply(△△y, b) = y
           result = y;
           goto dispatch;
         }
-        if (EAGER_LIKELY(!un.v)) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
-          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
+        if (EAGER_LIKELY(!right(un))) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
+          if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           // A K-absorber u' answers apply(u', b) without looking at b, so that
           // step is skipped. apply(y, b) is still reduced, as rule (2) says:
           // peek.hpp's S K peek drops it, and with it a reduction that might
           // not terminate, which a runner must not paper over.
-          const Node xn = arena[un.u];
-          if (EAGER_LIKELY(xn.v && !arena[xn.u].u)) { // u' = △△x₂: apply(x₂, apply(y, b))
-            const Node x2 = arena[xn.v];
+          const uint64_t xn = node_word(arena, left(un));
+          if (EAGER_LIKELY(right(xn) && !left(node_word(arena, left(xn))))) { // u' = △△x₂: apply(x₂, apply(y, b))
+            const uint64_t x2 = node_word(arena, right(xn));
             // top[-1] is at least the DONE frame; an APPLY_TO frame's second word is 0.
-            if (!x2.u) {                                                         //   x₂ = △:   △(y b)
+            if (!left(x2)) {                                                     //   x₂ = △:   △(y b)
               if (top[-1].hi == APPLY_TO) top[-1].hi = FORK_RIGHT;                //     then △(y b)e
               else push(top, limit, Frame(STEM, 0));
-            } else if (!x2.v) {                                                  //   x₂ = △x₃: △x₃(y b)
-              if (x2.u == 1 && top[-1].hi == APPLY_TO) --top;                     //     x₃ = △, then (y b)
-              else push(top, limit, Frame(FORK_WITH, x2.u));
-            } else if (!arena[x2.u].u) push(top, limit, Frame(RETURN, x2.v));    //   x₂ = △△z: z
-            else push(top, limit, Frame(CALL, xn.v));
-          } else if (!xn.u) {                          // u' = △:  △b(y b)
-            push(top, limit, Frame(FORK_WITH, b));
-          } else if (!xn.v && !arena[xn.u].u) {        // u' = △△: b
-            push(top, limit, Frame(RETURN, b));
+            } else if (!right(x2)) {                                             //   x₂ = △x₃: △x₃(y b)
+              if (left(x2) == 1 && top[-1].hi == APPLY_TO) --top;                 //     x₃ = △, then (y b)
+              else push(top, limit, Frame(FORK_WITH, left(x2)));
+            } else if (!left(node_word(arena, left(x2)))) push(top, limit, Frame(RETURN, right(x2))); // x₂ = △△z: z
+            else push(top, limit, Frame(CALL, right(xn)));
+          } else if (!left(xn)) {                        // u' = △:  △b(y b)
+            push(top, limit, Frame(FORK_WITH, Tree(b)));
+          } else if (!right(xn) && !left(node_word(arena, left(xn)))) { // u' = △△: b
+            push(top, limit, Frame(RETURN, Tree(b)));
           } else {
-            push(top, limit, Frame(COMPUTE_AND_APPLY, un.u, b));
+            push(top, limit, Frame(COMPUTE_AND_APPLY, left(un), Tree(b)));
           }
           a = y;
           goto reduce;
         }
 
         // apply(△(△wx)y, b) — triage on b
-        const Node bn = arena[b];
+        const uint64_t bn = node_word(arena, b);
 
-        if (!bn.u) {                                     //   b = △:  w
-          result = un.u;
+        if (!left(bn)) {                                 //   b = △:  w
+          result = left(un);
           goto dispatch;
         }
-        if (!bn.v) {                                     //   b = △d: apply(x, d)
-          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
-          a = un.v;
-          b = bn.u;
+        if (!right(bn)) {                                //   b = △d: apply(x, d)
+          if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
+          a = right(un);
+          b = left(bn);
           goto reduce;
         }
         {                                                //   b = △de: apply(apply(y, d), e)
-          if (const Tree hit = recall(a, b, top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
+          if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           // After the memo, so that the jet never makes slower what it answers.
           if (JETS && EAGER_UNLIKELY(a == _skip_line)) {
-            if ((result = skip_line(b, top))) goto dispatch;
+            Tree xs = Tree(b);
+            result = skip_line(xs, top);
+            b = xs;
+            if (result) goto dispatch;
             goto reduce;
           }
-          push(top, limit, Frame(APPLY_TO, bn.v));
+          push(top, limit, Frame(APPLY_TO, right(bn)));
           a = y;
-          b = bn.u;
+          b = left(bn);
           goto reduce;
         }
       }
@@ -1641,38 +1912,51 @@ public:
         // and compared in that order, one at a time, on purpose (the asm is a
         // barrier to the compiler's if-to-switch): as a switch, the tag was
         // an indirect jump, mispredicted two times in three.
-        const Frame f = *--top;
-        uint32_t tag = f.tag();
-        if (tag == APPLY_TO) {
+        //
+        // The tests read the frame's second word as it was loaded: whole, or
+        // its low byte in place (a MEMOIZE frame's holds more than the tag),
+        // never the tag extracted into a register of its own — that was a
+        // move and a mask on every pop.
+        --top;
+        asm("" : "+r"(top)); // one register for the top across the pop: without it, two and a move per pop
+        Frame f = *top;
+        if (f.hi == APPLY_TO) { // the whole word: see Frame
           // `result` is unreachable from any root for exactly as long as it
           // takes to become `a`, which allocates nothing.
           a = result;
           b = f.arg1();
           goto reduce;
         }
-        asm("" : "+r"(tag));
-        if (tag >= FORK_WITH) { // the result-only frames: the rule fn takes with r
-          asm("" : "+r"(tag));
-          result = tag == FORK_WITH ? fork(f.arg1(), result) : tag == STEM ? stem(result)
-                 : tag == RETURN ? f.arg1() : fork(result, f.arg1());
+        asm("" : "+r"(f.hi));
+        if (f.hi & FORK_WITH) { // the result-only frames: the rule fn takes with r
+          // One intern() for the three that build a node (a STEM frame's
+          // argument is 0, so △r△ reads △r), chosen by two compares.
+          const Tree x = f.arg1();
+          Tree u = x, v = result;
+          if (f.hi != FORK_WITH) { // the whole word, as for APPLY_TO: these carry nothing but the tag
+            if (f.hi == RETURN) { result = x; continue; }
+            u = result, v = x;
+          }
+          result = intern(u, v);
           continue;
         }
-        asm("" : "+r"(tag));
-        if (tag == MEMOIZE) {
+        asm("" : "+r"(f.hi));
+        if (f.tag() == MEMOIZE) {
           // A tail step (`b = △d`) shares its result with the step it became,
           // so consecutive MEMOIZE frames all record the same normal form.
           // Steps that resolved in a handful of rules are cheaper to redo than
           // to let their entries evict a slower one from the memo.
-          if (admitted(f.steps(), steps)) memo_put(f.meta(), f.arg1(), f.arg2(), result);
+          if (admitted(f.steps(), steps)) memo_put(f.meta(), f.key(), result);
           continue;
         }
-        if (tag == COMPUTE_AND_APPLY) {
-          push(top, limit, Frame(APPLY_TO, result)); // apply(apply(fn, arg), result)
+        asm("" : "+r"(f.hi));
+        if (f.hi == COMPUTE_AND_APPLY) {
+          *top++ = Frame(APPLY_TO, result); // apply(apply(fn, arg), result): into the slot just popped, so no limit test
           a = f.arg1();
           b = f.arg2();
           goto reduce;
         }
-        if (tag == CALL) {
+        if (f.hi == CALL) {
           a = f.arg1();
           b = result;
           goto reduce;
@@ -1680,14 +1964,14 @@ public:
         break; // DONE: top is back at base
       }
       _top = base;
-      stats_counters.steps = steps;
+      stats_counters.steps = steps / STEP;
       return result;
     } catch (...) {
       // An exhausted arena leaves half a reduction on the stack; drop it, so the
       // frames of a request that failed do not stay roots for every later one,
       // and once no reduction is left, the memory they took: a runaway's is most
       // of the limit.
-      stats_counters.steps = steps;
+      stats_counters.steps = steps / STEP;
       _top = base;
       if (base == _frames) release_frames();
       throw;
