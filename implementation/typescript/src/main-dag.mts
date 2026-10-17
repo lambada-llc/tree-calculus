@@ -42,7 +42,10 @@ Commands:
                           that are not exported are made unique but stay private.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
-                          DAG naming them. Several share what they share.
+                          DAG naming them. Several share what they share. It
+                          comes out canonical, numbered by a walk from the
+                          symbols, so from 'link' output it depends only on what
+                          they are built from.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
 
@@ -55,10 +58,10 @@ Options:
   --except <regex>        The same, by what they are not.
   --format <f>            Output format for 'eval': ${Object.keys(formatters).join(', ')}.
                           Defaults to term.
-  --as-written            'canonicalize' shares a node only with one written
-                          the same way, so nodes built through different names
-                          stay apart, each attributed to the name it was built
-                          through.
+  --as-written            'canonicalize' and 'extract' share a node only with one
+                          written the same way, so nodes built through different
+                          names stay apart, each attributed to the name it was
+                          built through.
 
 A file argument of '-', or no file at all, reads stdin.`;
 
@@ -141,9 +144,7 @@ function run(command: string, files: string[], options: Options): Uint8Array {
         ...by_pattern(options.except, false),
       ])];
       if (!symbols.length) raise('extract needs --symbol, --matching or --except');
-      // A DAG ends in the name of its value; a set of them has none, so it ends
-      // in nothing and is read as a library.
-      return utf8(module.extract(...symbols).toString(symbols.length === 1 ? symbols : []));
+      return utf8(module.extract(symbols, { as_written: options.as_written }).toString());
     }
 
     case 'eval': {
