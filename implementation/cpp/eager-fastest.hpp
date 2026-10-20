@@ -125,7 +125,8 @@
 //     compares the top with the base; the tag in the low half of a frame's
 //     second word, so that a constant tag is an immediate store and an
 //     APPLY_TO frame's second word is 0 (the fusions onto it test one word);
-//     the pop chain in pop-frequency order; the memo's growth a countdown;
+//     the pop chain in pop-frequency order as it then was; the memo's
+//     growth a countdown;
 //     the free-list allocation leaving `_due` alone until the list runs out.
 //     6.4% fewer instructions on the build's heaviest compile, the same
 //     steps and memo traffic.
@@ -162,20 +163,61 @@
 //     than half: its probe chains are what a step waits on, and the shorter
 //     ones cut 7% of apply()'s mispredicted branches and 7-15% off the
 //     compile phase's time (two runs, on a shared machine).
+//   — Then the branches. By now a step is about 76 cycles for the
+//     evaluator's 94 instructions: 40 more instructions a step cost no time, a
+//     cache miss on the step's path costs its latency, and one more branch
+//     mispredicted half the time costs the most, 7-10 ns a step. So a node
+//     built on the node made last is placed — found at that node's index
+//     plus one — rather than given a hashed slot by a walk that exits on the
+//     data; a node with no young child is not looked for in the nursery at
+//     all (every node there has one); which child is young is found without
+//     a branch; and so are a result-only frame's operands. And the leaf is
+//     known by its index: every "is x △" a step asks compares x with 1
+//     rather than reading x's node, the leaf being the one node at index 1,
+//     so the branch resolves a load earlier. Together, on the build's
+//     heaviest compile: 25% fewer D1 misses, 6% fewer of cachegrind's
+//     mispredicts, the same instructions within 0.2%, the same steps and
+//     output; the compile phase 1.08-1.21x and a 2-second slice of the
+//     expect tests 1.04-1.14x (quantiles of interleaved timings, three
+//     independent sets), two of the heaviest tests 1.02-1.07x.
 //
-// Measured and not taken, so that no one measures them again: sizing the
+// Measured and not taken, so that no one measures them again: rule (2)'s
+// frame chosen by conditional moves rather than branches (every node the
+// choice could read loaded, then picked from: 11% fewer of cachegrind's
+// mispredicts, 36% more instructions, 15% slower — the frame's tag then
+// waits on four dependent loads, and the pop that reads it a step or two
+// later waits with it, where a pushed tag was an immediate), and likewise
+// the cold skip (a lookup of a sink no key matches, the frame stored always
+// and the top advanced by whether it was not skipped: slower, the top of the
+// stack waiting on the cold count's load); one intern() for rules 0 and 1
+// with its operands by a mask, the MEMOIZE pop's put by a mask (a sink for
+// one not admitted), MEMOIZE tested first in the pop chain (the most popped,
+// 29%), the pop as a computed goto (one indirect jump: GCC merges the
+// copies), and the placed nodes flushed at half or all of the slots' count
+// rather than a quarter: none faster. A nursery collected rather than
+// flushed (its dead nodes freed, not inserted): at a flush 80-89% of its
+// nodes are held by memo entries put since the last one, so it would keep
+// nearly all of them or throw the freshest memo work away. From a full trace
+// of the heaviest compile and of a heavy test, replayed through a cache model
+// that matched cachegrind's per-line misses: other hashes for the table, the
+// nursery and the memo, the loaded module's hot nodes clustered (an oracle
+// by read count) or laid depth-first, the free list taken most-recent-first,
+// 16-byte memo entries — none moves the misses on a step's path by more
+// than 0.01 a step; and the cold filter's own misses, the largest of those,
+// taken to nearly none three ways (a count per function index, beside
+// `_young` or alone, or an 8 KB table) with no time to show for it, an L1
+// miss that hits L2 behind a predicted branch being hidden. Huge pages again
+// (the table now laid whole): the compile no faster, the heavy tests 9-13%
+// slower. Sizing the
 // table for the start budget only, not for a raised one (the heavy expect
 // tests then gain nothing: the re-lays that cost are those after a raise);
 // a frame's first word laid out as the memo key (a shift on every push and
-// pop of a one-argument frame: 1% more instructions), choosing the
-// result-only frames' intern operands by conditional moves rather than two
-// compares (0.5% more instructions for 0.5M fewer of cachegrind's
-// mispredicts), a collection flag in the step counter's sign bit (one
-// instruction a step, but threaded through alloc()'s callers: not worth
-// it), the stats counters as locals (0.7 instructions a step, and no
-// callee-saved register left to hold them); 16-byte or set-associative memo
-// entries, folding the MEMOIZE frame into the
-// result-only frame pushed over it (FORK_WITH, STEM, RETURN with the memo's
+// pop of a one-argument frame: 1% more instructions), a collection flag in
+// the step counter's sign bit (one instruction a step, but threaded through
+// alloc()'s callers: not worth it), the stats counters as locals (0.7
+// instructions a step, and no callee-saved register left to hold them);
+// 16-byte or set-associative memo entries, folding the MEMOIZE frame into
+// the result-only frame pushed over it (FORK_WITH, STEM, RETURN with the memo's
 // operands: one frame fewer on a third of the memoized steps, but the flag
 // that chooses the frame, the wider frame and the operands kept live across
 // rule (2) cost more than the frame saved — 2% more instructions, not 1%
@@ -187,10 +229,21 @@
 // a nursery log carrying hashes; 3-bit node kinds with 30-bit indices and a
 // switch or computed goto in place of the rule branches (13% more
 // instructions, the same mispredicts: which rule comes next is the same
-// information either way); clang, -O2 (25% slower: -O3's inlining is what
-// keeps the step in registers), PGO (nothing left to lay out), -march, branch
-// hints, dropping the stack protector; prefaulting, a startup huge-page probe
-// (cannot tell a cold VM from a warm one), DONTNEED above the live set;
+// information either way); 2-bit kinds with the branches kept — a Tree as its
+// index shifted up by two over its node's kind, so that a parent's word tells
+// its children's kinds, each node read with the kind as its displacement and
+// the hashes taken of the indices (the same steps): 4.7% more instructions on
+// the heaviest compile, and over four interleaved timings 0.98-0.99x on the
+// heavy expect tests by median (0.95-1.01x at the lower quartile) and
+// 0.95-1.03x on the compile phase. What reading a kind a load early saves,
+// getting the index back costs: a shift ahead of every hash's multiply (the
+// memo's, the cold count's, the table's) and of every node a probe compares,
+// and a cycle put in each of those places in the evaluator without tags took
+// 3-6% off it at the lower quartile. The leaf, which needs no tag, is the part
+// that pays (see apply); clang, -O2 (25% slower: -O3's inlining is what keeps
+// the step in registers), PGO (nothing left to lay out), -march, branch hints,
+// dropping the stack protector; prefaulting, a startup huge-page probe (cannot
+// tell a cold VM from a warm one), DONTNEED above the live set;
 // dropping the nursery's log (`_nursed`) for an SSE2 scan of its slots at
 // each flush (2.4% more instructions and 16% slower: 512 KB read per flush,
 // 3M more mispredicts); `_young` as a wrapped byte so that its stores alias
@@ -216,8 +269,9 @@
 // those tests, and on a compile 350K nodes kept per collection at a 16 MB
 // budget, a third slower. See collect_at for the budget policies measured.
 //
-// Together: 184 instructions a step became 121 on the build's heaviest
-// compile, with the same rules and the same output. What remains is the
+// Together these took the build's heaviest compile from 1.78 G instructions
+// to 1.19 G, 164 a step to 110 (over all 10.9M of its steps, the module's
+// load included), with the same rules and the same output. What remains is the
 // memory the tables take: at a 16 MB collection budget the compile phase
 // runs 1.5x faster than at 512 MB although it takes 17% more steps, and the
 // heaviest expect tests take three times the steps at 32 MB because their
@@ -497,9 +551,9 @@ private:
   // by comparing their indices is sound only because of it. So no node is ever
   // made by alloc() alone: it is made by a search that came up empty, or where
   // no search could have found one (list(), and intern() over the node made
-  // last). A search is the nursery's (below), then — unless a child of the
-  // node is in the nursery — this table's, and for the cells of a run (further
-  // below), where the cell would be. Every node is in exactly one of the three.
+  // last). A search is the nursery's (below) if a child of the node is young,
+  // this table's if not, and for the cells of a run (further below), where the
+  // cell would be. Every node is in exactly one of the three.
   //
   // A slot is a node index and a control byte: EMPTY, or a tag, 7 bits of the
   // node's hash that the group index does not use, under a set top bit. Slots
@@ -552,26 +606,47 @@ private:
   static constexpr size_t AHEAD = 16;
 
   // The nursery: the nodes intern() made since it was last flushed into
-  // `_groups`, in a table of their own — 8-byte slots, the node and its
-  // node_hash, 0 the empty one — small enough to stay in cache.
+  // `_groups`, kept apart, small enough to stay in cache. A node built on the
+  // node made last is *placed*: it is that node's index plus one nearly
+  // always (allocation counts up), and the index is where it is looked for —
+  // nothing is stored but a log entry for the flush (`_placed`). Any other
+  // goes in a hashed table of 8-byte slots, the node and its node_hash, 0 the
+  // empty one.
   //
   // Where a node can be is what makes it pay, and what keeps it exact. A node
-  // is made after its children, and nothing outside the nursery has a child in
-  // it: a flush takes all of it at once, so does every re-lay of `_groups`
+  // is *young* (`_young`, below) when every node that has it as a child is in
+  // the nursery: the nursery's own nodes, and the node made last once
+  // intern() builds on it, which has no parent yet. That holds until the next
+  // flush, because a node with a young child goes nowhere but the nursery: a
+  // flush takes all of it at once, so does every re-lay of `_groups`
   // (rebuild_interned, which a collection ends with, before any index it freed
   // is handed out again), list() flushes it before it makes a cell, and
-  // intern() puts a node in `_groups` itself only when neither child is in the
-  // nursery. So a node with a child in the nursery can only be in the nursery,
-  // and a search for one ends there. That is most of what intern() looks for,
-  // built on what was just built: over the build's test runner it goes to
-  // `_groups` for one node in five, where it went for every one. The nodes
-  // made over the one made last (58% of all interning), which need no search,
-  // no longer stall the steps after them on the slot they take either.
+  // intern() puts a node in `_groups` itself only when neither child is young.
+  // And every node in the nursery has a young child: the node made last, or
+  // the child that sent it there. So a node with a young child can only be in
+  // the nursery, and a search for one ends there; a node with none cannot be
+  // in it, and a search for one does not look (young_child). That is most of
+  // what intern() looks for, built on what was just built: on the build's
+  // heaviest compile, of 4.89M nodes interned, 2.68M are built on the node
+  // made last and need no search, 1.02M have a young child, and 1.19M go to
+  // `_groups`.
+  //
+  // Placing takes a branch no predictor could learn off the step. A node
+  // built on the node made last took a hashed slot, and finding a free one
+  // was a walk with an exit on the data (the slot taken, one time in ten) and
+  // a store to a random line; and every search probed, until an empty slot or
+  // the node. Placed (2.64M of the 2.68M), such a node costs a log entry, and
+  // the hashed slots hold the rest, 0.78M: the 0.81M probes left (from 2.21M,
+  // since a node with no young child no longer probes either) read 1.04 slots
+  // each where they read 1.15, and find their node 72K times, where 208K are
+  // found placed. 21% fewer D1 misses on that compile, 9% fewer mispredicted
+  // branches (cachegrind's), the same instructions, the same steps.
   //
   // A flush still costs a line of `_groups` a node, but none waits on another:
-  // it is a loop over the slots the nursery logged as it filled (`_nursed`),
-  // asking for lines AHEAD. It is still the most of anything here, a quarter
-  // of the time over that runner at 55-60 ns a node, and what bounds it is the
+  // it is a loop over what the nursery logged as it filled (`_placed`, and
+  // the slots in `_nursed`), asking for lines AHEAD. It is still the most of
+  // anything here, a quarter of the time over that runner at 55-60 ns a node,
+  // and what bounds it is the
   // page walk to a line anywhere in up to 512 MB of small pages: AHEAD at 16,
   // 32 or 64 took the same time, and with huge pages under the table it took
   // 33 ns (see map_pages for why not). The same log empties the nursery, a
@@ -594,9 +669,13 @@ private:
   // MIN_TABLE slots to begin with, doubled at each flush up to NURSERY:
   // hashed, a few hundred nodes touch every page of it, and at its full size
   // a runner answering one small request faulted in 90 pages more, 5% of its
-  // time.
+  // time. Since placing, the hashed slots take a fifth of the nodes, and
+  // either log flushes the nursery at a quarter of the slots' count — the
+  // placed one, nearly always: about a quarter more nodes to an epoch (164
+  // flushes on that compile, not 208), with the slots 7% full at a flush
+  // rather than 25%.
   //
-  // `_young` is a byte per index, set for the nodes in the nursery — a byte
+  // `_young` is a byte per index, set for the young nodes — a byte
   // rather than a bit, so that setting, testing and clearing one is a plain
   // store, load or store rather than a read-modify-write and a shift (6%
   // fewer instructions over the build's heaviest compile; 2 GiB reserved, of
@@ -604,7 +683,8 @@ private:
   // least `_young_lo`, what alloc() would have handed out when the nursery was
   // last emptied: the free list is in ascending order (sweep), and the
   // high-water mark above it. That keeps the bytes of the old nodes, most of
-  // the children asked about, out of the cache.
+  // the children asked about, out of the cache. And it orders an epoch: of
+  // two young nodes the one made later is the larger index.
   static constexpr size_t NURSERY = size_t(1) << 16;
   static constexpr size_t NURSERY_LOAD = 4; // flushed at a slot in this many
   struct Nurse {
@@ -618,9 +698,15 @@ private:
   // harmless prefetch.
   static constexpr size_t NURSED = NURSERY / NURSERY_LOAD + AHEAD;
   Tree *const _nursed = static_cast<Tree *>(map_pages(NURSED * sizeof(Tree)));
+  // The placed nodes, each with its node_hash, for the flush to insert, AHEAD
+  // past the end as `_nursed` is. Flushed at the same count as the slots, in
+  // effect a quarter of the slots' count again (no difference in instructions
+  // or misses with half or all of it).
+  Nurse *const _placed = static_cast<Nurse *>(map_pages(NURSED * sizeof(Nurse)));
+  size_t _nursed_count = 0, _placed_count = 0;
   size_t _nursery_mask = MIN_TABLE - 1;
-  size_t _nursery_count = 0;
-  size_t _nursery_full = (MIN_TABLE - 1) / NURSERY_LOAD; // flushed past this many nodes: _nursery_mask / NURSERY_LOAD
+  size_t _nursery_full = (MIN_TABLE - 1) / NURSERY_LOAD; // either log flushed past this: _nursery_mask / NURSERY_LOAD
+  size_t nursery_count() const { return _nursed_count + _placed_count; }
   uint8_t *const _young = static_cast<uint8_t *>(map_pages(ARENA_NODES));
   Tree _young_lo = 2;
 
@@ -947,8 +1033,17 @@ private:
   /** The node for this shape if there is one, else 0. The run first: a list
    * that is some of it — a string bound again, or a suffix of one — finds every
    * cell right where it looks, and never probes the table at all. */
+  /** Whether the node placed over young child `c` is (u, v). Below the
+   * high-water mark only: the index above the node made last is `_head`, and
+   * above it the arena is not yet anyone's — list() writes a run's cells there
+   * before it moves `_head`, and leaves them if last() throws. Below it, any
+   * node at c + 1 is its shape's own, or free ({0, next}, which no shape
+   * matches: a node's left child is never 0). */
+  bool placed_at(Tree c, uint32_t u, uint32_t v) const { return c + 1 < _head && node_word(_arena, c + 1) == shape(u, v); }
+
   Tree find(uint32_t u, uint32_t v) const {
     if (const Tree cell = in_run(u, v)) return cell;
+    if (const Tree c = young_child(u, v); c && placed_at(c, u, v)) return c + 1;
     const uint32_t h = node_hash(u, v);
     if (const Tree at = _nursery[nursery_slot(h, u, v)].at) return at;
     return search(h, u, v, [](Group &, size_t) { return Tree(0); });
@@ -956,7 +1051,7 @@ private:
 
   /** Put the run's cells in the table, so that it no longer takes a run to find them. */
   [[gnu::noinline]] void end_run() {
-    const size_t groups = capacity_for(_interned_count + _nursery_count + (_run_end - _run));
+    const size_t groups = capacity_for(_interned_count + nursery_count() + (_run_end - _run));
     if (groups != _groups_mask + 1) rebuild_interned(groups); // which leaves the run out
     for (Tree at = _run + 1; at <= _run_end; ++at) insert_interned(at);
     _run = _run_end = 0;
@@ -984,7 +1079,7 @@ private:
    * would have skipped, probing fuller tables on the way (5% more instructions
    * compiling a 5 MB source with a compiler that walks every character of it). */
   void reserve_interned(size_t more) {
-    const size_t nodes = _interned_count + _nursery_count + more;
+    const size_t nodes = _interned_count + nursery_count() + more;
     if (EAGER_UNLIKELY(nodes > _interned_room)) rebuild_interned(capacity_for(nodes + (_run_end - _run)));
   }
 
@@ -1038,15 +1133,51 @@ private:
     }
   }
 
-  /** Whether `at` is in the nursery. */
-  bool young(Tree at) const { return at >= _young_lo && _young[at]; }
+  /**
+   * The younger of the node's young children, or 0 if neither is. A placed
+   * node is at this one's index plus one: when both children are young, both
+   * were made since the nursery was emptied, the later of them the larger
+   * index (see `_young`), and the child a node is placed over is the node
+   * made last when it was made.
+   *
+   * Without a branch, since whether a child is young is the step's own data
+   * and the one branch the lookup needs is on the answer. An old child's index
+   * (most of them: below `_young_lo`) reads the byte of index 0, which is
+   * never set, rather than a line of `_young` far from the young ones. As
+   * branches (what the compiler makes of `_young[i] ? at : 0`), 0.4M more of
+   * cachegrind's mispredicts on the build's heaviest compile, and the same
+   * time within this VM's noise.
+   */
+  Tree young_child(uint32_t u, uint32_t v) const {
+    const Tree lo = _young_lo;
+    const auto young_or_0 = [&](Tree at) {
+      Tree i = at >= lo ? at : 0;
+      asm("" : "+r"(i)); // a conditional move, not a branch to the load
+      return at & -Tree(_young[i]);
+    };
+    const Tree yu = young_or_0(u), yv = young_or_0(v);
+    Tree c = yu > yv ? yu : yv;
+    asm("" : "+r"(c));
+    return c;
+  }
+
+  /** The node (u, v) as node_word() reads it. */
+  static uint64_t shape(uint32_t u, uint32_t v) { return uint64_t(v) << 32 | u; }
 
   /** Put a node no search could find in the nursery's slot `i`, which is empty. */
   Tree nurse(size_t i, uint32_t h, Tree at) {
     _nursery[i] = {at, h};
     _young[at] = 1;
-    _nursed[_nursery_count] = Tree(i);
-    if (++_nursery_count > _nursery_full) flush_nursery();
+    _nursed[_nursed_count] = Tree(i);
+    if (++_nursed_count > _nursery_full) flush_nursery();
+    return at;
+  }
+
+  /** Put a node no search could find, one above its young child, in the nursery: by its index. */
+  Tree place(uint32_t h, Tree at) {
+    _young[at] = 1;
+    _placed[_placed_count] = {at, h};
+    if (++_placed_count > _nursery_full) flush_nursery();
     return at;
   }
 
@@ -1061,7 +1192,7 @@ private:
 
   /** Forget what is in the nursery, wherever it went. */
   void empty_nursery() {
-    for (size_t j = 0; j < _nursery_count; ++j) forget(_nursed[j]);
+    for (size_t j = 0; j < _nursed_count; ++j) forget(_nursed[j]);
     forgotten();
   }
 
@@ -1070,19 +1201,25 @@ private:
    * The free list is ascending and alloc() takes it in order, so an epoch's
    * nodes are either all off the list below its head now, or the list ran
    * out and they are all below the high-water mark. So the `_young` bytes of
-   * the nodes flushed are never read again (young() tests the bound first),
+   * the nodes flushed are never read again (young_child() tests the bound first),
    * and a flush leaves them set rather than clearing one per node: 2.5%
    * fewer instructions on the build's heaviest compile. Only a collection
    * moves the bound down, when the sweep rebuilds the free list, and it
-   * clears all the bytes up to the high-water mark instead (collect). */
+   * clears all the bytes up to the high-water mark instead (collect).
+   *
+   * Nor is the node made last young any more, if it ever was, and intern()
+   * cannot make it so: it is below the bound. So there is none, until alloc()
+   * makes the next, and intern() never makes a young node of an old one. */
   void forgotten() {
     _young_lo = _free ? _free : _head;
-    _nursery_count = 0;
+    _nursed_count = _placed_count = 0;
+    _newest = ~0u;
   }
 
   /** Move the nursery into `_groups` — by a re-lay, if the table has to grow
    * for it, which takes the nursery in with the rest — and double it, if it
-   * has not reached NURSERY. */
+   * has not reached NURSERY. The placed nodes first, from their log, as the
+   * slots are from theirs. */
   [[gnu::noinline]] void flush_nursery() {
     reserve_interned(0); // a re-lay takes the nursery with it, and empties it
     // One pass: a node is inserted and its slot cleared as it goes, rather
@@ -1091,23 +1228,31 @@ private:
     // `_young` aliased every one of them, and there is none now, see
     // forgotten()), the prefetch unguarded (see _nursed), the group's empty
     // slots one movemask (empties).
-    const size_t count = _nursery_count;
     Nurse *const nursery = _nursery;
     Group *const groups = _groups;
     const unsigned shift = _groups_shift;
     const size_t mask = _groups_mask;
+    const auto insert = [&](Nurse s) {
+      size_t g = top_bits(s.h, shift);
+      unsigned e;
+      while (!(e = empties(groups[g]))) g = (g + 1) & mask;
+      put(groups[g], first(e), tag_of(s.h), s.at);
+    };
+    const Nurse *const placed = _placed + _placed_count;
+    for (ptrdiff_t j = -ptrdiff_t(_placed_count); j != 0; ++j) {
+      __builtin_prefetch(&groups[top_bits(placed[j + ptrdiff_t(AHEAD)].h, shift)], 1); // past the end: see _nursed
+      insert(placed[j]);
+    }
+    const size_t count = _nursed_count;
     const Tree *const end = _nursed + count;
     for (ptrdiff_t j = -ptrdiff_t(count); j != 0; ++j) {
       __builtin_prefetch(&groups[top_bits(nursery[end[j + ptrdiff_t(AHEAD)]].h, shift)], 1); // past the end: see _nursed
       Nurse &slot = nursery[end[j]];
       const Nurse s = slot;
       slot.at = 0;
-      size_t g = top_bits(s.h, shift);
-      unsigned e;
-      while (!(e = empties(groups[g]))) g = (g + 1) & mask;
-      put(groups[g], first(e), tag_of(s.h), s.at);
+      insert(s);
     }
-    _interned_count += count;
+    _interned_count += nursery_count();
     forgotten();
     _nursery_mask = std::min(2 * _nursery_mask + 1, NURSERY - 1);
     _nursery_full = _nursery_mask / NURSERY_LOAD;
@@ -1118,23 +1263,31 @@ private:
    *
    * No search when a child is the node made last: a node is made after its
    * children, so nothing can have that one as a child yet (list()'s argument,
-   * a cell at a time). That is a quarter to a half of all the nodes a
-   * reduction builds — whatever it builds on what it just built. Nor, past the
-   * nursery, when a child is in the nursery, which is most of the rest. A new
-   * node goes in the nursery, unless the search for it went on into `_groups`:
-   * then it takes the slot that search ended on, already in cache.
+   * a cell at a time). That is about half the nodes a reduction builds (55%
+   * on the build's heaviest compile) — whatever it builds on what it just
+   * built — and the new
+   * node is placed, unless the free list skipped an index. With a young child
+   * the search is the nursery's, placed and then hashed, and past it a new
+   * node goes in the slot the probe ended on; with none, the table's, and a
+   * new node takes the slot that search ended on, already in cache.
    */
   [[gnu::always_inline]] Tree intern(uint32_t u, uint32_t v) {
     const uint32_t h = node_hash(u, v);
     if (u == _newest || v == _newest) {
+      const Tree c = _newest;
+      _young[c] = 1; // it has no parent yet, and every one it gets goes in the nursery
+      const Tree at = alloc(u, v);
+      if (EAGER_LIKELY(at == c + 1)) return place(h, at);
       size_t i = nursery_home(h);
       while (_nursery[i].at) i = (i + 1) & _nursery_mask;
-      return nurse(i, h, alloc(u, v));
+      return nurse(i, h, at);
     }
+    const Tree c = young_child(u, v);
+    if (!c) return intern_old(h, u, v);
+    if (placed_at(c, u, v)) return c + 1;
     const size_t i = nursery_slot(h, u, v);
     if (const Tree at = _nursery[i].at) return at;
-    if (young(u) || young(v)) return nurse(i, h, alloc(u, v));
-    return intern_old(h, u, v);
+    return nurse(i, h, alloc(u, v));
   }
 
   /** intern() past the nursery: the table, the run, or a fresh node in the
@@ -1429,7 +1582,7 @@ private:
 
   /** What a budget of `nodes` holds at most, in bytes: the arena up to it, the
    * hash-consing table and memo at the sizes it takes them to, and a nursery
-   * byte for each of the nodes. (The nursery itself is at most 384 KB, like
+   * byte for each of the nodes. (The nursery itself is at most 704 KB, like
    * `_cold` not something a reduction grows.) The table at the size the budget
    * takes it to (groups_for), whatever size it is now: set_limit() lowers a
    * budget by this, and the table laid for the larger one follows it down
@@ -1525,6 +1678,7 @@ public:
     munmap(_groups, MAX_GROUPS * sizeof(Group));
     munmap(_nursery, NURSERY * sizeof(Nurse));
     munmap(_nursed, NURSED * sizeof(Tree));
+    munmap(_placed, NURSED * sizeof(Nurse));
     munmap(_young, ARENA_NODES);
     munmap(_marks, ARENA_NODES / 8);
     munmap(_memo, MAX_MEMO * sizeof(Memo));
@@ -1677,7 +1831,7 @@ public:
     _budget = _ceiling == ARENA_NODES ? ARENA_NODES : std::min(START_BUDGET, _ceiling);
     // The table at the size this budget takes it to, up or down (set_limit
     // lowers one), and never below what it holds.
-    const size_t groups = std::max(groups_for_budget(), groups_for(_interned_count + _nursery_count + (_run_end - _run)));
+    const size_t groups = std::max(groups_for_budget(), groups_for(_interned_count + nursery_count() + (_run_end - _run)));
     if (groups != _groups_mask + 1) lay_interned(groups);
     size_memo();
     update_due();
@@ -1706,7 +1860,7 @@ public:
 
   std::string stats() {
     return std::to_string(allocated()) + " nodes in arena, " +
-           std::to_string(_interned_count + _nursery_count) + " shared, " +
+           std::to_string(_interned_count + nursery_count()) + " shared, " +
            std::to_string(size_t(_memo_mask) + 1) + " memo slots";
   }
 
@@ -1741,9 +1895,9 @@ public:
         tail = at;
         continue;
       }
-      // The cells go in the table or the run, where no node may have a child in
-      // the nursery, and their heads may be in it.
-      if (_nursery_count) flush_nursery();
+      // The cells go in the table or the run, where no node may have a young
+      // child, and their heads may be young.
+      if (nursery_count()) flush_nursery();
       if (n < RUN_MIN || _free) { // cells that cannot
         reserve_interned(n);
         insert_interned(tail = alloc(head, tail));
@@ -1824,12 +1978,18 @@ public:
           collect_at(Tree(a), Tree(b));
         }
 
-        const uint64_t an = node_word(arena, a);
-
-        if (!left(an)) {                                 // apply(△, b) = △b
+        // Whether a tree is △ is whether it is index 1: no other tree has a
+        // null left child (stem() and fork() never take 0 for one; a swept
+        // slot, which has, is no tree), so the test needs the word that
+        // names the tree rather than its node, and the branch waits on one
+        // load fewer. Every leaf test below is
+        // one: rule 0, the K rule, b = △, u' = △, x₂ = △, and the left
+        // children the absorber shapes △△x₂, △△ and △△z ask about.
+        if (a == 1) {                                    // apply(△, b) = △b
           result = stem(Tree(b));
           goto dispatch;
         }
+        const uint64_t an = node_word(arena, a);
         if (!right(an)) {                                // apply(△u, b) = △ub
           result = fork(left(an), Tree(b));
           goto dispatch;
@@ -1837,12 +1997,11 @@ public:
 
         // a = fork(u, y)
         const Tree y = right(an);
-        const uint64_t un = node_word(arena, left(an));
-
-        if (!left(un)) {                                 // apply(△△y, b) = y
+        if (left(an) == 1) {                             // apply(△△y, b) = y
           result = y;
           goto dispatch;
         }
+        const uint64_t un = node_word(arena, left(an));
         if (EAGER_LIKELY(!right(un))) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           // A K-absorber u' answers apply(u', b) without looking at b, so that
@@ -1850,20 +2009,19 @@ public:
           // peek.hpp's S K peek drops it, and with it a reduction that might
           // not terminate, which a runner must not paper over.
           const uint64_t xn = node_word(arena, left(un));
-          if (EAGER_LIKELY(right(xn) && !left(node_word(arena, left(xn))))) { // u' = △△x₂: apply(x₂, apply(y, b))
-            const uint64_t x2 = node_word(arena, right(xn));
+          if (EAGER_LIKELY(right(xn) && left(xn) == 1)) { // u' = △△x₂: apply(x₂, apply(y, b))
             // top[-1] is at least the DONE frame; an APPLY_TO frame's second word is 0.
-            if (!left(x2)) {                                                     //   x₂ = △:   △(y b)
+            if (right(xn) == 1) {                                                //   x₂ = △:   △(y b)
               if (top[-1].hi == APPLY_TO) top[-1].hi = FORK_RIGHT;                //     then △(y b)e
               else push(top, limit, Frame(STEM, 0));
-            } else if (!right(x2)) {                                             //   x₂ = △x₃: △x₃(y b)
+            } else if (const uint64_t x2 = node_word(arena, right(xn)); !right(x2)) { //   x₂ = △x₃: △x₃(y b)
               if (left(x2) == 1 && top[-1].hi == APPLY_TO) --top;                 //     x₃ = △, then (y b)
               else push(top, limit, Frame(FORK_WITH, left(x2)));
-            } else if (!left(node_word(arena, left(x2)))) push(top, limit, Frame(RETURN, right(x2))); // x₂ = △△z: z
+            } else if (left(x2) == 1) push(top, limit, Frame(RETURN, right(x2))); // x₂ = △△z: z
             else push(top, limit, Frame(CALL, right(xn)));
-          } else if (!left(xn)) {                        // u' = △:  △b(y b)
+          } else if (left(un) == 1) {                    // u' = △:  △b(y b)
             push(top, limit, Frame(FORK_WITH, Tree(b)));
-          } else if (!right(xn) && !left(node_word(arena, left(xn)))) { // u' = △△: b
+          } else if (!right(xn) && left(xn) == 1) {      // u' = △△: b
             push(top, limit, Frame(RETURN, Tree(b)));
           } else {
             push(top, limit, Frame(COMPUTE_AND_APPLY, left(un), Tree(b)));
@@ -1873,12 +2031,11 @@ public:
         }
 
         // apply(△(△wx)y, b) — triage on b
-        const uint64_t bn = node_word(arena, b);
-
-        if (!left(bn)) {                                 //   b = △:  w
+        if (b == 1) {                                    //   b = △:  w
           result = left(un);
           goto dispatch;
         }
+        const uint64_t bn = node_word(arena, b);
         if (!right(bn)) {                                //   b = △d: apply(x, d)
           if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
           a = right(un);
@@ -1907,11 +2064,14 @@ public:
       // done when it pops the DONE frame it pushed on entry, so no pop compares
       // the top with the base.
       for (;;) {
-        // Popped over the build's heaviest compile: APPLY_TO 23%, MEMOIZE 20%,
-        // FORK_WITH 18%, COMPUTE_AND_APPLY 14%, CALL 13%, STEM 7%, RETURN 4%,
-        // and compared in that order, one at a time, on purpose (the asm is a
+        // Popped over the build's heaviest compile: MEMOIZE 29%, FORK_WITH 18%,
+        // APPLY_TO 16%, COMPUTE_AND_APPLY 14%, CALL 13%, STEM 5%, RETURN 4%,
+        // FORK_RIGHT 2%, and compared one at a time, on purpose (the asm is a
         // barrier to the compiler's if-to-switch): as a switch, the tag was
-        // an indirect jump, mispredicted two times in three.
+        // an indirect jump, mispredicted two times in three, and as a
+        // computed goto no faster. MEMOIZE first was no faster either:
+        // the tag after a pop is the program's (the one before it names it
+        // 38% of the time), not the order's.
         //
         // The tests read the frame's second word as it was loaded: whole, or
         // its low byte in place (a MEMOIZE frame's holds more than the tag),
@@ -1930,14 +2090,16 @@ public:
         asm("" : "+r"(f.hi));
         if (f.hi & FORK_WITH) { // the result-only frames: the rule fn takes with r
           // One intern() for the three that build a node (a STEM frame's
-          // argument is 0, so △r△ reads △r), chosen by two compares.
+          // argument is 0, so △r△ reads △r), FORK_WITH's operands the other
+          // way about by a mask rather than a branch: which of the three a
+          // pop is, is the program's, and the mask is a few instructions
+          // where the branch was mispredicted. 2% more instructions on the build's heaviest compile and
+          // 2-5% less time (four interleaved A/Bs), though cachegrind's
+          // predictor counts no fewer mispredicts.
           const Tree x = f.arg1();
-          Tree u = x, v = result;
-          if (f.hi != FORK_WITH) { // the whole word, as for APPLY_TO: these carry nothing but the tag
-            if (f.hi == RETURN) { result = x; continue; }
-            u = result, v = x;
-          }
-          result = intern(u, v);
+          if (f.hi == RETURN) { result = x; continue; } // the whole word, as for APPLY_TO: these carry only the tag
+          const Tree swap = (x ^ result) & -Tree(f.hi == FORK_WITH);
+          result = intern(result ^ swap, x ^ swap);
           continue;
         }
         asm("" : "+r"(f.hi));
