@@ -881,7 +881,15 @@ var import_crypto2 = require("crypto");
 var import_crypto = require("crypto");
 var import_fs = require("fs");
 var import_path = require("path");
-var cache_dir = () => {
+
+// src/runner/which.mjs
+var choice = () => process.env.TREE_CALCULUS_RUNNER ?? "";
+var eager = () => choice() === "eager";
+var native = () => eager() || choice() === "1";
+var evaluator_name = () => eager() ? "eager-fastest-v1" : native() ? "lazy-graph-nil-mmap-32-v1" : "lazy-stacks-v1";
+
+// src/module/cache.mjs
+var cache_root = () => {
   const configured = process.env.TREE_CALCULUS_CACHE;
   if (configured === void 0)
     return (0, import_path.join)(__dirname, ".cache");
@@ -892,30 +900,33 @@ var MODULE_STORE = "module-v1";
 var TRANSFORM_STORE = "transform-v1";
 var DAY = 24 * 60 * 60 * 1e3;
 var max_age = (name) => (name === MODULE_STORE ? 3 : 30) * DAY;
-function prune(base) {
-  const stamp = (0, import_path.join)(base, ".pruned");
+var subdirectories = (directory) => {
+  try {
+    return (0, import_fs.readdirSync)(directory, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+};
+function prune(root) {
+  const stamp = (0, import_path.join)(root, ".pruned");
   const now = Date.now();
   try {
     if (now - (0, import_fs.statSync)(stamp).mtimeMs < DAY)
       return;
   } catch {
   }
-  (0, import_fs.mkdirSync)(base, { recursive: true });
+  (0, import_fs.mkdirSync)(root, { recursive: true });
   (0, import_fs.writeFileSync)(stamp, "");
-  for (const name of (0, import_fs.readdirSync)(base)) {
-    const directory = (0, import_path.join)(base, name);
-    let entries;
-    try {
-      entries = (0, import_fs.readdirSync)(directory);
-    } catch {
-      continue;
-    }
-    for (const entry of entries) {
-      const at = (0, import_path.join)(directory, entry);
-      try {
-        if (now - (0, import_fs.statSync)(at).mtimeMs > max_age(name))
-          (0, import_fs.rmSync)(at, { force: true });
-      } catch {
+  for (const evaluator2 of subdirectories(root)) {
+    for (const name of subdirectories((0, import_path.join)(root, evaluator2))) {
+      const directory = (0, import_path.join)(root, evaluator2, name);
+      for (const entry of (0, import_fs.readdirSync)(directory)) {
+        const at = (0, import_path.join)(directory, entry);
+        try {
+          if (now - (0, import_fs.statSync)(at).mtimeMs > max_age(name))
+            (0, import_fs.rmSync)(at, { force: true });
+        } catch {
+        }
       }
     }
   }
@@ -923,14 +934,14 @@ function prune(base) {
 var pruned = /* @__PURE__ */ new Set();
 var text_key = (text) => (0, import_crypto.createHash)("sha256").update(text).digest();
 function store(name) {
-  const base = cache_dir();
-  if (base === void 0)
+  const root = cache_root();
+  if (root === void 0)
     return null;
-  if (!pruned.has(base)) {
-    pruned.add(base);
-    prune(base);
+  if (!pruned.has(root)) {
+    pruned.add(root);
+    prune(root);
   }
-  const directory = (0, import_path.join)(base, name);
+  const directory = (0, import_path.join)(root, evaluator_name(), name);
   (0, import_fs.mkdirSync)(directory, { recursive: true });
   const path = (key) => (0, import_path.join)(directory, key.toString("hex"));
   const touch = (at) => {
@@ -1058,7 +1069,6 @@ function source_mtime(from) {
   const headers = (0, import_path2.resolve)((0, import_path2.dirname)(from), "..");
   return (0, import_fs2.readdirSync)(headers).filter((name) => name.endsWith(".hpp")).map((name) => (0, import_fs2.statSync)((0, import_path2.join)(headers, name)).mtimeMs).reduce((a, b) => Math.max(a, b), (0, import_fs2.statSync)(from).mtimeMs);
 }
-var eager = () => process.env.TREE_CALCULUS_RUNNER === "eager";
 var executable = once(() => {
   const from = source();
   const name = eager() ? "runner-eager" : "runner";
@@ -1287,7 +1297,7 @@ function environment2(e, text, _ = {}) {
   get.reduce = (text2) => of_answer(reduced(path(), "dag", text2));
   return get;
 }
-var native = ["1", "eager"].includes(process.env.TREE_CALCULUS_RUNNER ?? "") ? { transformer: transformer2, environment: environment2 } : null;
+var native2 = native() ? { transformer: transformer2, environment: environment2 } : null;
 
 // src/format/file.mjs
 var PLAUSIBLE_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.[a-zA-Z0-9]+$/;
@@ -1319,8 +1329,8 @@ function to_file(e, x) {
 }
 
 // src/main-dag.mjs
-var environment3 = native?.environment ?? environment;
-var transformer3 = native?.transformer ?? transformer;
+var environment3 = native2?.environment ?? environment;
+var transformer3 = native2?.transformer ?? transformer;
 var USAGE = `Usage: dag <command> [options] [file...]
 
 Commands:

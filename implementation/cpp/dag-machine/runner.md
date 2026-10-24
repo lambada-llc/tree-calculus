@@ -223,7 +223,12 @@ continuations on the heap and does not depend on it.
 
 A directory for the runtime's reduction caches, shared freely between
 builds, branches and parallel processes because every entry is
-content-addressed: evaluated modules under `module-v1/` (what `dump`
+content-addressed. Each evaluator keeps its own subdirectory, named for it
+and the version of what its entries claim (`eager-fastest-v1`,
+`lazy-graph-nil-mmap-32-v1`, `lazy-stacks-v1` for Node's): every evaluator
+reaches the same normal form, but a hit skips evaluating, so an answer the
+lazy evaluator found must not stand in for one the eager evaluator might
+never reach. Inside one: evaluated modules under `module-v1/` (what `dump`
 returns, keyed by module text, re-loadable without reduction — plus a
 fingerprint sidecar under `module-fp-v1/` that lets the *next* version
 of a module alias every binding it did not change into the previous
