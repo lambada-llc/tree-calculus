@@ -446,12 +446,20 @@ function test_cache_store() {
     assert_equal('payload', st.get(key)!.toString('utf8'), 'and comes back whole');
     assert_equal(true, st.path(key).endsWith('00ff'), 'entries are named by their key');
 
-    // Opening a store prunes its cache by age, per store.
+    // An answer one evaluator reached is not one another is known to reach.
+    const had_runner = process.env.TREE_CALCULUS_RUNNER;
+    process.env.TREE_CALCULUS_RUNNER = 'eager';
+    assert_equal(false, store('reduce-test')!.has(key), "another evaluator's entries are not found");
+    if (had_runner === undefined) delete process.env.TREE_CALCULUS_RUNNER;
+    else process.env.TREE_CALCULUS_RUNNER = had_runner;
+    assert_equal(true, store('reduce-test')!.has(key), 'and its own still are');
+
+    // Opening a store prunes the cache by age, per store, every evaluator's.
     const aged = join(directory, 'aged');
     const days_ago = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const entry = (store_name: string, days: number) => {
-      mkdirSync(join(aged, store_name), { recursive: true });
-      const at = join(aged, store_name, 'entry');
+      mkdirSync(join(aged, 'some-other-evaluator-v1', store_name), { recursive: true });
+      const at = join(aged, 'some-other-evaluator-v1', store_name, 'entry');
       writeFileSync(at, '');
       utimesSync(at, days_ago(days), days_ago(days));
       return at;
