@@ -219,11 +219,16 @@ continuations on the heap and does not depend on it.
 
 ### Read by the TypeScript runtime that drives `runner`
 
-#### `TREE_CALCULUS_CACHE` *(default: unset — no caching)*
+#### `TREE_CALCULUS_CACHE` *(default: `.cache/` beside the runtime script; empty turns caching off)*
 
 A directory for the runtime's reduction caches, shared freely between
 builds, branches and parallel processes because every entry is
-content-addressed: evaluated modules under `module-v1/` (what `dump`
+content-addressed. Each evaluator keeps its own subdirectory, named for it
+and the version of what its entries claim (`eager-fastest-v1`,
+`lazy-graph-nil-mmap-32-v1`, `lazy-stacks-v1` for Node's): every evaluator
+reaches the same normal form, but a hit skips evaluating, so an answer the
+lazy evaluator found must not stand in for one the eager evaluator might
+never reach. Inside one: evaluated modules under `module-v1/` (what `dump`
 returns, keyed by module text, re-loadable without reduction — plus a
 fingerprint sidecar under `module-fp-v1/` that lets the *next* version
 of a module alias every binding it did not change into the previous
@@ -235,7 +240,9 @@ its caller decides what of its answer is worth keeping), and a
 transformer's outputs under `transform-v1/` (keyed by the program and
 the input, so a rebuild compiles only the sources that changed). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
-an entry refreshes its mtime, which is what lets a warmer prune by age.
+an entry refreshes its mtime, and the runtime prunes by it, at most once a
+day: an evaluated module after 3 days unused (one per version of a library,
+each large), anything else after 30.
 
 #### `CXX` *(default: `c++`)*
 

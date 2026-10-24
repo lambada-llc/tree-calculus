@@ -55,13 +55,13 @@ evaluate() { # runner-mode module symbol [extra env...]
 }
 
 oracle() { # module symbol — pure Node, no runner, no cache
-  env -u TREE_CALCULUS_RUNNER -u TREE_CALCULUS_CACHE \
+  env -u TREE_CALCULUS_RUNNER TREE_CALCULUS_CACHE= \
     node "$DAG_JS" eval --symbol "$2" --format term "$1"
 }
 
 # Cold: the eager runner evaluates M1, dumps it, and caches the answer.
 check "eager cold matches Node" "$(oracle "$M1" d2)" "$(evaluate eager "$M1" d2)"
-entries=$(ls "$CACHE/module-v1" | grep -cv RECENT)
+entries=$(ls "$CACHE/eager-fastest-v1/module-v1" | grep -cv RECENT)
 check "the loaded module was dumped" 1 "$entries"
 
 # Warm module, new question: a fresh process re-loads the dump — structural
@@ -81,11 +81,12 @@ case "$stats" in
   *"load "*delta-*) echo "PASS runner delta path engaged"; ((pass++)) || true ;;
   *) echo "FAIL runner delta path engaged: stats said: $stats"; ((fail++)) || true ;;
 esac
-entries=$(ls "$CACHE/module-v1" | grep -cv RECENT)
+entries=$(ls "$CACHE/eager-fastest-v1/module-v1" | grep -cv RECENT)
 check "the changed module was dumped too" 2 "$entries"
 
 # The lazy runner answers a question nobody cached yet, over the same cache.
 check "lazy runner matches Node" "$(oracle "$M1" p3)" "$(evaluate 1 "$M1" p3)"
+check "and keeps its answer apart from the eager runner's" 1 "$(ls "$CACHE/lazy-graph-nil-mmap-32-v1/reduce-v1" | wc -l)"
 
 # A transformer keeps its outputs in the same cache, under transform-v1: asked
 # the same thing again, a fresh process answers without spawning the runner.
@@ -98,7 +99,7 @@ transform() { # -> the output, then the runner's stats lines
 }
 check "transformer answers" "hello" "$(transform | grep -v runner-stats)"
 check "a kept transform spawns no runner" "hello" "$(transform)"
-check "it is kept in transform-v1" 1 "$(ls "$CACHE/transform-v1" | wc -l)"
+check "it is kept in transform-v1" 1 "$(ls "$CACHE/eager-fastest-v1/transform-v1" | wc -l)"
 
 # A runner lives as long as its client and no longer: each holds only its own
 # ends of the FIFOs, so either going away is EOF to the other. A worker thread
@@ -107,7 +108,7 @@ check "it is kept in transform-v1" 1 "$(ls "$CACHE/transform-v1" | wc -l)"
 # runner and asks again. Nobody may be left waiting: not the runner for a client
 # that is gone, nor the client for an answer from a runner that is.
 lifetime() { # terminate|kill
-  env -u TREE_CALCULUS_CACHE TREE_CALCULUS_RUNNER=eager node -e '
+  env TREE_CALCULUS_CACHE= TREE_CALCULUS_RUNNER=eager node -e '
     const { spawnSync } = require("child_process");
     const { Worker } = require("worker_threads");
     const worker = new Worker(`

@@ -21,6 +21,7 @@ import { tmpdir } from "os";
 import { dirname, join, resolve } from "path";
 import { Evaluator, raise, writer } from "../common.mjs";
 import formatter_dag from "../format/dag.mjs";
+import { eager, native as native_chosen } from "./which.mjs";
 import { MODULE_STORE, REDUCE_STORE, Store, store, text_key } from "../module/cache.mjs";
 import { EnvOptions, Environment } from "../module/env.mjs";
 import { fingerprint } from "../module/fingerprint.mjs";
@@ -62,12 +63,6 @@ function source_mtime(from: string): number {
     .reduce((a, b) => Math.max(a, b), statSync(from).mtimeMs);
 }
 
-/**
- * Whether to build the runner's eager evaluator, which is faster but only
- * terminates on a module whose every binding has a normal form. Opting in is a
- * claim about the module, so it is the caller's to make: TREE_CALCULUS_RUNNER=eager.
- */
-const eager = () => process.env.TREE_CALCULUS_RUNNER === 'eager';
 
 /**
  * Build the runner next to its source, unless a current binary is already there.
@@ -332,8 +327,8 @@ function sidecar_of(dump: Buffer, fingerprints: Map<string, Buffer>): string {
  * binding the next version of the module leaves alone.
  *
  * Eager only: the dump renders each binding's normal form, which is exactly
- * what the lazy evaluator is there not to insist on. And opt-in like every
- * cache here: TREE_CALCULUS_CACHE unset means nothing below changes hands.
+ * what the lazy evaluator is there not to insist on. And off like every cache
+ * here when TREE_CALCULUS_CACHE is empty: then nothing below changes hands.
  */
 function loadable(text: string, name: string): () => string {
   return once(() => {
@@ -422,6 +417,6 @@ function environment<TTree>(
  * above). Off by default because it turns a package that needs nothing but Node
  * into one that needs a C++ compiler and POSIX FIFOs.
  */
-export const native = ['1', 'eager'].includes(process.env.TREE_CALCULUS_RUNNER ?? '')
+export const native = native_chosen()
   ? { transformer, environment }
   : null;

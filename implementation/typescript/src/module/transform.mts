@@ -8,9 +8,8 @@
 //   compile('\\x x');
 //
 // Because a tree is a pure function, the same input always gives the same
-// output, which makes the result safe to keep on disk forever. With
-// TREE_CALCULUS_CACHE set it is kept there, beside every other reduction cache
-// (see cache.mts), keyed on the transformation and its input together, so a
+// output, which makes the result safe to keep on disk forever. It is kept
+// beside every other reduction cache (see cache.mts), keyed on the transformation and its input together, so a
 // rebuild only pays for the parts that actually changed — and changing the
 // program correctly invalidates everything.
 
