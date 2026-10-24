@@ -332,8 +332,8 @@ function sidecar_of(dump: Buffer, fingerprints: Map<string, Buffer>): string {
  * binding the next version of the module leaves alone.
  *
  * Eager only: the dump renders each binding's normal form, which is exactly
- * what the lazy evaluator is there not to insist on. And opt-in like every
- * cache here: TREE_CALCULUS_CACHE unset means nothing below changes hands.
+ * what the lazy evaluator is there not to insist on. And off like every cache
+ * here when TREE_CALCULUS_CACHE is empty: then nothing below changes hands.
  */
 function loadable(text: string, name: string): () => string {
   return once(() => {

@@ -219,7 +219,7 @@ continuations on the heap and does not depend on it.
 
 ### Read by the TypeScript runtime that drives `runner`
 
-#### `TREE_CALCULUS_CACHE` *(default: unset — no caching)*
+#### `TREE_CALCULUS_CACHE` *(default: `.cache/` beside the runtime script; empty turns caching off)*
 
 A directory for the runtime's reduction caches, shared freely between
 builds, branches and parallel processes because every entry is
@@ -235,7 +235,9 @@ its caller decides what of its answer is worth keeping), and a
 transformer's outputs under `transform-v1/` (keyed by the program and
 the input, so a rebuild compiles only the sources that changed). Reduction is
 deterministic, so a stale entry cannot exist, only a missing one; using
-an entry refreshes its mtime, which is what lets a warmer prune by age.
+an entry refreshes its mtime, and the runtime prunes by it, at most once a
+day: an evaluated module after 3 days unused (one per version of a library,
+each large), anything else after 30.
 
 #### `CXX` *(default: `c++`)*
 
