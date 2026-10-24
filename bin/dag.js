@@ -881,15 +881,55 @@ var import_crypto2 = require("crypto");
 var import_crypto = require("crypto");
 var import_fs = require("fs");
 var import_path = require("path");
-var cache_dir = () => process.env.TREE_CALCULUS_CACHE || void 0;
+var cache_dir = () => {
+  const configured = process.env.TREE_CALCULUS_CACHE;
+  if (configured === void 0)
+    return (0, import_path.join)(__dirname, ".cache");
+  return configured || void 0;
+};
 var REDUCE_STORE = "reduce-v1";
 var MODULE_STORE = "module-v1";
 var TRANSFORM_STORE = "transform-v1";
+var DAY = 24 * 60 * 60 * 1e3;
+var max_age = (name) => (name === MODULE_STORE ? 3 : 30) * DAY;
+function prune(base) {
+  const stamp = (0, import_path.join)(base, ".pruned");
+  const now = Date.now();
+  try {
+    if (now - (0, import_fs.statSync)(stamp).mtimeMs < DAY)
+      return;
+  } catch {
+  }
+  (0, import_fs.mkdirSync)(base, { recursive: true });
+  (0, import_fs.writeFileSync)(stamp, "");
+  for (const name of (0, import_fs.readdirSync)(base)) {
+    const directory = (0, import_path.join)(base, name);
+    let entries;
+    try {
+      entries = (0, import_fs.readdirSync)(directory);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const at = (0, import_path.join)(directory, entry);
+      try {
+        if (now - (0, import_fs.statSync)(at).mtimeMs > max_age(name))
+          (0, import_fs.rmSync)(at, { force: true });
+      } catch {
+      }
+    }
+  }
+}
+var pruned = /* @__PURE__ */ new Set();
 var text_key = (text) => (0, import_crypto.createHash)("sha256").update(text).digest();
 function store(name) {
   const base = cache_dir();
   if (base === void 0)
     return null;
+  if (!pruned.has(base)) {
+    pruned.add(base);
+    prune(base);
+  }
   const directory = (0, import_path.join)(base, name);
   (0, import_fs.mkdirSync)(directory, { recursive: true });
   const path = (key) => (0, import_path.join)(directory, key.toString("hex"));

@@ -55,7 +55,7 @@ evaluate() { # runner-mode module symbol [extra env...]
 }
 
 oracle() { # module symbol — pure Node, no runner, no cache
-  env -u TREE_CALCULUS_RUNNER -u TREE_CALCULUS_CACHE \
+  env -u TREE_CALCULUS_RUNNER TREE_CALCULUS_CACHE= \
     node "$DAG_JS" eval --symbol "$2" --format term "$1"
 }
 
@@ -107,7 +107,7 @@ check "it is kept in transform-v1" 1 "$(ls "$CACHE/transform-v1" | wc -l)"
 # runner and asks again. Nobody may be left waiting: not the runner for a client
 # that is gone, nor the client for an answer from a runner that is.
 lifetime() { # terminate|kill
-  env -u TREE_CALCULUS_CACHE TREE_CALCULUS_RUNNER=eager node -e '
+  env TREE_CALCULUS_CACHE= TREE_CALCULUS_RUNNER=eager node -e '
     const { spawnSync } = require("child_process");
     const { Worker } = require("worker_threads");
     const worker = new Worker(`

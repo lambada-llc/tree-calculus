@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { assert_equal, Evaluator } from "../common.mjs";
@@ -433,8 +433,8 @@ function test_cache_store() {
   const had = process.env.TREE_CALCULUS_CACHE;
   const directory = mkdtempSync(join(tmpdir(), 'tc-cache-test-'));
   try {
-    delete process.env.TREE_CALCULUS_CACHE;
-    assert_equal(null, store('reduce-test') as unknown, 'no cache directory, no store');
+    process.env.TREE_CALCULUS_CACHE = '';
+    assert_equal(null, store('reduce-test') as unknown, 'an empty cache directory turns caching off');
 
     process.env.TREE_CALCULUS_CACHE = directory;
     const st = store('reduce-test')!;
@@ -445,6 +445,23 @@ function test_cache_store() {
     assert_equal(true, st.has(key), 'a put entry is found');
     assert_equal('payload', st.get(key)!.toString('utf8'), 'and comes back whole');
     assert_equal(true, st.path(key).endsWith('00ff'), 'entries are named by their key');
+
+    // Opening a store prunes its cache by age, per store.
+    const aged = join(directory, 'aged');
+    const days_ago = (days: number) => new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const entry = (store_name: string, days: number) => {
+      mkdirSync(join(aged, store_name), { recursive: true });
+      const at = join(aged, store_name, 'entry');
+      writeFileSync(at, '');
+      utimesSync(at, days_ago(days), days_ago(days));
+      return at;
+    };
+    const old_module = entry('module-v1', 4), old_result = entry('reduce-v1', 4), stale = entry('reduce-v2', 31);
+    process.env.TREE_CALCULUS_CACHE = aged;
+    store('reduce-test');
+    assert_equal(false, existsSync(old_module), 'an evaluated module goes after 3 days unused');
+    assert_equal(true, existsSync(old_result), 'anything else stays for 30');
+    assert_equal(false, existsSync(stale), 'and then goes too');
   } finally {
     if (had === undefined) delete process.env.TREE_CALCULUS_CACHE;
     else process.env.TREE_CALCULUS_CACHE = had;
