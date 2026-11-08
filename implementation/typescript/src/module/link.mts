@@ -6,7 +6,7 @@
 // reference is defined above its use and the result parses as one DAG.
 //
 // Two things make a set of modules unlinkable, and both are reported rather than
-// silently resolved: two modules exporting the same name (which of them did a
+// silently resolved: two modules defining the same name (which of them did a
 // reference mean?) and a dependency cycle (no order satisfies everyone).
 
 import { raise } from "../common.mjs";
@@ -31,11 +31,11 @@ export interface Edge {
   to: string;
 }
 
-export class DuplicateExportError extends Error {
+export class DuplicateDefinitionError extends Error {
   constructor(public duplicates: { symbol: string, sources: string[] }[]) {
-    super('duplicate exports:\n' + duplicates
+    super('defined by more than one module:\n' + duplicates
       .map(d => `  ${d.symbol}: ${d.sources.join(' ')}`).join('\n'));
-    this.name = 'DuplicateExportError';
+    this.name = 'DuplicateDefinitionError';
   }
 }
 
@@ -142,24 +142,36 @@ function raise_cycle(remaining: string[], edges: Edge[]): never {
   }
 }
 
+/**
+ * The names `qualify` made internal to a module: `…:n`, where a label starts
+ * with ':'. Nothing imports them, but linked into one DAG they share its names
+ * with every other module's, so they must not repeat across modules either.
+ */
+function internal_names(text: string): string[] {
+  return text.split('\n')
+    .map(line => line.trim().split(/\s+/))
+    .filter(words => (words.length === 2 || words.length === 3) && /^[^:]+:/.test(words[0]))
+    .map(words => words[0]);
+}
+
 /** Dependency order for `fragments`, dependencies first. */
 export function order(fragments: Fragment[]): Fragment[] {
   const interfaces = new Map(fragments.map(f => [f.name, interface_of(f.text)]));
 
-  const exporters = new Map<string, string[]>();
+  const definers = new Map<string, string[]>();
   for (const f of fragments)
-    for (const symbol of interfaces.get(f.name)!.exports)
-      exporters.set(symbol, [...(exporters.get(symbol) ?? []), f.name]);
+    for (const symbol of new Set([...interfaces.get(f.name)!.exports, ...internal_names(f.text)]))
+      definers.set(symbol, [...(definers.get(symbol) ?? []), f.name]);
 
-  const duplicates = [...exporters]
+  const duplicates = [...definers]
     .filter(([, sources]) => sources.length > 1)
     .map(([symbol, sources]) => ({ symbol, sources }));
-  if (duplicates.length) throw new DuplicateExportError(duplicates);
+  if (duplicates.length) throw new DuplicateDefinitionError(duplicates);
 
   const dependencies: { symbol: string, from: string, to: string }[] = [];
   for (const f of fragments)
     for (const symbol of interfaces.get(f.name)!.imports) {
-      const from = exporters.get(symbol)?.[0];
+      const from = definers.get(symbol)?.[0];
       if (from !== undefined && from !== f.name)
         dependencies.push({ symbol, from, to: f.name });
     }

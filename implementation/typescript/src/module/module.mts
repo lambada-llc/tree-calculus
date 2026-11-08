@@ -305,12 +305,14 @@ export class DagModule {
    *
    * A name is exported when it is public and this is its last definition —
    * anything shadowed later was only scaffolding for what came after. Everything
-   * else is prefixed *and* given a `:n` suffix, which keeps it unique across
-   * modules while marking it as not part of the interface.
+   * else is prefixed with `private_prefix` *and* given a `:n` suffix, which marks
+   * it as not part of the interface. `n` counts within this module only, so
+   * modules sharing `prefix`, as the files of one namespace do, each need a
+   * `private_prefix` of their own for those names to stay unique.
    *
    * Only heads are rewritten; references follow because they share the box.
    */
-  qualify(prefix: string): this {
+  qualify(prefix: string, private_prefix: string = prefix): this {
     const last_definition = new Map<string, number>();
     this.lines.forEach((line, i) => {
       if (line.length === 2 && !is_label(line[0].symbol))
@@ -325,7 +327,7 @@ export class DagModule {
         && !is_label(head);
       if (!qualifiable) return;
       const exported = !is_private(head) && last_definition.get(head) === i;
-      line[0].symbol = exported ? `${prefix}${head}` : `${prefix}${head}:${internal++}`;
+      line[0].symbol = exported ? `${prefix}${head}` : `${private_prefix}${head}:${internal++}`;
     });
 
     return this;

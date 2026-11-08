@@ -69,9 +69,9 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 
 | Command | |
 | --- | --- |
-| `link <file>...` | Concatenate modules in dependency order. Rejects duplicate exports and dependency cycles. |
+| `link <file>...` | Concatenate modules in dependency order. Rejects a name two modules define, and dependency cycles. |
 | `canonicalize [file]` | Hash-cons into globally unique numeric ids. |
-| `qualify --prefix <p> [file]` | Namespace a module's exports under `<p>`. Definitions that are not exported are made unique but stay private. |
+| `qualify --prefix <p> [file]` | Namespace a module's exports under `<p>`. Definitions that are not exported stay private, numbered within the module. |
 | `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several share what they share, rather than repeating it. It comes out canonical, numbered by a walk from the symbols, so from `link` output it depends only on what they are built from. |
 | `eval [file]` | Evaluate a module and print one of its symbols. |
 | `interface [file]` | List what a module exports and what it needs. |
