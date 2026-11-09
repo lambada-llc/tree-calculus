@@ -23,7 +23,7 @@ export const transformer = native?.transformer ?? transformer_js;
 export { DagModule, box, is_label, is_symbol_name, is_private, LEAF } from "./module/module.mjs";
 export {
   link, order, interface_of, topological_sort,
-  DuplicateExportError, DependencyCycleError,
+  DuplicateDefinitionError, DependencyCycleError,
 } from "./module/link.mjs";
 export { to_file, of_file, is_plausible_file_name } from "./format/file.mjs";
 export { evaluator, formatters, m as marshal } from "./format/formats.mjs";
@@ -34,12 +34,13 @@ export { store as cache_store } from "./module/cache.mjs";
 const USAGE = `Usage: dag <command> [options] [file...]
 
 Commands:
-  link <file>...          Concatenate modules in dependency order. Rejects
-                          duplicate exports and dependency cycles.
+  link <file>...          Concatenate modules in dependency order. Rejects a
+                          name two modules define, and dependency cycles.
   canonicalize [file]     Hash-cons into globally unique numeric ids.
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
-                          that are not exported are made unique but stay private.
+                          that are not exported stay private, numbered within
+                          the module.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
                           DAG naming them. Several share what they share. It

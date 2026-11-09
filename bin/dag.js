@@ -23,7 +23,7 @@ var main_dag_exports = {};
 __export(main_dag_exports, {
   DagModule: () => DagModule,
   DependencyCycleError: () => DependencyCycleError,
-  DuplicateExportError: () => DuplicateExportError,
+  DuplicateDefinitionError: () => DuplicateDefinitionError,
   LEAF: () => LEAF,
   box: () => box,
   cache_store: () => store,
@@ -597,12 +597,14 @@ var DagModule = class _DagModule {
    *
    * A name is exported when it is public and this is its last definition —
    * anything shadowed later was only scaffolding for what came after. Everything
-   * else is prefixed *and* given a `:n` suffix, which keeps it unique across
-   * modules while marking it as not part of the interface.
+   * else is prefixed with `private_prefix` *and* given a `:n` suffix, which marks
+   * it as not part of the interface. `n` counts within this module only, so
+   * modules sharing `prefix`, as the files of one namespace do, each need a
+   * `private_prefix` of their own for those names to stay unique.
    *
    * Only heads are rewritten; references follow because they share the box.
    */
-  qualify(prefix) {
+  qualify(prefix, private_prefix = prefix) {
     const last_definition = /* @__PURE__ */ new Map();
     this.lines.forEach((line, i) => {
       if (line.length === 2 && !is_label(line[0].symbol))
@@ -615,7 +617,7 @@ var DagModule = class _DagModule {
       if (!qualifiable)
         return;
       const exported = !is_private(head) && last_definition.get(head) === i;
-      line[0].symbol = exported ? `${prefix}${head}` : `${prefix}${head}:${internal++}`;
+      line[0].symbol = exported ? `${prefix}${head}` : `${private_prefix}${head}:${internal++}`;
     });
     return this;
   }
@@ -760,11 +762,11 @@ function environment(e, text, options = {}) {
 }
 
 // src/module/link.mjs
-var DuplicateExportError = class extends Error {
+var DuplicateDefinitionError = class extends Error {
   constructor(duplicates) {
-    super("duplicate exports:\n" + duplicates.map((d) => `  ${d.symbol}: ${d.sources.join(" ")}`).join("\n"));
+    super("defined by more than one module:\n" + duplicates.map((d) => `  ${d.symbol}: ${d.sources.join(" ")}`).join("\n"));
     this.duplicates = duplicates;
-    this.name = "DuplicateExportError";
+    this.name = "DuplicateDefinitionError";
   }
 };
 var DependencyCycleError = class extends Error {
@@ -845,19 +847,22 @@ function raise_cycle(remaining, edges) {
     current = next;
   }
 }
+function internal_names(text) {
+  return text.split("\n").map((line) => line.trim().split(/\s+/)).filter((words) => (words.length === 2 || words.length === 3) && /^[^:]+:/.test(words[0])).map((words) => words[0]);
+}
 function order(fragments) {
   const interfaces = new Map(fragments.map((f) => [f.name, interface_of(f.text)]));
-  const exporters = /* @__PURE__ */ new Map();
+  const definers = /* @__PURE__ */ new Map();
   for (const f of fragments)
-    for (const symbol of interfaces.get(f.name).exports)
-      exporters.set(symbol, [...exporters.get(symbol) ?? [], f.name]);
-  const duplicates = [...exporters].filter(([, sources]) => sources.length > 1).map(([symbol, sources]) => ({ symbol, sources }));
+    for (const symbol of /* @__PURE__ */ new Set([...interfaces.get(f.name).exports, ...internal_names(f.text)]))
+      definers.set(symbol, [...definers.get(symbol) ?? [], f.name]);
+  const duplicates = [...definers].filter(([, sources]) => sources.length > 1).map(([symbol, sources]) => ({ symbol, sources }));
   if (duplicates.length)
-    throw new DuplicateExportError(duplicates);
+    throw new DuplicateDefinitionError(duplicates);
   const dependencies = [];
   for (const f of fragments)
     for (const symbol of interfaces.get(f.name).imports) {
-      const from = exporters.get(symbol)?.[0];
+      const from = definers.get(symbol)?.[0];
       if (from !== void 0 && from !== f.name)
         dependencies.push({ symbol, from, to: f.name });
     }
@@ -1334,12 +1339,13 @@ var transformer3 = native2?.transformer ?? transformer;
 var USAGE = `Usage: dag <command> [options] [file...]
 
 Commands:
-  link <file>...          Concatenate modules in dependency order. Rejects
-                          duplicate exports and dependency cycles.
+  link <file>...          Concatenate modules in dependency order. Rejects a
+                          name two modules define, and dependency cycles.
   canonicalize [file]     Hash-cons into globally unique numeric ids.
   qualify --prefix <p> [file]
                           Namespace a module's exports under <p>. Definitions
-                          that are not exported are made unique but stay private.
+                          that are not exported stay private, numbered within
+                          the module.
   extract --symbol <s>... [file]
                           Keep only what the named symbols are built from, as a
                           DAG naming them. Several share what they share. It
@@ -1475,7 +1481,7 @@ ${USAGE}`);
 0 && (module.exports = {
   DagModule,
   DependencyCycleError,
-  DuplicateExportError,
+  DuplicateDefinitionError,
   LEAF,
   box,
   cache_store,

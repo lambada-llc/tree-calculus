@@ -4,7 +4,7 @@ import { join } from "path";
 import { assert_equal, Evaluator } from "../common.mjs";
 import { DagModule, box, is_private, is_label } from "./module.mjs";
 import { environment } from "./env.mjs";
-import { link, order, interface_of, DuplicateExportError, DependencyCycleError } from "./link.mjs";
+import { link, order, interface_of, DuplicateDefinitionError, DependencyCycleError } from "./link.mjs";
 import { fingerprint } from "./fingerprint.mjs";
 import { store } from "./cache.mjs";
 import { to_file, of_file } from "../format/file.mjs";
@@ -65,6 +65,13 @@ function test_qualify() {
     'Bool.not:0 △ △\nBool._helper:1 △\nBool.not △\n:t Bool.not\n',
     qualified,
     'last public definition exports, everything else stays private');
+  assert_equal(
+    'Bool.Bool.not:0 △ △\nBool.Bool._helper:1 △\nBool.not △\n:t Bool.not\n',
+    DagModule
+      .parse('not △ △\n_helper △\nnot △\n:t not\n', { absorb_internal_aliases: false })
+      .qualify('Bool.', 'Bool.Bool.')
+      .toString(),
+    'private names take the private prefix, exports the shared one');
 }
 
 // --- Extracting ---
@@ -284,12 +291,20 @@ function test_link() {
 
   assert_throws(
     () => order([fragment('a', 'dup △\n'), fragment('b', 'dup △\n')]),
-    'duplicate exports',
+    'defined by more than one module',
     'two modules cannot export the same name');
   assert_equal(
     true,
-    (() => { try { order([fragment('a', 'dup △\n'), fragment('b', 'dup △\n')]); } catch (x) { return x instanceof DuplicateExportError; } return false; })(),
-    'duplicate exports raise DuplicateExportError');
+    (() => { try { order([fragment('a', 'dup △\n'), fragment('b', 'dup △\n')]); } catch (x) { return x instanceof DuplicateDefinitionError; } return false; })(),
+    'duplicate exports raise DuplicateDefinitionError');
+  assert_throws(
+    () => order([fragment('a', 'A._h:0 △\nA.x A._h:0\n'), fragment('b', 'A._h:0 △ △\nA.y A._h:0\n')]),
+    'A._h:0',
+    'two modules cannot define the same internal name');
+  assert_equal(
+    'a,b',
+    order([fragment('a', ':K △ △\nA.x :K\n'), fragment('b', ':K △ △\nB.y :K\n')]).map(f => f.name).join(','),
+    'labels may repeat across modules');
 
   assert_throws(
     () => order([fragment('a', 'A.x B.y\n'), fragment('b', 'B.y A.x\n')]),
