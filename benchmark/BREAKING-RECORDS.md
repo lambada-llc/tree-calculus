@@ -211,7 +211,8 @@ exactly what a GPU runs, where that core count is trivially available.)
 
 Second caveat, unchanged: it reduces *every* application node, so it would diverge
 on a program that relies on laziness to skip a non-terminating discarded branch
-(the suite here does not). Run: `OMP_NUM_THREADS=4 parallel-frontier < input`.
+(the suite here does not). Run: `OMP_NUM_THREADS=4 parallel-frontier.exe < input`, or
+`benchmark/parallel-frontier.sh` for the scaling rows.
 
 ### Work-stealing VM — the materialization-free attempt that doesn't fit
 
