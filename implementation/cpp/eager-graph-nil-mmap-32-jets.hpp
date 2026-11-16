@@ -7,11 +7,11 @@
 #include <utility>
 #include <vector>
 
-// The jets of eager-graph-nil-mmap-32.hpp that take more than a loop: what each
-// computes, natively, over that evaluator's nodes. The evaluator decides when
-// one fires, records its answer in the memo, and keeps its trees alive; this is
-// the rest, written against nothing but its arena, stem() and fork(). Index 0,
-// which no node is, reads from the arena as △.
+// The jets of eager-graph-nil-mmap-32.hpp and eager-fastest.hpp that take more
+// than a loop: what each computes, natively, over those evaluators' nodes. The
+// evaluator decides when one fires, records its answer in the memo, and keeps
+// its trees alive; this is the rest, written against nothing but its arena,
+// stem() and fork(). Index 0, which no node is, reads from the arena as △.
 
 namespace jets {
 
