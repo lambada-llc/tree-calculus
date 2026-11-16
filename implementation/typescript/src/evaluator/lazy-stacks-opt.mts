@@ -9,8 +9,8 @@ import { Evaluator } from "../common.mjs";
 //    node to a value, so every operand spread in the original holds at most two
 //    arguments, and a spread costs a variadic call where a fixed-arity push does
 //    not. The loop does one or two per reduction. The exception is rule 2's y,
-//    which is not forced, so its common lengths are unrolled and the general
-//    case kept.
+//    which is not forced: a value's entries are pushed per length, and an
+//    unreduced one is not copied at all (see the rule).
 //
 // 2. The generator is gone. It existed to suspend a reduction mid-step while a
 //    sub-node is forced and resume it afterwards, at the cost of a generator
@@ -25,6 +25,8 @@ import { Evaluator } from "../common.mjs";
 // says what that costs here.
 
 type Tree = Tree[]; // = △ <array entries in reverse order>
+
+const leaf: Tree = [];
 
 // num_steps is counted where a rewrite happens rather than at the top of the
 // loop, so that re-running a step after a force is not counted as a reduction.
@@ -46,15 +48,12 @@ function force_root(root: Tree): void {
         const u = x[0];
         if (u.length > 2) { s.push(z, y, x); work.push(u); continue outer; }
         debug.num_steps++;
-        // [z, ...y] is tricky:
-        // - if y is unreduced and we don't force it, we may end up reducing it multiple times
-        // - if y is unreduced and we force it, it might end up getting dropped
-        // if (y.length > 2) { ... force y ... }
+        // y z, with y unreduced, is △ △ y △ z (see `lazy-stacks`).
         const yz: Tree =
+          y.length > 2 ? [z, leaf, y, leaf] :
           y.length === 0 ? [z] :
           y.length === 1 ? [z, y[0]] :
-          y.length === 2 ? [z, y[0], y[1]] :
-          [z, ...y];
+          [z, y[0], y[1]];
         if (u.length === 0) s.push(yz, z);
         else if (u.length === 1) s.push(yz, z, u[0]);
         else s.push(yz, z, u[0], u[1]);
@@ -91,7 +90,7 @@ function force_root(root: Tree): void {
 
 const evaluator: Evaluator<Tree> = {
   // construct
-  leaf: [],
+  leaf,
   stem: u => [u],
   fork: (u, v) => [v, u],
   // eval
