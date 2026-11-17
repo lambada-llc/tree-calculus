@@ -249,7 +249,7 @@ var reduce_one = function* (s) {
     } else if (x.length === 1) {
       if (x[0].length > 2)
         yield x[0];
-      s.push([z, ...y], z, ...x[0]);
+      s.push(y.length > 2 ? [z, [], y, []] : [z, ...y], z, ...x[0]);
     } else if (x.length === 2) {
       if (z.length > 2)
         yield z;

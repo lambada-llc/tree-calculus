@@ -13,11 +13,11 @@ const reduce_one = function* (s: Tree[]): Generator<Tree> {
     }
     else if (x.length === 1) {
       if (x[0].length > 2) yield x[0];
-      // [z, ...y] is tricky:
-      // - if y is unreduced and we don't force it, we may end up reducing it multiple times
-      // - if y is unreduced and we force it, it might end up getting dropped
-      // if (y.length > 2) yield y;
-      s.push([z, ...y], z, ...x[0]);
+      // y z, with y unreduced, is △ △ y △ z rather than [z, ...y]. Copying y's
+      // entries would reduce y again at every use, and forcing it now would
+      // reduce it where y z may be dropped; as K's first argument, y is forced
+      // in place once y z is, and every other use of it sees the value.
+      s.push(y.length > 2 ? [z, [], y, []] : [z, ...y], z, ...x[0]);
     }
     else if (x.length === 2) { // fork
       if (z.length > 2) yield z;
