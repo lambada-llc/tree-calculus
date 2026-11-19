@@ -21,6 +21,7 @@
 #include "eager-ternary-nil-mmap-32-peek.hpp"
 #include "eager-graph-nil-mmap-32.hpp"
 #include "eager-fastest.hpp"
+#include "eager-stacks.hpp"
 #include "lazy-graph-nil-mmap-32.hpp"
 #include "lazy-app-stream.hpp"
 
@@ -33,10 +34,11 @@
 // line plus its header above, and no list can fall behind another.
 //
 // in_suite is whether benchmark/run-one.sh times it, which main.cpp's --list
-// reports. The three marked 0 are excluded because they are far slower than
+// reports. The four marked 0 are excluded because they are far slower than
 // that suite's per-case timeout: the fib arguments below are tuned so each case
-// takes about 0.1s, and needing fib(14) where the others take fib(24) means
-// roughly two orders of magnitude more work for the same wall time.
+// takes about 0.1s, and needing fib(18) where the others take fib(24) means
+// roughly 18 times the work for the same wall time, fib(14) two orders of
+// magnitude.
 //
 // linear_fib_n and recursive_fib_n are test.cpp's --bench arguments, tuned the
 // same way. Linear fib is capped at 90 to avoid int64_t overflow.
@@ -62,5 +64,6 @@
   X(EagerTernaryNilMmap32Peek, "eager-ternary-nil-mmap-32-peek", 1, 90, 24) \
   X(EagerGraphNilMmap32,       "eager-graph-nil-mmap-32",      1, 90, 24) \
   X(EagerFastest,              "eager-fastest",                1, 90, 24) \
+  X(EagerStacks,               "eager-stacks",                 0, 90, 18) \
   X(LazyGraphNilMmap32,        "lazy-graph-nil-mmap-32",       1, 90, 24) \
   X(LazyAppStream,             "lazy-app-stream",              0, 22,  9)
