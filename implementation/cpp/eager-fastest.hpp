@@ -88,9 +88,9 @@
 // is what lets every Tree a caller is holding survive one without being
 // registered anywhere.
 //
-// EagerFastestJets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerFastest is the same code
-// without it.
+// EagerFastestJets also answers lambada's skip_line and arboretum's
+// Nat.add and Nat.mul natively, jets (implementation/lean/Cpp/README.md);
+// EagerFastest is the same code without them.
 //
 // This is eager-graph-nil-mmap-32.hpp (kept, for comparison) made faster on
 // forest's build, measured by replaying the exact requests its compile phase
@@ -755,10 +755,14 @@ private:
 #endif
   }
 
-  // jets.hpp's trees, interned on a fresh arena and marked by every collection,
-  // so that each stays the index of its tree: interning is exact, so comparing
-  // an index with them compares trees. 0, which no tree is, while jets are off.
-  Tree _skip_line = 0, _newline = 0;
+  // jets.hpp's trees, or the parts of them a partial is told apart by (mul's U;
+  // add's C, K, N, L(△) and L(△△): intern_jets), interned on a fresh arena and
+  // marked by every collection, so that each stays the index of its tree:
+  // interning is exact, so comparing an index with them compares trees. 0,
+  // which no tree is, while jets are off.
+  Tree _skip_line = 0, _newline = 0, _mul_u = 0, _add_c = 0, _add_k = 0, _add_nil = 0;
+  Tree _add_bit[2] = {};
+  std::vector<uint64_t> _x, _y, _z; // add's and mul's operands and a product in limbs, reused
   bool _jets = JETS;
 
   static size_t round_up_pow2(size_t n) {
@@ -1425,18 +1429,36 @@ private:
 
   void intern_jets() {
     if constexpr (JETS) {
-      _skip_line = _newline = 0;
-      if (_jets) _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      _skip_line = _newline = _mul_u = _add_c = _add_k = _add_nil = _add_bit[0] = _add_bit[1] = 0;
+      if (!_jets) return;
+      _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      // mul is S (K (△U)) K, so `mul a` is △U (△△a) by S and K alone.
+      _mul_u = _arena[_arena[_arena[_arena[intern_dag(jets::mul)].u].u].v].u;
+      // `add a` is △ (△ (△C Z(a))) K, and Z(a) a closure per cell of a, which
+      // the rules build as they take a apart: Z([]) is N, and Z(h:t) is
+      // △ L(h) (△ (△ (h:t) △) (△△ Z(t))). The pieces are read off
+      // addPartial, add [△, △△].
+      const Node p = _arena[intern_dag(jets::addPartial)], q = _arena[_arena[p.u].u];
+      _add_k = p.v, _add_c = q.u, _add_nil = q.v;
+      for (Tree &l : _add_bit) // L(△), then L(△△), and below them N
+        l = _arena[_add_nil].u, _add_nil = _arena[_arena[_arena[_add_nil].v].v].v;
     }
+  }
+
+  /** r, which apply(a, b) is, recorded as RStep's put for the MEMOIZE frame
+   * recall() pushed under `top`, if it did: a jet takes no steps, so that
+   * frame would not. */
+  Tree answered(Tree a, Tree b, Tree r, const Frame *top) {
+    if (const uint64_t key = memo_key(a, b); top[-1].tag() == MEMOIZE && top[-1].key() == key)
+      memo_put(memo_hash(key), key, r);
+    return r;
   }
 
   /**
    * apply(skip_line, xs) by DropJet's transitions (TreeCalculus/Check.lean):
    * skip each element that is not the newline, and answer what follows the
-   * first that is, or the leaf ending the list, recorded as RStep's put for the
-   * MEMOIZE frame recall() pushed, if it did: the jet takes no steps, so that
-   * frame would not. A stem ending the list has no transition: 0, and xs the
-   * stem, for the rules.
+   * first that is, or the leaf ending the list. A stem ending the list has no
+   * transition: 0, and xs the stem, for the rules.
    */
   [[gnu::noinline]] Tree skip_line(Tree &xs, const Frame *top) {
     const Tree b = xs;
@@ -1445,9 +1467,78 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (const uint64_t key = memo_key(_skip_line, b); top[-1].tag() == MEMOIZE && top[-1].key() == key)
-      memo_put(memo_hash(key), key, xs);
-    return xs;
+    return answered(_skip_line, b, xs, top);
+  }
+
+  /** Whether x is a natural without trailing △s — a list of the bits △ and △△,
+   * least significant first (conventions/README.md) — and if so, its 64-bit
+   * limbs in w, least significant first, the top one not 0. */
+  bool limbs(Tree x, std::vector<uint64_t> &w) {
+    w.clear();
+    bool top = true; // the last bit, which is △△ unless there are none
+    for (size_t i = 0;; ++i) {
+      const Node n = _arena[x], h = _arena[n.u];
+      if (!n.u) return top;
+      if (!n.v || (n.u != leaf() && (h.u != leaf() || h.v))) return false; // a stem, or no bit
+      if (i % 64 == 0) w.push_back(0);
+      top = n.u != leaf();
+      w.back() |= uint64_t(top) << i % 64;
+      x = n.v;
+    }
+  }
+
+  /** The natural whose bits w's limbs are, without trailing △s. */
+  Tree natural(const std::vector<uint64_t> &w) {
+    const auto bit = [&](size_t i) { return w[i / 64] >> i % 64 & 1; };
+    size_t n = 64 * w.size();
+    while (n && !bit(n - 1)) --n;
+    const Tree one = stem(leaf());
+    return list(n, [&, i = n]() mutable { return bit(--i) ? one : leaf(); }, leaf());
+  }
+
+  /**
+   * apply(△ (△q) K, b), q = △C Z(a) — Nat.add a b — as the rules answer it
+   * when a and b are naturals without trailing △s: a + b, likewise without.
+   * Anything else, 0, for the rules. Z(a) holds a layer per cell of a
+   * (intern_jets), so telling it apart walks a twice: to read a, and down Z(a).
+   */
+  [[gnu::noinline]] Tree add(Tree p, Tree q, Tree b, const Frame *top) {
+    Tree z = _arena[q].v;
+    const Tree a = z == _add_nil ? leaf() : _arena[_arena[_arena[z].v].u].u; // Z(h:t)'s h:t
+    if (!limbs(a, _x) || !limbs(b, _y)) return 0;
+    for (Tree s = a; s != leaf(); s = _arena[s].v) { // z is Z(s)?
+      const Node n = _arena[z], v = _arena[n.v], c = _arena[v.u], k = _arena[v.v];
+      if (n.u != _add_bit[_arena[s].u != leaf()] || c.u != s || c.v != leaf() || k.u != leaf())
+        return 0;
+      z = k.v;
+    }
+    if (z != _add_nil) return 0;
+    ++stats_counters.jets;
+    if (_x.size() < _y.size()) _x.swap(_y);
+    _x.push_back(0), _y.resize(_x.size());
+    unsigned __int128 sum = 0;
+    for (size_t i = 0; i < _x.size(); ++i, sum >>= 64)
+      _x[i] = uint64_t(sum += (unsigned __int128)_x[i] + _y[i]);
+    return answered(p, b, natural(_x), top);
+  }
+
+  /**
+   * apply(△U (△△a), b) — Nat.mul a b — as the rules answer it when a and b
+   * are naturals without trailing △s: a · b, likewise without. Schoolbook,
+   * over limbs. Anything else, 0, for the rules.
+   */
+  [[gnu::noinline]] Tree mul(Tree p, Tree y, Tree b, const Frame *top) {
+    const Node k = _arena[y]; // △△a
+    if (k.u != leaf() || !k.v || !limbs(k.v, _x) || !limbs(b, _y)) return 0;
+    ++stats_counters.jets;
+    _z.assign(_x.size() + _y.size(), 0);
+    for (size_t i = 0; i < _x.size(); ++i) {
+      unsigned __int128 t = 0;
+      for (size_t j = 0; j < _y.size(); ++j, t >>= 64)
+        _z[i + j] = uint64_t(t += (unsigned __int128)_x[i] * _y[j] + _z[i + j]);
+      _z[i + _y.size()] = uint64_t(t);
+    }
+    return answered(p, b, natural(_z), top);
   }
 
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
@@ -1779,7 +1870,10 @@ public:
       mark(f->arg1());
       mark(f->arg2());
     }
-    if constexpr (JETS) mark(_skip_line), mark(_newline);
+    if constexpr (JETS)
+      for (const Tree t : {_skip_line, _newline, _mul_u, _add_c, _add_k, _add_nil, _add_bit[0],
+                           _add_bit[1]})
+        mark(t);
     // Between mark and sweep is the one moment liveness is written down, which
     // is what lets the memo be filtered rather than dropped: nothing moves, so
     // an entry whose operands and result all survived still says exactly what
@@ -2004,6 +2098,10 @@ public:
         const uint64_t un = node_word(arena, left(an));
         if (EAGER_LIKELY(!right(un))) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
+          if (JETS && EAGER_UNLIKELY(left(an) == _mul_u) && (result = mul(Tree(a), y, Tree(b), top))) goto dispatch;
+          if (JETS && EAGER_UNLIKELY(y == _add_k && _arena[left(un)].u == _add_c) &&
+              (result = add(Tree(a), left(un), Tree(b), top)))
+            goto dispatch;
           // A K-absorber u' answers apply(u', b) without looking at b, so that
           // step is skipped. apply(y, b) is still reduced, as rule (2) says:
           // peek.hpp's S K peek drops it, and with it a reduction that might
