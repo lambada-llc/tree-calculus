@@ -108,3 +108,12 @@ Observations:
   ```
   where `a`,`b` and `c` are subexpressions.
 * This allows writing very minimalistic evaluators, such as the PCRE-based one used by [this demo](https://treecalcul.us/live/?example=portability).
+
+### Compressed λ modules (lamz)
+A binary format for programs that are written as λ terms and should be small on disk, implemented [here](../implementation/typescript/src/format/lamz.mts).
+
+A file is a compressed _module_ followed by raw bytes. The module is a list of λ terms over `△`, application, abstraction (variables as de Bruijn indices) and references to earlier terms of the list. The tree a file denotes is its last term applied to the raw bytes as a list of bits, most significant bit of each byte first (`△` is 0, `△ △` is 1), where:
+* λs are removed by bracket abstraction, except that a part of a body that does not mention the variable and is already a value (`△` applied to at most two values, or a name) is kept whole. So nothing in a λ body is evaluated before the λ is applied, as in a call-by-value language.
+* a reference stands for the referenced term, shared rather than copied.
+
+The terms are written in preorder, one binary decision at a time, each arithmetic coded under a prediction that mixes adaptive contexts (the parent, the grandparent, the previous two nodes, and for an argument the head of the application and the argument's position). Everything is integer arithmetic, so implementations agree bit for bit. The coder's last four bytes end exactly where the decoder stops reading, which is where the raw bytes start.
