@@ -10,6 +10,7 @@ import formatter_dag from "./dag.mjs";
 import formatter_ternary from "./ternary.mjs";
 import formatter_readable from "./readable.mjs";
 import formatter_minbin from "./minbin.mjs";
+import * as lamz from "./lamz.mjs";
 import { Formatter } from "./formatter.mjs";
 
 export type TTree = typeof e extends Evaluator<infer T> ? T : never;
@@ -58,6 +59,10 @@ export const formatters: { [format: string]: { of: (s: Uint8Array) => TTree, to:
   dag: of_formatter(formatter_dag),
   term: of_formatter(formatter_readable),
   minbin: of_formatter(formatter_minbin),
+  lamz: {
+    of: (s: Uint8Array) => lamz.of(e, s),
+    to: (_: TTree) => raise('a tree does not say which λ term it was written as, so it has no lamz form'),
+  },
 };
 
 export const parse_infer = (s: Uint8Array): [TTree, string] => {

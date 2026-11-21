@@ -186,18 +186,18 @@ function to(e, x) {
   const keys = /* @__PURE__ */ new Map();
   const todo = [{ node: x, enter: true }];
   while (todo.length) {
-    const { node, enter } = todo.pop();
-    if (keys.has(node))
+    const { node: node2, enter } = todo.pop();
+    if (keys.has(node2))
       continue;
     if (enter) {
-      todo.push({ node, enter: false });
-      for (const c of children(e, node))
+      todo.push({ node: node2, enter: false });
+      for (const c of children(e, node2))
         todo.push({ node: c, enter: true });
     } else {
       let current = "\u25B3";
-      for (const c of children(e, node))
+      for (const c of children(e, node2))
         current = apply_keys(current, keys.get(c));
-      keys.set(node, current);
+      keys.set(node2, current);
     }
   }
   res.push(keys.get(x));
@@ -316,12 +316,325 @@ function of4(e, s) {
 var formatter4 = { to: to4, of: of4 };
 var minbin_default = formatter4;
 
+// src/abstraction-elimination/term.mjs
+var node = { variant: "Node" };
+var app = (...xs) => {
+  let result = xs[0];
+  for (let i = 1; i < xs.length; ++i)
+    result = { variant: "App", a: result, b: xs[i] };
+  return result;
+};
+var variable = (name) => ({ variant: "Var", name });
+var abs = (name, body) => ({ variant: "Abs", name, body });
+
+// src/format/lamz.mjs
+var SQUASH_TABLE = [
+  1,
+  2,
+  3,
+  6,
+  10,
+  16,
+  27,
+  45,
+  73,
+  120,
+  194,
+  310,
+  488,
+  747,
+  1101,
+  1546,
+  2047,
+  2549,
+  2994,
+  3348,
+  3607,
+  3785,
+  3901,
+  3975,
+  4022,
+  4050,
+  4068,
+  4079,
+  4085,
+  4089,
+  4092,
+  4093,
+  4094
+];
+function squash(d) {
+  if (d > 2047)
+    return 4095;
+  if (d < -2047)
+    return 1;
+  const w = d & 127, i = (d >> 7) + 16;
+  return SQUASH_TABLE[i] * (128 - w) + SQUASH_TABLE[i + 1] * w + 64 >> 7;
+}
+var STRETCH = new Int16Array(4096);
+{
+  let pi = 0;
+  for (let x = -2047; x <= 2047; x++) {
+    const v = squash(x);
+    for (let j = pi; j <= v; j++)
+      STRETCH[j] = x;
+    pi = v + 1;
+  }
+  for (let j = pi; j < 4096; j++)
+    STRETCH[j] = 2047;
+}
+var LIMIT = 20;
+var RATE = Array.from({ length: LIMIT + 1 }, (_, n) => Math.floor(131072 / (2 * n + 3)));
+var Model = class {
+  constructor() {
+    this.contexts = /* @__PURE__ */ new Map();
+    this.weights = /* @__PURE__ */ new Map();
+    this.used = [];
+    this.inputs = [];
+    this.mixer = [];
+    this.p = 2048;
+  }
+  predict(contexts, selector) {
+    this.used = contexts.map((c) => {
+      let e = this.contexts.get(c);
+      if (!e)
+        this.contexts.set(c, e = [32768, 0]);
+      return e;
+    });
+    this.inputs = this.used.map((e) => STRETCH[e[0] >> 4]);
+    let w = this.weights.get(selector);
+    if (!w)
+      this.weights.set(selector, w = contexts.map(() => 1 << 13));
+    this.mixer = w;
+    let dot = 0;
+    for (let i = 0; i < w.length; i++)
+      dot += w[i] * this.inputs[i];
+    this.p = Math.min(Math.max(squash(Math.floor(dot / 65536)), 1), 4095);
+    return this.p;
+  }
+  update(bit) {
+    const err = (bit << 12) - this.p;
+    for (let i = 0; i < this.mixer.length; i++)
+      this.mixer[i] += this.inputs[i] * err >> 10;
+    for (const e of this.used) {
+      e[0] += Math.floor(((bit << 16) - e[0]) * RATE[e[1]] / 65536);
+      if (e[1] < LIMIT)
+        e[1]++;
+    }
+  }
+};
+var Decoder = class {
+  constructor(bytes) {
+    this.bytes = bytes;
+    this.x1 = 0;
+    this.x2 = 4294967295;
+    this.x = 0;
+    this.pos = 0;
+    for (let i = 0; i < 4; i++)
+      this.x = (this.x << 8 | this.byte()) >>> 0;
+  }
+  byte() {
+    return this.pos < this.bytes.length ? this.bytes[this.pos++] : (this.pos++, 0);
+  }
+  code(_, p) {
+    const xm = this.x1 + (this.x2 - this.x1 >>> 12) * p;
+    const bit = this.x <= xm ? 1 : 0;
+    if (bit)
+      this.x2 = xm;
+    else
+      this.x1 = xm + 1;
+    while (((this.x1 ^ this.x2) & 4278190080) === 0) {
+      this.x1 = this.x1 << 8 >>> 0;
+      this.x2 = (this.x2 << 8 | 255) >>> 0;
+      this.x = (this.x << 8 | this.byte()) >>> 0;
+    }
+    return bit;
+  }
+};
+function walk(code, known) {
+  const model = new Model();
+  const decide = (name, contexts, selector, bit) => {
+    const p = model.predict(contexts.map((c) => `${name};${c}`), `${name};${selector}`);
+    const result = code(bit, p);
+    model.update(result);
+    return result;
+  };
+  const history = ["", ""];
+  const term = (t, par, gpar, depth, head, defined) => {
+    const h1 = history[history.length - 1], h = `${history[history.length - 2]},${h1}`;
+    const c = [par, par + gpar, head, head + par, par + h, par + gpar + h, head + h1];
+    const kind = t === null ? 0 : { A: 0, L: 1, V: 2, G: 2, C: 3 }[t.t];
+    const b0 = decide("a", c, par, kind >> 1);
+    const kind_ = b0 * 2 + decide(`b${b0}`, c, par, kind & 1);
+    history.push(String(kind_));
+    switch (kind_) {
+      case 0: {
+        const a = t;
+        const f = term(a && a.f, "f", par, depth, `F${head}`, defined);
+        let hd = f, n = 1;
+        while (hd.t === "A")
+          hd = hd.f, n++;
+        const key = hd.t === "V" ? `V${hd.i}` : hd.t === "G" ? `G${hd.j}` : hd.t;
+        const x = term(a && a.x, "x", par, depth, `X${key}.${n}`, defined);
+        return { t: "A", f, x };
+      }
+      case 1:
+        return { t: "L", body: term(t && t.body, "l", par, depth + 1, "L", defined) };
+      case 3:
+        return { t: "C" };
+    }
+    const global = depth === 0 ? 1 : decide("g", ["", par, String(Math.min(depth, 6)), head, head + par, h, par + gpar], "", t !== null && t.t === "G" ? 1 : 0);
+    if (global) {
+      const width = defined > 1 ? (defined - 1).toString(2).length : 1;
+      const j2 = t !== null && t.t === "G" ? t.j : 0;
+      let prefix = 1;
+      for (let k = width - 1; k >= 0; k--) {
+        const q = `${prefix}.`;
+        prefix = prefix * 2 + decide("gi", [q, q + par, q + Math.min(depth, 4), q + head, q + h1, q + gpar + par, q + head + par], String(width - k), j2 >> k & 1);
+      }
+      const g = prefix - (1 << width);
+      if (g >= defined)
+        raise("lamz: reference to a term not yet defined");
+      history.push(`G${g}`);
+      return { t: "G", j: g };
+    }
+    const i = t !== null && t.t === "V" ? t.i : -1;
+    let j = 0;
+    for (; j < depth - 1; j++) {
+      const q = `${j}.`;
+      if (decide("v", [q, q + par, q + Math.min(depth, 8), q + head, q + h1, q + depth, `${q}${head}.${depth}`], String(Math.min(j, 3)), j === i ? 1 : 0))
+        break;
+    }
+    history.push(`V${j}`);
+    return { t: "V", i: j };
+  };
+  const terms = [];
+  for (let k = 0; ; k++) {
+    const last = decide("e", ["", String(Math.min(k, 1)), "", "", "", "", ""], "", known !== null && k === known.length - 1 ? 1 : 0);
+    terms.push(term(known && known[k], "t", "", 0, "T", k));
+    if (last)
+      return terms;
+  }
+}
+function decode(bytes) {
+  const decoder = new Decoder(bytes);
+  const module2 = walk((bit, p) => decoder.code(bit, p), null);
+  return { module: module2, tail: bytes.slice(decoder.pos) };
+}
+var k_op = app(node, node);
+var i_op = app(node, app(node, k_op), node);
+var free_cache = /* @__PURE__ */ new WeakMap();
+function free(t) {
+  let f = free_cache.get(t);
+  if (f)
+    return f;
+  switch (t.variant) {
+    case "Node":
+      f = /* @__PURE__ */ new Set();
+      break;
+    case "Var":
+      f = /* @__PURE__ */ new Set([t.name]);
+      break;
+    case "App":
+      f = /* @__PURE__ */ new Set([...free(t.a), ...free(t.b)]);
+      break;
+    case "Abs":
+      f = new Set([...free(t.body)].filter((n) => n !== t.name));
+      break;
+  }
+  free_cache.set(t, f);
+  return f;
+}
+var value_cache = /* @__PURE__ */ new WeakMap();
+function is_value(t) {
+  let v = value_cache.get(t);
+  if (v !== void 0)
+    return v;
+  let args = 0, head = t;
+  while (head.variant === "App")
+    head = head.a, args++;
+  v = t.variant === "Var" || head.variant === "Node" && args <= 2 && (args === 0 || is_value(t.b) && (args === 1 || is_value(t.a.b)));
+  value_cache.set(t, v);
+  return v;
+}
+function eliminate(name, t) {
+  if (t.variant === "Var" && t.name === name)
+    return i_op;
+  if (!free(t).has(name) && is_value(t))
+    return app(k_op, t);
+  if (t.variant !== "App")
+    return raise(`lamz: unexpected ${t.variant} in abstraction elimination`);
+  return app(node, app(node, eliminate(name, t.a)), eliminate(name, t.b));
+}
+function combinators(t) {
+  switch (t.variant) {
+    case "App":
+      return app(combinators(t.a), combinators(t.b));
+    case "Abs":
+      return eliminate(t.name, combinators(t.body));
+    default:
+      return t;
+  }
+}
+function read(bytes) {
+  const { module: module2, tail } = decode(bytes);
+  const lambda = (t, depth) => {
+    switch (t.t) {
+      case "A":
+        return app(lambda(t.f, depth), lambda(t.x, depth));
+      case "L":
+        return abs(`l${depth}`, lambda(t.body, depth + 1));
+      case "V":
+        return variable(`l${depth - 1 - t.i}`);
+      case "G":
+        return variable(`g${t.j}`);
+      case "C":
+        return node;
+    }
+  };
+  const terms = module2.map((t) => combinators(lambda(t, 0)));
+  const bits = Array.from({ length: tail.length * 8 }, (_, i) => (tail[i >> 3] >> 7 - (i & 7) & 1) === 1);
+  return { terms, bits };
+}
+function build(bytes, leaf, apply) {
+  const { terms, bits } = read(bytes);
+  const built = [];
+  const of6 = (t) => t.variant === "Node" ? leaf : t.variant === "App" ? apply(of6(t.a), of6(t.b)) : t.variant === "Var" ? built[Number(t.name.slice(1))] : raise("lamz: unexpected \u03BB after abstraction elimination");
+  for (const t of terms)
+    built.push(of6(t));
+  const one = apply(leaf, leaf);
+  let list = leaf;
+  for (let i = bits.length - 1; i >= 0; i--)
+    list = apply(apply(leaf, bits[i] ? one : leaf), list);
+  return apply(built[built.length - 1], list);
+}
+function of5(e, bytes) {
+  return build(bytes, e.leaf, (a, b) => e.apply(a, b));
+}
+function to_dag(bytes) {
+  const ids = /* @__PURE__ */ new Map();
+  const lines = [];
+  const root = build(bytes, "\u25B3", (a, b) => {
+    const key = `${a} ${b}`;
+    let n = ids.get(key);
+    if (n === void 0) {
+      ids.set(key, n = String(ids.size));
+      lines.push(`${n} ${key}`);
+    }
+    return n;
+  });
+  return `${lines.join("\n")}
+main ${root}
+main
+`;
+}
+
 // src/format/formats.mjs
 var text_enc = new TextEncoder();
 var text_dec = new TextDecoder();
 var m = marshal(lazy_stacks_default);
-var of_marshaller = (of5, to5, of_string, to_string) => ({
-  of: (s) => of5(of_string(text_dec.decode(s))),
+var of_marshaller = (of6, to5, of_string, to_string) => ({
+  of: (s) => of6(of_string(text_dec.decode(s))),
   to: (x) => text_enc.encode(to_string(to5(x)))
 });
 var of_formatter = (f) => ({
@@ -339,7 +652,11 @@ var formatters = {
   ternary: of_formatter(ternary_default),
   dag: of_formatter(dag_default),
   term: of_formatter(readable_default),
-  minbin: of_formatter(minbin_default)
+  minbin: of_formatter(minbin_default),
+  lamz: {
+    of: (s) => of5(lazy_stacks_default, s),
+    to: (_) => raise("a tree does not say which \u03BB term it was written as, so it has no lamz form")
+  }
 };
 var parse_infer = (s) => {
   const guess = (format) => {
@@ -722,7 +1039,7 @@ function environment(e, text, options = {}) {
   const { origin = "" } = options;
   const env = { [LEAF]: e.leaf };
   let context = "";
-  const read2 = (text2, scope) => {
+  const read3 = (text2, scope) => {
     const get2 = (symbol) => {
       if (symbol in scope)
         return scope[symbol];
@@ -746,14 +1063,14 @@ function environment(e, text, options = {}) {
     context = "";
     return value;
   };
-  read2(text, env);
+  read3(text, env);
   const get = (symbol) => {
     if (symbol in env)
       return env[symbol];
     throw new Error(`unbound symbol: ${symbol}`);
   };
   get.reduce = (text2) => {
-    const value = read2(text2, /* @__PURE__ */ Object.create(null));
+    const value = read3(text2, /* @__PURE__ */ Object.create(null));
     if (value === void 0)
       throw new Error("dag representation was not terminated by a value");
     return value;
@@ -1097,9 +1414,9 @@ var executable = once(() => {
 function ends(path) {
   const hold = (0, import_fs2.openSync)(path, import_fs2.constants.O_RDONLY | import_fs2.constants.O_NONBLOCK);
   const write = (0, import_fs2.openSync)(path, "w");
-  const read2 = (0, import_fs2.openSync)(path, "r");
+  const read3 = (0, import_fs2.openSync)(path, "r");
   (0, import_fs2.closeSync)(hold);
-  return [read2, write];
+  return [read3, write];
 }
 var server = once(() => {
   const exe = executable();
@@ -1112,12 +1429,12 @@ var server = once(() => {
   (0, import_fs2.closeSync)(stdin);
   (0, import_fs2.closeSync)(stdout);
   runner.unref();
-  const read2 = (buffer, at, length) => (0, import_fs2.readSync)(read_fd, buffer, at, length, null) || raise("runner: no response");
+  const read3 = (buffer, at, length) => (0, import_fs2.readSync)(read_fd, buffer, at, length, null) || raise("runner: no response");
   const byte = Buffer.alloc(1);
   const line = () => {
     let text = "";
     for (; ; ) {
-      read2(byte, 0, 1);
+      read3(byte, 0, 1);
       if (byte[0] === 10)
         return text;
       text += String.fromCharCode(byte[0]);
@@ -1126,7 +1443,7 @@ var server = once(() => {
   const bytes = (length) => {
     const buffer = Buffer.alloc(length);
     for (let got = 0; got < length; )
-      got += read2(buffer, got, length - got);
+      got += read3(buffer, got, length - got);
     return buffer;
   };
   return (command, payload) => {
@@ -1354,6 +1671,8 @@ Commands:
                           they are built from.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
+  lamz [file]             The DAG a lamz file (a compressed \u03BB module) denotes,
+                          unreduced, named main.
 
 Options:
   --prefix <p>            Namespace prefix for 'qualify', e.g. 'Bool.'
@@ -1370,7 +1689,7 @@ Options:
                           built through.
 
 A file argument of '-', or no file at all, reads stdin.`;
-var COMMANDS = ["link", "canonicalize", "qualify", "extract", "eval", "interface"];
+var COMMANDS = ["link", "canonicalize", "qualify", "extract", "eval", "interface", "lamz"];
 function parse_args(argv) {
   const command = argv[0];
   if (!COMMANDS.includes(command))
@@ -1399,8 +1718,8 @@ function parse_args(argv) {
   }
   return { command, files, options };
 }
-var read = (file) => (0, import_fs3.readFileSync)(file === "-" ? 0 : file, "utf8");
-var read_input = (files) => read(files.length ? files[0] : "-");
+var read2 = (file) => (0, import_fs3.readFileSync)(file === "-" ? 0 : file, "utf8");
+var read_input = (files) => read2(files.length ? files[0] : "-");
 function last_symbol(text) {
   let last = null;
   for (const raw of text.split(/\r?\n/)) {
@@ -1416,7 +1735,7 @@ function run(command, files, options) {
     case "link":
       if (!files.length)
         raise("link needs at least one file");
-      return utf8(link(files.map((name) => ({ name, text: read(name) }))));
+      return utf8(link(files.map((name) => ({ name, text: read2(name) }))));
     case "canonicalize":
       return utf8(DagModule.parse(read_input(files)).canonicalize({ as_written: options.as_written }).toString());
     case "qualify": {
@@ -1450,6 +1769,10 @@ function run(command, files, options) {
         ...exports2.map((s) => `export ${s}`),
         ...imports.map((s) => `import ${s}`)
       ].join("\n") + "\n");
+    }
+    case "lamz": {
+      const file = files.length ? files[0] : "-";
+      return utf8(to_dag(new Uint8Array((0, import_fs3.readFileSync)(file === "-" ? 0 : file))));
     }
     default:
       return raise(`unrecognized command ${command}`);
