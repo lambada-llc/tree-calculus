@@ -105,18 +105,18 @@ function to(e, x) {
   const keys = /* @__PURE__ */ new Map();
   const todo = [{ node: x, enter: true }];
   while (todo.length) {
-    const { node: node2, enter } = todo.pop();
-    if (keys.has(node2))
+    const { node, enter } = todo.pop();
+    if (keys.has(node))
       continue;
     if (enter) {
-      todo.push({ node: node2, enter: false });
-      for (const c of children(e, node2))
+      todo.push({ node, enter: false });
+      for (const c of children(e, node))
         todo.push({ node: c, enter: true });
     } else {
       let current = "\u25B3";
-      for (const c of children(e, node2))
+      for (const c of children(e, node))
         current = apply_keys(current, keys.get(c));
-      keys.set(node2, current);
+      keys.set(node, current);
     }
   }
   res.push(keys.get(x));
@@ -305,18 +305,7 @@ var evaluator = {
 var debug = { num_steps: 0 };
 var lazy_stacks_default = evaluator;
 
-// src/abstraction-elimination/term.mjs
-var node = { variant: "Node" };
-var app = (...xs) => {
-  let result = xs[0];
-  for (let i = 1; i < xs.length; ++i)
-    result = { variant: "App", a: result, b: xs[i] };
-  return result;
-};
-var variable = (name) => ({ variant: "Var", name });
-var abs = (name, body) => ({ variant: "Abs", name, body });
-
-// src/format/lamz.mjs
+// src/format/dagz.mjs
 var SQUASH_TABLE = [
   1,
   2,
@@ -372,8 +361,10 @@ var STRETCH = new Int16Array(4096);
   for (let j = pi; j < 4096; j++)
     STRETCH[j] = 2047;
 }
-var LIMIT = 20;
+var LIMIT = 30;
 var RATE = Array.from({ length: LIMIT + 1 }, (_, n) => Math.floor(131072 / (2 * n + 3)));
+var WEIGHT = 13107;
+var BIAS = 256;
 var Model = class {
   constructor() {
     this.contexts = /* @__PURE__ */ new Map();
@@ -390,10 +381,10 @@ var Model = class {
         this.contexts.set(c, e = [32768, 0]);
       return e;
     });
-    this.inputs = this.used.map((e) => STRETCH[e[0] >> 4]);
+    this.inputs = [...this.used.map((e) => STRETCH[e[0] >> 4]), BIAS];
     let w = this.weights.get(selector);
     if (!w)
-      this.weights.set(selector, w = contexts.map(() => 1 << 13));
+      this.weights.set(selector, w = [...contexts.map(() => WEIGHT), 0]);
     this.mixer = w;
     let dot = 0;
     for (let i = 0; i < w.length; i++)
@@ -442,160 +433,72 @@ var Decoder = class {
 };
 function walk(code, known) {
   const model = new Model();
-  const decide = (name, contexts, selector, bit) => {
-    const p = model.predict(contexts.map((c) => `${name};${c}`), `${name};${selector}`);
+  const history = [];
+  const decide = (tag, extra, s, bit) => {
+    const h = (n) => history.slice(-n).join();
+    const contexts = [
+      `0${s.side}`,
+      `1${s.side}${s.spine}.${s.heads.slice(0, 1).join()}`,
+      `2${s.path}`,
+      `3${h(8)}`,
+      `4${s.side}${s.spine}`,
+      `5${s.side}${s.spine}.${s.heads.slice(0, 2).join()}`
+    ];
+    const p = model.predict(contexts.map((c) => `${tag}${extra};${c}`), tag + extra.split(".")[0]);
     const result = code(bit, p);
     model.update(result);
     return result;
   };
-  const history = ["", ""];
-  const term = (t, par, gpar, depth, head, defined) => {
-    const h1 = history[history.length - 1], h = `${history[history.length - 2]},${h1}`;
-    const c = [par, par + gpar, head, head + par, par + h, par + gpar + h, head + h1];
-    const kind = t === null ? 0 : { A: 0, L: 1, V: 2, G: 2, C: 3 }[t.t];
-    const b0 = decide("a", c, par, kind >> 1);
-    const kind_ = b0 * 2 + decide(`b${b0}`, c, par, kind & 1);
-    history.push(String(kind_));
-    switch (kind_) {
-      case 0: {
-        const a = t;
-        const f = term(a && a.f, "f", par, depth, `F${head}`, defined);
-        let hd = f, n = 1;
-        while (hd.t === "A")
-          hd = hd.f, n++;
-        const key = hd.t === "V" ? `V${hd.i}` : hd.t === "G" ? `G${hd.j}` : hd.t;
-        const x = term(a && a.x, "x", par, depth, `X${key}.${n}`, defined);
-        return { t: "A", f, x };
-      }
-      case 1:
-        return { t: "L", body: term(t && t.body, "l", par, depth + 1, "L", defined) };
-      case 3:
-        return { t: "C" };
+  const nodes = [[0, 0]];
+  const head = [{ token: "L", args: 0 }];
+  const written = /* @__PURE__ */ new Map();
+  const child = (x, s) => {
+    if (decide("l", "", s, x === 0 ? 1 : 0)) {
+      history.push("L");
+      return 0;
     }
-    const global = depth === 0 ? 1 : decide("g", ["", par, String(Math.min(depth, 6)), head, head + par, h, par + gpar], "", t !== null && t.t === "G" ? 1 : 0);
-    if (global) {
-      const width = defined > 1 ? (defined - 1).toString(2).length : 1;
-      const j2 = t !== null && t.t === "G" ? t.j : 0;
-      let prefix = 1;
-      for (let k = width - 1; k >= 0; k--) {
-        const q = `${prefix}.`;
-        prefix = prefix * 2 + decide("gi", [q, q + par, q + Math.min(depth, 4), q + head, q + h1, q + gpar + par, q + head + par], String(width - k), j2 >> k & 1);
-      }
-      const g = prefix - (1 << width);
-      if (g >= defined)
-        raise("lamz: reference to a term not yet defined");
-      history.push(`G${g}`);
-      return { t: "G", j: g };
+    const n = nodes.length - 1;
+    if (decide("r", "", s, x !== null && written.has(x) ? 1 : 0)) {
+      const i = x === null ? 0 : written.get(x);
+      const width = n > 1 ? (n - 1).toString(2).length : 1;
+      let v = 0;
+      for (let k = width - 1; k >= 0; k--)
+        v = v * 2 + decide("t", `${k}.${v}`, s, i >> k & 1);
+      if (v >= n)
+        raise("dagz: reference to a node not yet written");
+      history.push(`R${v}`);
+      head[v + 1] = { token: `R${v}`, args: 0 };
+      return v + 1;
     }
-    const i = t !== null && t.t === "V" ? t.i : -1;
-    let j = 0;
-    for (; j < depth - 1; j++) {
-      const q = `${j}.`;
-      if (decide("v", [q, q + par, q + Math.min(depth, 8), q + head, q + h1, q + depth, `${q}${head}.${depth}`], String(Math.min(j, 3)), j === i ? 1 : 0))
-        break;
-    }
-    history.push(`V${j}`);
-    return { t: "V", i: j };
+    history.push("N");
+    const [l, r] = x === null ? [null, null] : known.nodes[x];
+    const left = child(l, { side: "L", spine: s.side === "L" ? s.spine + 1 : 1, heads: s.heads, path: (s.path + "L").slice(-4) });
+    const { token, args } = head[left];
+    const right = child(r, { side: "R", spine: 0, heads: [`${token}.${args}`, ...s.heads.slice(0, 3)], path: (s.path + "R").slice(-4) });
+    nodes.push([left, right]);
+    head.push({ token, args: args + 1 });
+    if (x !== null)
+      written.set(x, nodes.length - 2);
+    return nodes.length - 1;
   };
-  const terms = [];
-  for (let k = 0; ; k++) {
-    const last = decide("e", ["", String(Math.min(k, 1)), "", "", "", "", ""], "", known !== null && k === known.length - 1 ? 1 : 0);
-    terms.push(term(known && known[k], "t", "", 0, "T", k));
-    if (last)
-      return terms;
-  }
+  const root = child(known && known.root, { side: "R", spine: 0, heads: [], path: "" });
+  return { nodes, root };
 }
 function decode(bytes) {
   const decoder = new Decoder(bytes);
-  const module2 = walk((bit, p) => decoder.code(bit, p), null);
-  return { module: module2, tail: bytes.slice(decoder.pos) };
-}
-var k_op = app(node, node);
-var i_op = app(node, app(node, k_op), node);
-var free_cache = /* @__PURE__ */ new WeakMap();
-function free(t) {
-  let f = free_cache.get(t);
-  if (f)
-    return f;
-  switch (t.variant) {
-    case "Node":
-      f = /* @__PURE__ */ new Set();
-      break;
-    case "Var":
-      f = /* @__PURE__ */ new Set([t.name]);
-      break;
-    case "App":
-      f = /* @__PURE__ */ new Set([...free(t.a), ...free(t.b)]);
-      break;
-    case "Abs":
-      f = new Set([...free(t.body)].filter((n) => n !== t.name));
-      break;
-  }
-  free_cache.set(t, f);
-  return f;
-}
-var value_cache = /* @__PURE__ */ new WeakMap();
-function is_value(t) {
-  let v = value_cache.get(t);
-  if (v !== void 0)
-    return v;
-  let args = 0, head = t;
-  while (head.variant === "App")
-    head = head.a, args++;
-  v = t.variant === "Var" || head.variant === "Node" && args <= 2 && (args === 0 || is_value(t.b) && (args === 1 || is_value(t.a.b)));
-  value_cache.set(t, v);
-  return v;
-}
-function eliminate(name, t) {
-  if (t.variant === "Var" && t.name === name)
-    return i_op;
-  if (!free(t).has(name) && is_value(t))
-    return app(k_op, t);
-  if (t.variant !== "App")
-    return raise(`lamz: unexpected ${t.variant} in abstraction elimination`);
-  return app(node, app(node, eliminate(name, t.a)), eliminate(name, t.b));
-}
-function combinators(t) {
-  switch (t.variant) {
-    case "App":
-      return app(combinators(t.a), combinators(t.b));
-    case "Abs":
-      return eliminate(t.name, combinators(t.body));
-    default:
-      return t;
-  }
-}
-function read(bytes) {
-  const { module: module2, tail } = decode(bytes);
-  const lambda = (t, depth) => {
-    switch (t.t) {
-      case "A":
-        return app(lambda(t.f, depth), lambda(t.x, depth));
-      case "L":
-        return abs(`l${depth}`, lambda(t.body, depth + 1));
-      case "V":
-        return variable(`l${depth - 1 - t.i}`);
-      case "G":
-        return variable(`g${t.j}`);
-      case "C":
-        return node;
-    }
-  };
-  const terms = module2.map((t) => combinators(lambda(t, 0)));
-  const bits = Array.from({ length: tail.length * 8 }, (_, i) => (tail[i >> 3] >> 7 - (i & 7) & 1) === 1);
-  return { terms, bits };
+  const dag = walk((bit, p) => decoder.code(bit, p), null);
+  return { dag, tail: bytes.slice(decoder.pos) };
 }
 function build(bytes, leaf, apply) {
-  const { terms, bits } = read(bytes);
-  const built = [];
-  const of6 = (t) => t.variant === "Node" ? leaf : t.variant === "App" ? apply(of6(t.a), of6(t.b)) : t.variant === "Var" ? built[Number(t.name.slice(1))] : raise("lamz: unexpected \u03BB after abstraction elimination");
-  for (const t of terms)
-    built.push(of6(t));
+  const { dag, tail } = decode(bytes);
+  const built = [leaf];
+  for (let i = 1; i < dag.nodes.length; i++)
+    built.push(apply(built[dag.nodes[i][0]], built[dag.nodes[i][1]]));
   const one = apply(leaf, leaf);
   let list = leaf;
-  for (let i = bits.length - 1; i >= 0; i--)
-    list = apply(apply(leaf, bits[i] ? one : leaf), list);
-  return apply(built[built.length - 1], list);
+  for (let i = tail.length * 8 - 1; i >= 0; i--)
+    list = apply(apply(leaf, tail[i >> 3] >> 7 - (i & 7) & 1 ? one : leaf), list);
+  return apply(built[dag.root], list);
 }
 function of5(e, bytes) {
   return build(bytes, e.leaf, (a, b) => e.apply(a, b));
@@ -625,9 +528,9 @@ var formatters = {
   dag: of_formatter(dag_default),
   term: of_formatter(readable_default),
   minbin: of_formatter(minbin_default),
-  lamz: {
+  dagz: {
     of: (s) => of5(lazy_stacks_default, s),
-    to: (_) => raise("a tree does not say which \u03BB term it was written as, so it has no lamz form")
+    to: (_) => raise("dagz is read-only here: a dagz file is its root applied to its raw bytes, which a tree does not say")
   }
 };
 var parse_infer = (s) => {

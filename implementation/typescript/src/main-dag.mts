@@ -10,7 +10,7 @@ import { environment as environment_js } from "./module/env.mjs";
 import { link, interface_of } from "./module/link.mjs";
 import { transformer as transformer_js } from "./module/transform.mjs";
 import { native } from "./runner/native.mjs";
-import { to_dag as lamz_to_dag } from "./format/lamz.mjs";
+import { to_dag as dagz_to_dag } from "./format/dagz.mjs";
 
 // Reduction happens either in Node or in the C++ runner, and the choice is made
 // here, once: everything downstream — this file's own `eval`, and every build
@@ -50,7 +50,7 @@ Commands:
                           they are built from.
   eval [file]             Evaluate a module and print one of its symbols.
   interface [file]        List what a module exports and what it needs.
-  lamz [file]             The DAG a lamz file (a compressed λ module) denotes,
+  dagz [file]             The DAG a dagz file (a compressed DAG) denotes,
                           unreduced, named main.
 
 Options:
@@ -78,7 +78,7 @@ interface Options {
   as_written: boolean;
 }
 
-const COMMANDS = ['link', 'canonicalize', 'qualify', 'extract', 'eval', 'interface', 'lamz'];
+const COMMANDS = ['link', 'canonicalize', 'qualify', 'extract', 'eval', 'interface', 'dagz'];
 
 function parse_args(argv: string[]): { command: string, files: string[], options: Options } {
   const command = argv[0];
@@ -168,9 +168,9 @@ function run(command: string, files: string[], options: Options): Uint8Array {
       ].join('\n') + '\n');
     }
 
-    case 'lamz': {
+    case 'dagz': {
       const file = files.length ? files[0] : '-';
-      return utf8(lamz_to_dag(new Uint8Array(readFileSync(file === '-' ? 0 : file))));
+      return utf8(dagz_to_dag(new Uint8Array(readFileSync(file === '-' ? 0 : file))));
     }
 
     default:

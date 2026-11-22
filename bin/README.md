@@ -53,7 +53,7 @@ where `<param>` is one of
 * A flag that modifies how subsequent trees are parsed or printed.
   * `-bool`, `-nat`, `-string` follow the conventions for representing data described [here](../conventions/).
   * `-ternary`, `-term`, `-dag` follow the conventions for representing trees described [here](../conventions/).
-  * `-lamz` reads a [compressed λ module](../conventions/#compressed-λ-modules-lamz), from a file (`-lamz -file program.lamz`). It is read-only: no tree says which λ term it was written as.
+  * `-dagz` reads a [compressed DAG](../conventions/#compressed-dags-dagz), from a file (`-dagz -file program.dagz`). It is read-only.
   * `-infer` tries to guess which of the above formats are used. This is the default behavior as long as no explicit format has been specified. However, this has potential to be quite confusing, so explicitly passing formats is strongly recommended.
   * `-file` is orthogonal to all other flags in that it does not update the expected format, but merely causes the next tree (and only the next one) to be read from a file rather than directly from the command line.
 * A tree that is either program or argument to said program.
@@ -76,7 +76,7 @@ A file argument of `-`, or no file at all, reads stdin; results go to stdout.
 | `extract --symbol <s>... [file]` | Keep only what the named symbols are built from, as a DAG naming them. Several share what they share, rather than repeating it. It comes out canonical, numbered by a walk from the symbols, so from `link` output it depends only on what they are built from. |
 | `eval [file]` | Evaluate a module and print one of its symbols. |
 | `interface [file]` | List what a module exports and what it needs. |
-| `lamz [file]` | The DAG a [lamz](../conventions/#compressed-λ-modules-lamz) file denotes, unreduced, named `main`. |
+| `dagz [file]` | The DAG a [dagz](../conventions/#compressed-dags-dagz) file denotes, unreduced, named `main`. |
 
 | Option | |
 | --- | --- |
@@ -116,8 +116,8 @@ $ ./dag.js extract --except '^:test\.' bundle.dag > library.dag
 # What does a module need from elsewhere?
 $ ./dag.js interface .nat.dag | grep '^import'
 
-# A lamz file, evaluated by the native runner rather than in Node:
-$ ./dag.js lamz program.lamz | TREE_CALCULUS_RUNNER=eager ./dag.js eval --format string
+# A dagz file, evaluated by the native runner rather than in Node:
+$ ./dag.js dagz program.dagz | TREE_CALCULUS_RUNNER=eager ./dag.js eval --format string
 ```
 
 Building a project this way is what [LambAda](https://github.com/lambada-llc/lambada)'s
