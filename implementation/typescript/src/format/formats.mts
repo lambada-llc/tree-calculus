@@ -10,7 +10,7 @@ import formatter_dag from "./dag.mjs";
 import formatter_ternary from "./ternary.mjs";
 import formatter_readable from "./readable.mjs";
 import formatter_minbin from "./minbin.mjs";
-import * as lamz from "./lamz.mjs";
+import * as dagz from "./dagz.mjs";
 import { Formatter } from "./formatter.mjs";
 
 export type TTree = typeof e extends Evaluator<infer T> ? T : never;
@@ -59,9 +59,9 @@ export const formatters: { [format: string]: { of: (s: Uint8Array) => TTree, to:
   dag: of_formatter(formatter_dag),
   term: of_formatter(formatter_readable),
   minbin: of_formatter(formatter_minbin),
-  lamz: {
-    of: (s: Uint8Array) => lamz.of(e, s),
-    to: (_: TTree) => raise('a tree does not say which λ term it was written as, so it has no lamz form'),
+  dagz: {
+    of: (s: Uint8Array) => dagz.of(e, s),
+    to: (_: TTree) => raise('dagz is read-only here: a dagz file is its root applied to its raw bytes, which a tree does not say'),
   },
 };
 
