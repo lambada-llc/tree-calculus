@@ -61,7 +61,7 @@ export const formatters: { [format: string]: { of: (s: Uint8Array) => TTree, to:
   minbin: of_formatter(formatter_minbin),
   dagz: {
     of: (s: Uint8Array) => dagz.of(e, s),
-    to: (_: TTree) => raise('dagz is read-only here: a dagz file is its root applied to its raw bytes, which a tree does not say'),
+    to: (_: TTree) => raise('dagz is read-only here: its encoder takes a DAG, which says what is shared, not a tree'),
   },
 };
 

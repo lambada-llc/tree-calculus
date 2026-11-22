@@ -308,197 +308,403 @@ var lazy_stacks_default = evaluator;
 // src/format/dagz.mjs
 var SQUASH_TABLE = [
   1,
+  1,
+  1,
   2,
   3,
-  6,
-  10,
-  16,
-  27,
-  45,
-  73,
-  120,
-  194,
-  310,
-  488,
-  747,
-  1101,
-  1546,
-  2047,
-  2549,
-  2994,
-  3348,
-  3607,
-  3785,
-  3901,
-  3975,
-  4022,
-  4050,
-  4068,
-  4079,
-  4085,
-  4089,
-  4092,
-  4093,
-  4094
+  5,
+  8,
+  13,
+  22,
+  36,
+  60,
+  98,
+  162,
+  267,
+  439,
+  720,
+  1179,
+  1921,
+  3108,
+  4971,
+  7812,
+  11955,
+  17625,
+  24743,
+  32768,
+  40793,
+  47911,
+  53581,
+  57724,
+  60565,
+  62428,
+  63615,
+  64357,
+  64816,
+  65097,
+  65269,
+  65374,
+  65438,
+  65476,
+  65500,
+  65514,
+  65523,
+  65528,
+  65531,
+  65533,
+  65534,
+  65535,
+  65535,
+  65535
 ];
+var LOGIT = 3071;
 function squash(d) {
-  if (d > 2047)
-    return 4095;
-  if (d < -2047)
+  if (d >= 3072)
+    return 65535;
+  if (d <= -3072)
     return 1;
-  const w = d & 127, i = (d >> 7) + 16;
-  return SQUASH_TABLE[i] * (128 - w) + SQUASH_TABLE[i + 1] * w + 64 >> 7;
+  const i = d + 3072 >> 7, w = d + 3072 & 127;
+  const v = SQUASH_TABLE[i] * (128 - w) + SQUASH_TABLE[i + 1] * w + 64 >> 7;
+  return v < 1 ? 1 : v > 65535 ? 65535 : v;
 }
-var STRETCH = new Int16Array(4096);
+var STRETCH = new Int16Array(65536);
 {
   let pi = 0;
-  for (let x = -2047; x <= 2047; x++) {
-    const v = squash(x);
+  for (let d = -LOGIT; d <= LOGIT; d++) {
+    const v = squash(d);
     for (let j = pi; j <= v; j++)
-      STRETCH[j] = x;
+      STRETCH[j] = d;
     pi = v + 1;
   }
-  for (let j = pi; j < 4096; j++)
-    STRETCH[j] = 2047;
+  for (let j = pi; j < 65536; j++)
+    STRETCH[j] = LOGIT;
 }
-var LIMIT = 30;
-var RATE = Array.from({ length: LIMIT + 1 }, (_, n) => Math.floor(131072 / (2 * n + 3)));
-var WEIGHT = 13107;
-var BIAS = 256;
+var clamp = (d) => d > LOGIT ? LOGIT : d < -LOGIT ? -LOGIT : d;
+var mix = (h, v) => {
+  h = Math.imul(h + v | 0, 2654435761);
+  return (h ^ h >>> 15) >>> 0;
+};
+var fin = (h) => {
+  h ^= h >>> 13;
+  h = Math.imul(h, 2246822507);
+  return (h ^ h >>> 16) >>> 0;
+};
+var UNKNOWN = 0;
+var LEAF = 1;
+var NEW = 2;
+var REF = 3;
+var X = 0;
+var H = 1;
+var T = 2;
+var KINDS = 3;
+var TAGS = 32;
+var SETS = TAGS * KINDS;
+var BASE = 6;
+var TABLE_BITS = 24;
+var RATE = Array.from({ length: 256 }, (_, n) => Math.floor(131072 / (2 * n + 3)));
+var NX = [-1, 0, -1, 1, -2, 0, -2, 2, -1, 1, -3, 0, -2, 2, 3, -3];
+var NY = [0, -1, -1, -1, 0, -2, -1, -1, -2, -2, 0, -3, -2, -2, -1, -1];
+var MANTISSA = [32768, 35734, 38968, 42495, 46341, 50535, 55109, 60097];
+var value = (k) => Math.floor(MANTISSA[k & 7] * 2 ** (k >> 3) / 32768);
+var CODED = ["fast", "weight", "slowWeight", "slowScale", "slowLimit", "rate", "decay", "minRate"];
+var DEFAULTS = {
+  shapes: [[1, 1], [2, 2], [3, 3], [4, 4], [6, 6], [8, 1], [1, 8], [16, 0], [0, 16], [2, 4], [4, 2]],
+  fast: 56,
+  weight: 120,
+  slowWeight: 104,
+  slowScale: 40,
+  slowLimit: 64,
+  rate: 136,
+  decay: 48,
+  minRate: 120,
+  learn: 11,
+  apmRate: 6,
+  apmWeight: 2
+};
+function header(code, given) {
+  const put = (v, bits) => {
+    let r = 0;
+    for (let i = bits - 1; i >= 0; i--)
+      r = r * 2 + code(v >> i & 1, 32768);
+    return r;
+  };
+  if (!put(given ? 1 : 0, 1))
+    return DEFAULTS;
+  const shapes = [];
+  const n = put(given ? given.shapes.length : 0, 5);
+  for (let i = 0; i < n; i++)
+    shapes.push([put(given ? given.shapes[i][0] : 0, 5), put(given ? given.shapes[i][1] : 0, 5)]);
+  const p = { shapes };
+  for (const k of CODED)
+    p[k] = put(given ? given[k] : 0, 8);
+  p.learn = put(given ? given.learn : 0, 4);
+  p.apmRate = put(given ? given.apmRate : 0, 4);
+  p.apmWeight = put(given ? given.apmWeight : 0, 2);
+  return p;
+}
 var Model = class {
-  constructor() {
-    this.contexts = /* @__PURE__ */ new Map();
-    this.weights = /* @__PURE__ */ new Map();
-    this.used = [];
-    this.inputs = [];
-    this.mixer = [];
-    this.p = 2048;
+  constructor(p) {
+    this.check = new Uint8Array(1 << TABLE_BITS);
+    this.fast = new Int16Array(1 << TABLE_BITS);
+    this.fastN = new Uint8Array(1 << TABLE_BITS);
+    this.slow = new Uint16Array(1 << TABLE_BITS);
+    this.slowN = new Uint8Array(1 << TABLE_BITS);
+    this.w1Set = new Uint8Array(SETS + 65536);
+    this.w1Uses = new Uint16Array(SETS + 65536);
+    this.w2Set = new Uint8Array(SETS * 16);
+    this.apm = new Uint16Array(SETS * 4096 * 25);
+    this.apmSet = new Uint8Array(SETS * 4096);
+    this.parent = [-1];
+    this.at = [0];
+    this.atKind = [0];
+    this.outcome = [[[], [], []]];
+    this.nested = [[[], [], []]];
+    this.history = new Int32Array(8);
+    this.count = 0;
+    this.pattern = 0;
+    this.grid = false;
+    this.kind = 0;
+    this.shapes = p.shapes;
+    this.contexts = BASE + p.shapes.length;
+    this.inputs = 2 * this.contexts + 1;
+    this.reach = Math.max(3, ...p.shapes.map(([, ry]) => ry));
+    this.fastMax = value(p.fast);
+    this.w0 = value(p.weight);
+    this.w0slow = value(p.slowWeight);
+    this.slowScale = value(p.slowScale);
+    this.slowLimit = Math.min(value(p.slowLimit), 255);
+    this.rate = value(p.rate);
+    this.decay = value(p.decay);
+    this.minRate = value(p.minRate);
+    this.learnShift = p.learn;
+    this.apmRate = p.apmRate;
+    this.apmWeight = p.apmWeight;
+    this.ctx = new Uint32Array(this.contexts);
+    this.w1 = new Int32Array((SETS + 65536) * this.inputs);
+    this.w2 = new Int32Array(SETS * 16 * this.inputs);
   }
-  predict(contexts, selector) {
-    this.used = contexts.map((c) => {
-      let e = this.contexts.get(c);
-      if (!e)
-        this.contexts.set(c, e = [32768, 0]);
-      return e;
-    });
-    this.inputs = [...this.used.map((e) => STRETCH[e[0] >> 4]), BIAS];
-    let w = this.weights.get(selector);
-    if (!w)
-      this.weights.set(selector, w = [...contexts.map(() => WEIGHT), 0]);
-    this.mixer = w;
-    let dot = 0;
-    for (let i = 0; i < w.length; i++)
-      dot += w[i] * this.inputs[i];
-    this.p = Math.min(Math.max(squash(Math.floor(dot / 65536)), 1), 4095);
-    return this.p;
+  intern(list, kind, i) {
+    const existing = this.nested[list][kind][i];
+    if (existing !== void 0)
+      return existing;
+    const id2 = this.parent.length;
+    this.parent.push(list);
+    this.at.push(i);
+    this.atKind.push(kind);
+    this.outcome.push([[], [], []]);
+    this.nested.push([[], [], []]);
+    this.nested[list][kind][i] = id2;
+    return id2;
   }
-  update(bit) {
-    const err = (bit << 12) - this.p;
-    for (let i = 0; i < this.mixer.length; i++)
-      this.mixer[i] += this.inputs[i] * err >> 10;
-    for (const e of this.used) {
-      e[0] += Math.floor(((bit << 16) - e[0]) * RATE[e[1]] / 65536);
-      if (e[1] < LIMIT)
-        e[1]++;
+  seen(list, kind, i) {
+    return list < 0 || i < 0 ? UNKNOWN : this.outcome[list][kind][i] ?? UNKNOWN;
+  }
+  record(s, o) {
+    if (s.kind !== X)
+      this.outcome[s.list][s.kind][s.index] = o;
+    this.history[this.count++ & 7] = o;
+  }
+  enter(s) {
+    let hh = 0;
+    for (let i = 0; i < 8; i++)
+      hh = mix(hh, this.history[this.count - 1 - i & 7] + 1);
+    const c = this.ctx;
+    c[0] = mix(mix(1, s.side), s.kind);
+    c[1] = mix(mix(mix(mix(2, s.side), s.spine), s.h0), s.kind);
+    c[2] = mix(mix(mix(3, s.path), s.plen), s.kind);
+    c[3] = mix(mix(4, hh), s.kind);
+    c[4] = mix(mix(mix(5, s.side), s.spine), s.kind);
+    c[5] = mix(mix(mix(mix(mix(6, s.side), s.spine), s.h0), s.h1), s.kind);
+    this.pattern = 0;
+    this.grid = s.kind !== X && this.parent[s.list] >= 0;
+    if (this.grid) {
+      const p = this.parent[s.list], j = this.at[s.list], pk = this.atKind[s.list];
+      const rows = [s.list];
+      for (let dy = 1; dy <= this.reach; dy++)
+        rows.push(j - dy < 0 ? -1 : this.nested[p][pk][j - dy] ?? -1);
+      for (let q = 0; q < 16; q++)
+        if (this.seen(rows[-NY[q]], s.kind, s.index + NX[q]) === NEW)
+          this.pattern |= 1 << q;
+      this.shapes.forEach(([rx, ry], i) => {
+        let h = mix(100 + i, s.kind);
+        for (let dy = -ry; dy <= 0; dy++)
+          for (let dx = -rx; dx <= rx; dx++)
+            if (dy < 0 || dx < 0)
+              h = mix(h, this.seen(rows[-dy], s.kind, s.index + dx));
+        c[BASE + i] = h;
+      });
+    } else
+      this.shapes.forEach((_, i) => c[BASE + i] = mix(200 + i, s.kind));
+    this.kind = s.kind;
+  }
+  /** Codes one decision: tag 0 asks "△?", 1 "written earlier?", 2 bit k of a position whose higher bits are v. */
+  decide(code, tag, k, v, bit) {
+    const ti = tag < 2 ? tag : 2 + Math.min(k, 29);
+    const tc = tag < 2 ? tag + 1 : mix(mix(3, k), v);
+    const base = ti * KINDS + this.kind;
+    const slots = [], x = [];
+    for (let i = 0; i < this.contexts; i++) {
+      const h = fin(mix(mix(this.ctx[i], tc), i)), ix = h & (1 << TABLE_BITS) - 1, ck = h >>> 24;
+      if (this.check[ix] !== ck) {
+        this.check[ix] = ck;
+        this.fast[ix] = 0;
+        this.fastN[ix] = 0;
+        this.slow[ix] = 32768;
+        this.slowN[ix] = 0;
+      }
+      slots.push(ix);
+      x.push(this.fast[ix], this.slowN[ix] ? STRETCH[this.slow[ix]] * this.slowScale >> 8 : 0);
     }
+    x.push(256);
+    const set1 = this.grid && tag === 0 && this.kind === H ? SETS + this.pattern : base;
+    const set2 = base * 16 + (this.grid ? this.pattern & 15 : 0);
+    const seta = base * 4096 + (this.grid ? this.pattern & 4095 : 0);
+    const d1 = this.mix(this.w1, this.w1Set, set1, x), d2 = this.mix(this.w2, this.w2Set, set2, x);
+    const dm = d1 + d2 >> 1, pm = squash(dm);
+    const a = seta * 25;
+    if (!this.apmSet[seta]) {
+      this.apmSet[seta] = 1;
+      for (let j = 0; j < 25; j++)
+        this.apm[a + j] = squash(j * 256 - 3072);
+    }
+    const pos = dm + 3072, ai = a + (pos >> 8), wf = pos & 255;
+    const pa = this.apm[ai] * (256 - wf) + this.apm[ai + 1] * wf >> 8;
+    let p = pm * (4 - this.apmWeight) + pa * this.apmWeight >> 2;
+    p = p < 1 ? 1 : p > 65535 ? 65535 : p;
+    const r = code(bit, p);
+    const uses = this.w1Uses[set1];
+    if (uses < 65535)
+      this.w1Uses[set1]++;
+    const rate = Math.max(Math.floor(this.rate * this.decay / (this.decay + uses)), this.minRate);
+    this.learn(this.w1, set1, x, (r << 16) - squash(d1), rate);
+    this.learn(this.w2, set2, x, (r << 16) - squash(d2), 65536);
+    this.apm[ai] += ((r << 16) - this.apm[ai]) * (256 - wf) >> 8 + this.apmRate;
+    this.apm[ai + 1] += ((r << 16) - this.apm[ai + 1]) * wf >> 8 + this.apmRate;
+    for (const ix of slots) {
+      this.fast[ix] += (r ? this.fastMax : -this.fastMax) - this.fast[ix] >> this.fastN[ix];
+      if (this.fastN[ix] < 2)
+        this.fastN[ix]++;
+      this.slow[ix] += Math.floor(((r << 16) - this.slow[ix]) * RATE[this.slowN[ix]] / 65536);
+      if (this.slowN[ix] < this.slowLimit)
+        this.slowN[ix]++;
+    }
+    return r;
+  }
+  mix(w, initialized, set, x) {
+    const o = set * this.inputs;
+    if (!initialized[set]) {
+      initialized[set] = 1;
+      for (let i = 0; i < this.inputs; i++)
+        w[o + i] = i === this.inputs - 1 ? 0 : i & 1 ? this.w0slow : this.w0;
+    }
+    let dot = 0;
+    for (let i = 0; i < this.inputs; i++)
+      dot += w[o + i] * x[i];
+    return clamp(Math.floor(dot / 65536));
+  }
+  learn(w, set, x, err, rate) {
+    const o = set * this.inputs, round = 2 ** (this.learnShift - 1), scale = 2 ** this.learnShift;
+    for (let i = 0; i < this.inputs; i++)
+      w[o + i] += Math.floor((Math.trunc(x[i] * err * rate / 65536) + round) / scale);
   }
 };
 var Decoder = class {
   constructor(bytes) {
     this.bytes = bytes;
-    this.x1 = 0;
-    this.x2 = 4294967295;
+    this.range = 4294967295;
     this.x = 0;
     this.pos = 0;
     for (let i = 0; i < 4; i++)
-      this.x = (this.x << 8 | this.byte()) >>> 0;
+      this.x = this.x * 256 + this.byte();
   }
   byte() {
-    return this.pos < this.bytes.length ? this.bytes[this.pos++] : (this.pos++, 0);
+    return this.pos < this.bytes.length ? this.bytes[this.pos++] : 0;
   }
   code(_, p) {
-    const xm = this.x1 + (this.x2 - this.x1 >>> 12) * p;
-    const bit = this.x <= xm ? 1 : 0;
+    const bound = Math.floor(this.range * p / 65536);
+    const bit = this.x < bound ? 1 : 0;
     if (bit)
-      this.x2 = xm;
-    else
-      this.x1 = xm + 1;
-    while (((this.x1 ^ this.x2) & 4278190080) === 0) {
-      this.x1 = this.x1 << 8 >>> 0;
-      this.x2 = (this.x2 << 8 | 255) >>> 0;
-      this.x = (this.x << 8 | this.byte()) >>> 0;
+      this.range = bound;
+    else {
+      this.x -= bound;
+      this.range -= bound;
+    }
+    while (this.range < 16777216) {
+      this.range = this.range * 256;
+      this.x = this.x * 256 + this.byte();
     }
     return bit;
   }
 };
-function walk(code, known) {
-  const model = new Model();
-  const history = [];
-  const decide = (tag, extra, s, bit) => {
-    const h = (n) => history.slice(-n).join();
-    const contexts = [
-      `0${s.side}`,
-      `1${s.side}${s.spine}.${s.heads.slice(0, 1).join()}`,
-      `2${s.path}`,
-      `3${h(8)}`,
-      `4${s.side}${s.spine}`,
-      `5${s.side}${s.spine}.${s.heads.slice(0, 2).join()}`
-    ];
-    const p = model.predict(contexts.map((c) => `${tag}${extra};${c}`), tag + extra.split(".")[0]);
-    const result = code(bit, p);
-    model.update(result);
-    return result;
-  };
+function walk(code, known, params) {
+  const model = new Model(header(code, params));
   const nodes = [[0, 0]];
-  const head = [{ token: "L", args: 0 }];
+  const token = [0], args = [0];
   const written = /* @__PURE__ */ new Map();
-  const child = (x, s) => {
-    if (decide("l", "", s, x === 0 ? 1 : 0)) {
-      history.push("L");
-      return 0;
+  const head = (s) => s.kind === T ? { ...s, list: s.list, index: s.index, kind: H } : { ...s, list: model.intern(s.list, s.kind, s.index), index: 0, kind: H };
+  const tail = (s) => s.kind === T ? { ...s, list: s.list, index: s.index + 1, kind: T } : { ...s, list: model.intern(s.list, s.kind, s.index), index: 1, kind: T };
+  const stack = [];
+  let result = 0;
+  const start = (x, s, fork) => {
+    model.enter(s);
+    if (model.decide(code, 0, 0, 0, x === 0 ? 1 : 0)) {
+      model.record(s, LEAF);
+      result = 0;
+      return;
     }
     const n = nodes.length - 1;
-    if (decide("r", "", s, x !== null && written.has(x) ? 1 : 0)) {
-      const i = x === null ? 0 : written.get(x);
+    if (model.decide(code, 1, 0, 0, x !== null && written.has(x) ? 1 : 0)) {
+      const i = x === null ? 0 : written.get(x) - 1;
       const width = n > 1 ? (n - 1).toString(2).length : 1;
       let v = 0;
       for (let k = width - 1; k >= 0; k--)
-        v = v * 2 + decide("t", `${k}.${v}`, s, i >> k & 1);
+        v = v * 2 + model.decide(code, 2, k, v, i >> k & 1);
       if (v >= n)
         raise("dagz: reference to a node not yet written");
-      history.push(`R${v}`);
-      head[v + 1] = { token: `R${v}`, args: 0 };
-      return v + 1;
+      model.record(s, REF);
+      token[v + 1] = v + 1;
+      args[v + 1] = 0;
+      result = v + 1;
+      return;
     }
-    history.push("N");
-    const [l, r] = x === null ? [null, null] : known.nodes[x];
-    const left = child(l, { side: "L", spine: s.side === "L" ? s.spine + 1 : 1, heads: s.heads, path: (s.path + "L").slice(-4) });
-    const { token, args } = head[left];
-    const right = child(r, { side: "R", spine: 0, heads: [`${token}.${args}`, ...s.heads.slice(0, 3)], path: (s.path + "R").slice(-4) });
-    nodes.push([left, right]);
-    head.push({ token, args: args + 1 });
-    if (x !== null)
-      written.set(x, nodes.length - 2);
-    return nodes.length - 1;
+    model.record(s, NEW);
+    stack.push({ x, s, fork, left: -1 });
+    const l = x === null ? null : known.nodes[x][0];
+    start(l === null ? null : l, { ...s, kind: X, side: 0, spine: s.side === 0 ? s.spine + 1 : 1, path: s.path << 1 & 15, plen: Math.min(s.plen + 1, 4) }, s);
   };
-  const root = child(known && known.root, { side: "R", spine: 0, heads: [], path: "" });
-  return { nodes, root };
+  start(known && known.root, { side: 1, spine: 0, path: 0, plen: 0, h0: 0, h1: 0, list: 0, index: 0, kind: T }, null);
+  while (stack.length) {
+    const f = stack[stack.length - 1];
+    if (f.left < 0) {
+      f.left = result;
+      const li = result, s = f.s;
+      let r = f.fork && li === 0 ? head(f.fork) : li > 0 && nodes[li][0] === 0 ? tail(s) : { ...s, kind: X };
+      r = { ...r, side: 1, spine: 0, path: (s.path << 1 | 1) & 15, plen: Math.min(s.plen + 1, 4), h0: mix(token[li], args[li]), h1: s.h0 };
+      const rx = f.x === null ? null : known.nodes[f.x][1];
+      start(rx, r, null);
+    } else {
+      stack.pop();
+      nodes.push([f.left, result]);
+      const id2 = nodes.length - 1;
+      token.push(token[f.left]);
+      args.push(args[f.left] + 1);
+      if (f.x !== null)
+        written.set(f.x, id2);
+      result = id2;
+    }
+  }
+  return { nodes, root: result };
 }
 function decode(bytes) {
   const decoder = new Decoder(bytes);
-  const dag = walk((bit, p) => decoder.code(bit, p), null);
-  return { dag, tail: bytes.slice(decoder.pos) };
+  return walk((bit, p) => decoder.code(bit, p), null);
 }
 function build(bytes, leaf, apply) {
-  const { dag, tail } = decode(bytes);
+  const { nodes, root } = decode(bytes);
   const built = [leaf];
-  for (let i = 1; i < dag.nodes.length; i++)
-    built.push(apply(built[dag.nodes[i][0]], built[dag.nodes[i][1]]));
-  const one = apply(leaf, leaf);
-  let list = leaf;
-  for (let i = tail.length * 8 - 1; i >= 0; i--)
-    list = apply(apply(leaf, tail[i >> 3] >> 7 - (i & 7) & 1 ? one : leaf), list);
-  return apply(built[dag.root], list);
+  for (let i = 1; i < nodes.length; i++)
+    built.push(apply(built[nodes[i][0]], built[nodes[i][1]]));
+  return built[root];
 }
 function of5(e, bytes) {
   return build(bytes, e.leaf, (a, b) => e.apply(a, b));
@@ -530,7 +736,7 @@ var formatters = {
   minbin: of_formatter(minbin_default),
   dagz: {
     of: (s) => of5(lazy_stacks_default, s),
-    to: (_) => raise("dagz is read-only here: a dagz file is its root applied to its raw bytes, which a tree does not say")
+    to: (_) => raise("dagz is read-only here: its encoder takes a DAG, which says what is shared, not a tree")
   }
 };
 var parse_infer = (s) => {
@@ -569,9 +775,9 @@ if (typeof require !== "undefined" && require.main === module) {
     } else {
       const content = raw_arg === "-" ? new Uint8Array((0, import_fs.readFileSync)(0)) : input_mode_file ? new Uint8Array((0, import_fs.readFileSync)(raw_arg)) : text_enc.encode(raw_arg);
       input_mode_file = false;
-      const [value, format] = formatters_infer[current_format](content);
+      const [value2, format] = formatters_infer[current_format](content);
       last_format = format;
-      current_value = lazy_stacks_default.apply(current_value, value);
+      current_value = lazy_stacks_default.apply(current_value, value2);
     }
   }
   if (last_format == "buffer")
