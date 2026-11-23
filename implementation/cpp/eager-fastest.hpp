@@ -13,6 +13,7 @@
 #include <emmintrin.h>
 #endif
 
+#include "eager-graph-nil-mmap-32-jets.hpp"
 #include "jets.hpp"
 
 #define EAGER_LIKELY(x) __builtin_expect(!!(x), 1)
@@ -88,9 +89,10 @@
 // is what lets every Tree a caller is holding survive one without being
 // registered anywhere.
 //
-// EagerFastestJets also answers lambada's skip_line natively, a jet
-// (implementation/lean/Cpp/README.md); EagerFastest is the same code
-// without it.
+// EagerFastestJets also answers lambada's skip_line and arboretum's
+// Quoted._whnf natively, jets (implementation/lean/Cpp/README.md, and
+// eager-graph-nil-mmap-32-jets.hpp); EagerFastest is the same code
+// without them.
 //
 // This is eager-graph-nil-mmap-32.hpp (kept, for comparison) made faster on
 // forest's build, measured by replaying the exact requests its compile phase
@@ -759,6 +761,8 @@ private:
   // so that each stays the index of its tree: interning is exact, so comparing
   // an index with them compares trees. 0, which no tree is, while jets are off.
   Tree _skip_line = 0, _newline = 0;
+  jets::SpineWhnf _spine_whnf; // keyed on its partial, which it holds
+  friend class jets::SpineWhnf;
   bool _jets = JETS;
 
   static size_t round_up_pow2(size_t n) {
@@ -1426,17 +1430,36 @@ private:
   void intern_jets() {
     if constexpr (JETS) {
       _skip_line = _newline = 0;
-      if (_jets) _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+      _spine_whnf = {};
+      if (_jets) {
+        _skip_line = intern_dag(jets::skipLine), _newline = intern_dag(jets::newline);
+        _spine_whnf.key(*this, intern_dag(jets::spineWhnf));
+      }
     }
+  }
+
+  /** A jet's answer r to apply(a, b), recorded as RStep's put for the MEMOIZE
+   * frame recall() pushed under `top`, if it did: the jet takes no steps, so
+   * that frame would not. */
+  Tree remember(Tree a, Tree b, Tree r, const Frame *top) {
+    if (const uint64_t key = memo_key(a, b); top[-1].tag() == MEMOIZE && top[-1].key() == key)
+      memo_put(memo_hash(key), key, r);
+    return r;
+  }
+
+  /** apply(a, b) by Quoted._whnf's jet, remembered, if `a` is `_whnf fuel`
+   * and b a spine it takes; else 0. Out of line, as skip_line. */
+  [[gnu::noinline]] Tree spine_whnf(Tree a, Tree b, const Frame *top) {
+    const Tree r = _spine_whnf.answer(*this, a, b);
+    if (r) ++stats_counters.jets, remember(a, b, r, top);
+    return r;
   }
 
   /**
    * apply(skip_line, xs) by DropJet's transitions (TreeCalculus/Check.lean):
    * skip each element that is not the newline, and answer what follows the
-   * first that is, or the leaf ending the list, recorded as RStep's put for the
-   * MEMOIZE frame recall() pushed, if it did: the jet takes no steps, so that
-   * frame would not. A stem ending the list has no transition: 0, and xs the
-   * stem, for the rules.
+   * first that is, or the leaf ending the list, remembered. A stem ending the
+   * list has no transition: 0, and xs the stem, for the rules.
    */
   [[gnu::noinline]] Tree skip_line(Tree &xs, const Frame *top) {
     const Tree b = xs;
@@ -1445,9 +1468,7 @@ private:
       if (!n.v) return 0;
       if (n.u == _newline) { xs = n.v; break; }
     }
-    if (const uint64_t key = memo_key(_skip_line, b); top[-1].tag() == MEMOIZE && top[-1].key() == key)
-      memo_put(memo_hash(key), key, xs);
-    return xs;
+    return remember(_skip_line, b, xs, top);
   }
 
   /** Whether a collection's mark phase found `at` reachable. Indices 0 and 1
@@ -1779,7 +1800,7 @@ public:
       mark(f->arg1());
       mark(f->arg2());
     }
-    if constexpr (JETS) mark(_skip_line), mark(_newline);
+    if constexpr (JETS) mark(_skip_line), mark(_newline), mark(_spine_whnf.partial());
     // Between mark and sweep is the one moment liveness is written down, which
     // is what lets the memo be filtered rather than dropped: nothing moves, so
     // an entry whose operands and result all survived still says exactly what
@@ -2004,6 +2025,9 @@ public:
         const uint64_t un = node_word(arena, left(an));
         if (EAGER_LIKELY(!right(un))) { // apply(△(△u')y, b) = apply(apply(u', b), apply(y, b))
           if (const Tree hit = recall(Tree(a), Tree(b), top, limit, uint32_t(steps))) { result = hit; goto dispatch; }
+          // After the memo, as skip_line below. x() is 0, which no u' is, while jets are off.
+          if (JETS && EAGER_UNLIKELY(left(un) == _spine_whnf.x()) && (result = spine_whnf(Tree(a), Tree(b), top)))
+            goto dispatch;
           // A K-absorber u' answers apply(u', b) without looking at b, so that
           // step is skipped. apply(y, b) is still reduced, as rule (2) says:
           // peek.hpp's S K peek drops it, and with it a reduction that might
